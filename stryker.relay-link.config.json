@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "mutate": ["src/modules/relay-link/index.ts"],
+  "reporters": ["clear-text", "json"],
+  "coverageAnalysis": "perTest",
+  "concurrency": 4,
+  "thresholds": { "high": 100, "low": 100, "break": 100 },
+  "jsonReporter": { "fileName": "reports/mutation/relay-link.json" }
+}

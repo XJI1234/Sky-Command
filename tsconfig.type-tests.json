@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "tests/type-contract.ts", "tests/*type-contract.ts"],
+  "exclude": ["src/production/electron-host/launch.ts", "src/production/electron-host/media-ports.ts", "src/production/operator-console/renderer/main.ts"]
+}

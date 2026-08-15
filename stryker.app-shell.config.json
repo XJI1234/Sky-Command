@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "mutate": [
+    "src/modules/app-shell/index.ts",
+    "src/modules/app-shell/process-lifecycle/index.ts",
+    "src/modules/app-shell/window-manager/index.ts",
+    "src/modules/app-shell/renderer-host/index.ts",
+    "src/modules/app-shell/runtime-paths/index.ts",
+    "src/modules/app-shell/ipc-bridge/index.ts"
+  ],
+  "testFiles": [
+    "tests/app-shell-contract.test.ts",
+    "tests/app-shell-units-contract.test.ts",
+    "tests/app-shell-architecture.test.ts"
+  ],
+  "reporters": ["clear-text", "progress", "json"],
+  "coverageAnalysis": "off",
+  "vitest": { "related": false },
+  "mutator": { "excludedMutations": ["StringLiteral"] },
+  "concurrency": 4,
+  "thresholds": { "high": 100, "low": 100, "break": 100 },
+  "jsonReporter": { "fileName": "reports/mutation/app-shell.json" }
+}

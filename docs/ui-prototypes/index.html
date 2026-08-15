@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sky Command UI direction lab</title>
+  <style>
+    :root {
+      --canvas: #101315;
+      --surface: #171b1e;
+      --surface-2: #1d2327;
+      --line: #2c3439;
+      --text: #f3f6f7;
+      --muted: #8b969e;
+      --accent: #4bd7cc;
+      --good: #52c992;
+      --warn: #dfaa4d;
+      --bad: #eb7171;
+      --dim: #77838b;
+      --shadow: 0 16px 44px rgba(0, 0, 0, .24);
+      --radius: 4px;
+      --font: Inter, "Segoe UI", "Noto Sans SC", sans-serif;
+      --mono: "IBM Plex Mono", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 1120px; background: var(--canvas); color: var(--text); font: 13px/1.4 var(--font); }
+    button, input { font: inherit; }
+    button { border: 0; color: inherit; cursor: pointer; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .prototype-ribbon { position: fixed; z-index: 20; top: 0; left: 50%; transform: translateX(-50%); padding: 4px 10px; border: 1px solid var(--warn); border-top: 0; border-radius: 0 0 4px 4px; background: color-mix(in srgb, var(--warn) 14%, var(--surface)); color: var(--warn); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .shell { display: grid; grid-template-rows: 56px 1fr 30px; min-height: 100vh; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .brand { display: flex; align-items: baseline; gap: 12px; letter-spacing: .12em; font-weight: 700; }
+    .brand small { color: var(--muted); letter-spacing: .04em; font: 11px var(--mono); }
+    .top-metrics { display: flex; align-items: center; gap: 18px; color: var(--muted); font: 11px var(--mono); }
+    .top-metrics strong { color: var(--text); font-weight: 500; }
+    .top-metrics .signal { color: var(--good); }
+    .emergency { padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--bad) 70%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); font-weight: 650; }
+    .body { display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 0; }
+    .nav { padding: 18px 12px; border-right: 1px solid var(--line); background: var(--surface); }
+    .nav-label { padding: 0 10px 12px; color: var(--muted); font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    .nav button { display: flex; width: 100%; align-items: center; gap: 12px; margin: 2px 0; padding: 12px 10px; border-left: 2px solid transparent; background: transparent; color: var(--muted); text-align: left; }
+    .nav button:hover { background: var(--surface-2); color: var(--text); }
+    .nav button.active { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text); }
+    .nav .glyph { width: 18px; color: var(--accent); font: 14px var(--mono); text-align: center; }
+    .nav-foot { position: absolute; bottom: 48px; width: 190px; padding: 12px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .nav-foot strong { display: block; margin-bottom: 4px; color: var(--good); font-weight: 600; }
+    main { min-width: 0; overflow: hidden; background: var(--canvas); }
+    .page { display: none; height: 100%; min-height: 0; }
+    .page.active { display: block; }
+    .page-head { display: flex; align-items: end; justify-content: space-between; padding: 20px 24px 14px; }
+    .eyebrow { color: var(--accent); font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { margin-top: 4px; font-size: 21px; font-weight: 600; letter-spacing: -.02em; }
+    .subhead { margin-top: 4px; color: var(--muted); }
+    .actions { display: flex; gap: 8px; }
+    .btn { min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); }
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--surface)); color: var(--accent); }
+    .btn.danger { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 16%, var(--surface)); color: var(--bad); }
+    .content-grid { display: grid; grid-template-columns: minmax(280px, 32%) minmax(0, 1fr) 292px; gap: 1px; height: calc(100% - 83px); min-height: 580px; background: var(--line); }
+    .panel { min-width: 0; overflow: hidden; background: var(--surface); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+    .panel-head h2 { font-size: 12px; font-weight: 650; letter-spacing: .04em; }
+    .panel-head span { color: var(--muted); font: 10px var(--mono); }
+    .list { padding: 8px; }
+    .row { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px 10px; border: 1px solid transparent; border-radius: var(--radius); }
+    .row + .row { margin-top: 4px; }
+    .row:hover { background: var(--surface-2); }
+    .row.selected { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+    .row-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+    .row-meta { margin-top: 5px; color: var(--muted); font: 11px var(--mono); }
+    .status { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11px; }
+    .status::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; }
+    .status.good { color: var(--good); }
+    .status.warn { color: var(--warn); }
+    .status.bad { color: var(--bad); }
+    .status.dim { color: var(--dim); }
+    .empty { display: grid; place-items: center; height: 100%; padding: 30px; color: var(--muted); text-align: center; }
+    .empty strong { display: block; margin-bottom: 8px; color: var(--text); font-size: 15px; }
+    .empty .btn { margin-top: 18px; }
+    .device-detail { padding: 18px; }
+    .detail-title { display: flex; align-items: start; justify-content: space-between; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .detail-title h2 { font-size: 18px; }
+    .detail-title p { margin-top: 5px; color: var(--muted); font: 11px var(--mono); }
+    .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+    .kv div { padding: 10px; border: 1px solid var(--line); background: var(--surface-2); }
+    .kv label { display: block; color: var(--muted); font-size: 10px; }
+    .kv strong { display: block; margin-top: 4px; font: 14px var(--mono); }
+    .link-graph { display: grid; grid-template-columns: 1fr 28px 1fr; align-items: center; gap: 8px; margin: 18px 0; }
+    .node { padding: 14px 10px; border: 1px solid var(--line); background: var(--surface-2); text-align: center; }
+    .node strong { display: block; margin-bottom: 4px; }
+    .node small { color: var(--muted); font: 10px var(--mono); }
+    .connector { height: 1px; background: var(--good); }
+    .inspector { padding: 0 16px 18px; }
+    .inspector section { padding: 15px 0; border-bottom: 1px solid var(--line); }
+    .inspector h3 { margin-bottom: 10px; color: var(--muted); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .check { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+    .check span { color: var(--muted); }
+    .check strong { font-weight: 550; text-align: right; }
+    .map { position: relative; min-width: 0; overflow: hidden; background: #1a252b; }
+    .map::before { position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 32px 32px; content: ""; }
+    .map::after { position: absolute; inset: 12% 10% 16% 14%; border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); border-radius: 50%; box-shadow: 120px 70px 0 -42px color-mix(in srgb, var(--accent) 85%, transparent), 250px 140px 0 -42px color-mix(in srgb, var(--accent) 85%, transparent); transform: rotate(-12deg); content: ""; }
+    .map-label { position: absolute; z-index: 1; top: 16px; left: 16px; padding: 6px 8px; border: 1px solid var(--line); background: rgba(16, 19, 21, .74); color: var(--muted); font: 10px var(--mono); }
+    .route-line { position: absolute; z-index: 2; left: 18%; top: 64%; width: 58%; height: 1px; background: var(--accent); box-shadow: 120px -60px 0 -0.5px var(--accent), 270px -20px 0 -0.5px var(--accent); transform: rotate(-19deg); }
+    .route-point { position: absolute; z-index: 3; width: 12px; height: 12px; border: 2px solid var(--text); border-radius: 50%; background: var(--accent); }
+    .route-point.one { left: 18%; top: 64%; }
+    .route-point.two { left: 48%; top: 52%; }
+    .route-point.three { left: 76%; top: 44%; }
+    .map-tools { position: absolute; z-index: 4; right: 14px; top: 14px; display: flex; gap: 6px; }
+    .map-tools .btn { padding: 0 9px; background: rgba(16, 19, 21, .72); }
+    .route-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .route-stat { padding: 8px; border: 1px solid var(--line); background: var(--surface-2); }
+    .route-stat label { display: block; color: var(--muted); font-size: 10px; }
+    .route-stat strong { display: block; margin-top: 4px; font: 14px var(--mono); }
+    .video { position: relative; display: grid; place-items: center; min-height: 300px; background: #060809; }
+    .video::before { position: absolute; inset: 18px; border: 1px solid #26343a; background: linear-gradient(145deg, #0b1115 0%, #101c20 52%, #091012 100%); content: ""; }
+    .video-copy { position: relative; z-index: 1; color: var(--muted); text-align: center; }
+    .video-copy strong { display: block; margin-bottom: 6px; color: var(--text); font-size: 16px; }
+    .osd { position: absolute; z-index: 2; top: 28px; left: 28px; right: 28px; display: flex; justify-content: space-between; color: var(--muted); font: 10px var(--mono); }
+    .flight-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1px; height: calc(100% - 83px); min-height: 580px; background: var(--line); }
+    .flight-main { display: grid; grid-template-rows: minmax(300px, 1fr) 92px 160px; min-width: 0; background: var(--surface); }
+    .telemetry { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; background: var(--line); }
+    .telemetry div { display: flex; flex-direction: column; justify-content: center; padding: 12px; background: var(--surface); }
+    .telemetry label { color: var(--muted); font-size: 10px; }
+    .telemetry strong { margin-top: 4px; font: 18px var(--mono); }
+    .event-log { overflow: hidden; padding: 14px 16px; border-top: 1px solid var(--line); }
+    .event-log h2 { margin-bottom: 8px; color: var(--muted); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .event { display: grid; grid-template-columns: 74px 78px 1fr; gap: 8px; padding: 5px 0; color: var(--muted); font-size: 11px; }
+    .event time, .event b { font-family: var(--mono); }
+    .event b { color: var(--good); font-weight: 500; }
+    .flight-side { padding: 16px; background: var(--surface); }
+    .flight-side section { padding: 0 0 16px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .flight-side h2 { margin-bottom: 10px; font-size: 12px; }
+    .assignment { padding: 10px; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+    .assignment strong { display: block; font-size: 14px; }
+    .assignment span { display: block; margin-top: 3px; color: var(--muted); font: 11px var(--mono); }
+    .timeline { display: grid; gap: 5px; }
+    .timeline div { display: flex; justify-content: space-between; padding: 7px 8px; border-left: 2px solid var(--line); color: var(--muted); font-size: 11px; }
+    .timeline .done { border-left-color: var(--good); color: var(--text); }
+    .timeline .current { border-left-color: var(--warn); color: var(--warn); }
+    .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .control-grid .btn { min-height: 38px; }
+    .control-grid .wide { grid-column: 1 / -1; }
+    .bottom { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); font: 10px var(--mono); }
+    .bottom strong { color: var(--good); font-weight: 500; }
+    .switcher { position: fixed; z-index: 30; bottom: 42px; left: 50%; display: flex; align-items: center; gap: 8px; transform: translateX(-50%); padding: 7px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--surface) 92%, transparent); box-shadow: var(--shadow); backdrop-filter: blur(12px); }
+    .switcher button { min-width: 34px; height: 30px; border-radius: 999px; background: transparent; color: var(--muted); }
+    .switcher button:hover, .switcher button.active { background: var(--accent); color: #06100f; }
+    .switcher .label { min-width: 190px; padding: 0 10px; color: var(--text); text-align: center; font-size: 11px; }
+
+    /* B: Airspace Atlas. The structure stays task-first but changes the material and map dominance. */
+    body.variant-b { --canvas: #f4f7fa; --surface: #fff; --surface-2: #f0f4f7; --line: #d7e0e8; --text: #17283d; --muted: #64758a; --accent: #2c63d6; --good: #16877f; --warn: #c57a10; --bad: #c63e45; --dim: #8290a0; --shadow: 0 14px 36px rgba(30, 60, 90, .12); --radius: 6px; }
+    body.variant-b .topbar, body.variant-b .nav, body.variant-b .panel, body.variant-b .flight-main, body.variant-b .flight-side, body.variant-b .bottom { background: var(--surface); }
+    body.variant-b .map { background: #dfe9ef; }
+    body.variant-b .map::before { background-image: linear-gradient(rgba(23, 40, 61, .06) 1px, transparent 1px), linear-gradient(90deg, rgba(23, 40, 61, .06) 1px, transparent 1px); }
+    body.variant-b .map::after { border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+    body.variant-b .map-label, body.variant-b .map-tools .btn { background: rgba(255, 255, 255, .86); }
+    body.variant-b .video::before { background: linear-gradient(145deg, #182c3a 0%, #314b58 52%, #142128 100%); }
+    body.variant-b .nav button.active { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    body.variant-b .switcher { background: rgba(255, 255, 255, .9); }
+
+    /* C: Field Ledger. Typography and rules carry hierarchy instead of panel chrome. */
+    body.variant-c { --canvas: #f1eee7; --surface: #fbfaf6; --surface-2: #f4f1eb; --line: #d6d2c8; --text: #172738; --muted: #6c7574; --accent: #1f567b; --good: #2e6b57; --warn: #b36a2e; --bad: #a64138; --dim: #8b8e89; --shadow: 0 12px 30px rgba(34, 42, 44, .12); --radius: 3px; --font: "Aptos", "Noto Sans SC", sans-serif; }
+    body.variant-c .topbar { height: 64px; }
+    body.variant-c .shell { grid-template-rows: 64px 1fr 30px; }
+    body.variant-c .brand { letter-spacing: .18em; }
+    body.variant-c h1 { font-size: 26px; font-weight: 550; }
+    body.variant-c .eyebrow, body.variant-c .nav-label, body.variant-c .panel-head span, body.variant-c .inspector h3 { letter-spacing: .16em; }
+    body.variant-c .nav button { padding: 13px 10px; }
+    body.variant-c .nav button.active { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    body.variant-c .map { background: #121f29; }
+    body.variant-c .map::before { background-image: linear-gradient(rgba(255, 240, 214, .05) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 240, 214, .05) 1px, transparent 1px); }
+    body.variant-c .route-line { background: #f4d9a6; box-shadow: 120px -60px 0 -.5px #f4d9a6, 270px -20px 0 -.5px #f4d9a6; }
+    body.variant-c .route-point { background: #f4d9a6; }
+    body.variant-c .switcher { background: rgba(251, 250, 246, .94); }
+
+    @media (max-width: 1280px) {
+      .body { grid-template-columns: 188px minmax(0, 1fr); }
+      .nav-foot { width: 164px; }
+      .content-grid { grid-template-columns: minmax(250px, 30%) minmax(0, 1fr) 260px; }
+      .flight-grid { grid-template-columns: minmax(0, 1fr) 288px; }
+    }
+  </style>
+</head>
+<body class="variant-a">
+  <div class="prototype-ribbon">design prototype · not production</div>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">SKY COMMAND <small>FIELD DESK 03</small></div>
+      <div class="top-metrics"><span class="signal">● RELAY 2 ONLINE</span><span><strong>3</strong> AIRCRAFT</span><span><strong>1</strong> ALERT</span><span>UTC 14:32:08</span><button class="emergency">EMERGENCY STOP</button></div>
+    </header>
+    <div class="body">
+      <aside class="nav">
+        <div class="nav-label">Operations</div>
+        <button class="active" data-page="devices"><span class="glyph">◉</span>设备 <span style="margin-left:auto">01</span></button>
+        <button data-page="routes"><span class="glyph">⌁</span>航线 <span style="margin-left:auto">06</span></button>
+        <button data-page="flight"><span class="glyph">△</span>飞行 <span style="margin-left:auto">02</span></button>
+        <div class="nav-foot"><strong>● SYSTEM HEALTHY</strong>协议、媒体与日志服务正常<br>最后同步 14:32:04 UTC</div>
+      </aside>
+      <main>
+        <section class="page active" id="devices">
+          <div class="page-head"><div><div class="eyebrow">01 / DEVICES</div><h1>设备链路</h1><p class="subhead">管理 Android 中继器及其背后的飞机连接状态</p></div><div class="actions"><button class="btn">查看日志</button><button class="btn primary">扫描设备</button></div></div>
+          <div class="content-grid">
+            <section class="panel"><div class="panel-head"><h2>中继器列表</h2><span>2 online / 1 offline</span></div><div class="list">
+              <div class="row selected"><div><div class="row-title"><span class="status good">在线</span>Relay · Hangzhou-01</div><div class="row-meta">phone-7A2F · 192.168.50.21</div></div><strong class="row-meta">18 ms</strong></div>
+              <div class="row"><div><div class="row-title"><span class="status good">在线</span>Relay · Hangzhou-02</div><div class="row-meta">phone-9C10 · 192.168.50.22</div></div><strong class="row-meta">24 ms</strong></div>
+              <div class="row"><div><div class="row-title"><span class="status dim">离线</span>Relay · Hangzhou-03</div><div class="row-meta">phone-3D8E · 最后心跳 8 分钟前</div></div><strong class="row-meta">—</strong></div>
+            </div></section>
+            <section class="panel"><div class="panel-head"><h2>连接详情</h2><span>selected relay</span></div><div class="device-detail"><div class="detail-title"><div><h2>Hangzhou-01</h2><p>Android Relay · phone-7A2F</p></div><span class="status good">链路已连接</span></div><div class="link-graph"><div class="node"><strong>电脑</strong><small>Sky Command</small></div><div class="connector"></div><div class="node"><strong>Android 手机</strong><small>Relay 2.4.1</small></div></div><div class="kv"><div><label>飞机链路</label><strong>CONNECTED</strong></div><div><label>SDK 能力</label><strong style="color:var(--good)">READY</strong></div><div><label>图传链路</label><strong>AVAILABLE</strong></div><div><label>心跳</label><strong>18 ms</strong></div></div></div></section>
+            <section class="panel"><div class="panel-head"><h2>飞机连接</h2><span>1 aircraft</span></div><div class="inspector"><section><h3>Aircraft</h3><div class="check"><span>型号</span><strong>Mini 4 Pro</strong></div><div class="check"><span>连接</span><strong style="color:var(--good)">CONNECTED</strong></div><div class="check"><span>电量</span><strong>86%</strong></div><div class="check"><span>GPS</span><strong style="color:var(--good)">FIXED · 18</strong></div></section><section><h3>Capabilities</h3><div class="check"><span>Waypoint Mission</span><strong style="color:var(--good)">SUPPORTED</strong></div><div class="check"><span>Live Video</span><strong style="color:var(--good)">SUPPORTED</strong></div></section><section><h3>Feedback</h3><p style="color:var(--muted);font-size:11px">所有设备状态都显示最后事实、时间和下一步动作。</p></section><button class="btn" style="width:100%">查看设备日志</button></div></section>
+          </div>
+        </section>
+        <section class="page" id="routes">
+          <div class="page-head"><div><div class="eyebrow">02 / ROUTES</div><h1>航线档案</h1><p class="subhead">导入 Wayline 生成的 KMZ，预览、校验并分配给飞机</p></div><div class="actions"><button class="btn">刷新</button><button class="btn primary">导入 KMZ</button></div></div>
+          <div class="content-grid">
+            <section class="panel"><div class="panel-head"><h2>航线库</h2><span>6 routes</span></div><div class="list"><div class="row selected"><div><div class="row-title"><span class="status good">可上传</span>west-campus-survey.kmz</div><div class="row-meta">24 航点 · 4.8 km · 14:21</div></div><span class="row-meta">v03</span></div><div class="row"><div><div class="row-title"><span class="status good">可上传</span>roofline-pass-02.kmz</div><div class="row-meta">18 航点 · 3.1 km · 13:52</div></div><span class="row-meta">v01</span></div><div class="row"><div><div class="row-title"><span class="status warn">需检查</span>east-block-test.kmz</div><div class="row-meta">12 航点 · 高度字段缺失</div></div><span class="row-meta">v02</span></div><div class="row"><div><div class="row-title"><span class="status bad">校验失败</span>old-export.kmz</div><div class="row-meta">坐标系无法识别</div></div><span class="row-meta">v04</span></div></div></section>
+            <section class="panel map"><div class="map-label">TIANDITU · 3D PREVIEW · HANGZHOU</div><div class="map-tools"><button class="btn">2D</button><button class="btn primary">3D</button><button class="btn">定位</button></div><div class="route-line"></div><span class="route-point one"></span><span class="route-point two"></span><span class="route-point three"></span></section>
+            <section class="panel"><div class="panel-head"><h2>航线检查器</h2><span>validated</span></div><div class="route-stats"><div class="route-stat"><label>航点</label><strong>24</strong></div><div class="route-stat"><label>距离</label><strong>4.8 km</strong></div><div class="route-stat"><label>预计</label><strong>08:42</strong></div></div><div class="inspector"><section><h3>Route facts</h3><div class="check"><span>校验状态</span><strong style="color:var(--good)">PASSED</strong></div><div class="check"><span>最高高度</span><strong>60 m</strong></div><div class="check"><span>巡航速度</span><strong>6 m/s</strong></div><div class="check"><span>坐标范围</span><strong>30.21, 120.12</strong></div></section><section><h3>Next action</h3><p style="color:var(--muted);font-size:11px">选择在线飞机后，可在飞行页完成分配和上传。</p></section><button class="btn primary" style="width:100%">分配到飞机</button></div></section>
+          </div>
+        </section>
+        <section class="page" id="flight">
+          <div class="page-head"><div><div class="eyebrow">03 / FLIGHT</div><h1>飞行任务台</h1><p class="subhead">任务事实、图传状态和安全操作保持在同一视区</p></div><div class="actions"><button class="btn">事件日志</button><button class="btn danger">紧急停止</button></div></div>
+          <div class="flight-grid"><section class="flight-main"><div class="video"><div class="osd"><span>Mini 4 Pro · west-campus-survey</span><span>WAITING FOR FIRST FRAME</span></div><div class="video-copy"><strong>图传尚未就绪</strong>手机端已开始推流，等待本机媒体服务确认首帧</div></div><div class="telemetry"><div><label>高度</label><strong>— m</strong></div><div><label>速度</label><strong>— m/s</strong></div><div><label>航向</label><strong>—°</strong></div><div><label>电量</label><strong>86%</strong></div><div><label>GPS</label><strong>18</strong></div><div><label>链路</label><strong>18 ms</strong></div></div><div class="event-log"><h2>Recent events</h2><div class="event"><time>14:31:58</time><b>READY</b><span>航线已校验，等待任务上传</span></div><div class="event"><time>14:31:42</time><b>RELAY</b><span>手机中继器在线，链路延迟 18 ms</span></div><div class="event"><time>14:30:10</time><b>INFO</b><span>已选择 west-campus-survey.kmz</span></div></div></section><aside class="flight-side"><section><h2>当前任务</h2><div class="assignment"><strong>Mini 4 Pro</strong><span>west-campus-survey · 24 航点</span><span>任务阶段：READY TO STAGE</span></div></section><section><h2>任务时间线</h2><div class="timeline"><div class="done"><span>航线已分配</span><span>完成</span></div><div class="current"><span>暂存到手机</span><span>待执行</span></div><div><span>上传到飞机</span><span>未开始</span></div><div><span>开始执行</span><span>需预检</span></div></div></section><section><h2>安全操作</h2><div class="control-grid"><button class="btn primary wide">暂存航线</button><button class="btn">起飞</button><button class="btn">返航</button><button class="btn">降落</button><button class="btn danger wide">停止任务</button></div><p style="margin-top:10px;color:var(--muted);font-size:11px">起飞、返航和降落均需二次确认，成功只表示 DJI 已接受请求。</p></section></aside></div>
+        </section>
+      </main>
+    </div>
+    <footer class="bottom"><span><strong>●</strong> 所有状态均为设计样例，不代表真实设备</span><span>PROTOTYPE · 2026-08-14 · 1440×900</span></footer>
+  </div>
+  <div class="switcher" aria-label="视觉方案切换"><button id="prev" aria-label="上一套方案">‹</button><div class="label" id="variant-label">A · Flight Deck</div><button id="next" aria-label="下一套方案">›</button></div>
+  <script>
+    const variants = [
+      { key: "a", name: "A · Flight Deck" },
+      { key: "b", name: "B · Airspace Atlas" },
+      { key: "c", name: "C · Field Ledger" }
+    ];
+    let variantIndex = Math.max(0, variants.findIndex(item => item.key === new URLSearchParams(location.search).get("variant")));
+    const applyVariant = () => {
+      const item = variants[variantIndex];
+      document.body.className = `variant-${item.key}`;
+      document.getElementById("variant-label").textContent = item.name;
+      history.replaceState(null, "", `?variant=${item.key}`);
+    };
+    const cycle = delta => { variantIndex = (variantIndex + delta + variants.length) % variants.length; applyVariant(); };
+    document.getElementById("prev").addEventListener("click", () => cycle(-1));
+    document.getElementById("next").addEventListener("click", () => cycle(1));
+    document.querySelectorAll(".nav button").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll(".nav button").forEach(item => item.classList.remove("active"));
+      button.classList.add("active");
+      document.querySelectorAll(".page").forEach(page => page.classList.toggle("active", page.id === button.dataset.page));
+    }));
+    document.addEventListener("keydown", event => {
+      if (event.target.closest("input,textarea,[contenteditable]")) return;
+      if (event.key === "ArrowLeft") cycle(-1);
+      if (event.key === "ArrowRight") cycle(1);
+    });
+    applyVariant();
+  </script>
+</body>
+</html>

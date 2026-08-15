@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "npx vitest run tests/device-registry-contract.test.ts"
+  },
+  "mutate": [
+    "src/modules/relay-link/device-registry/index.ts:88-88"
+  ],
+  "reporters": ["clear-text", "json"],
+  "jsonReporter": { "fileName": "reports/mutation/static-command-diagnostic.json" },
+  "coverageAnalysis": "off",
+  "concurrency": 1,
+  "thresholds": {
+    "high": 100,
+    "low": 100,
+    "break": 100
+  }
+}

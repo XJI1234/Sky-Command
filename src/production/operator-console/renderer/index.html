@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Sky Command</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; --bg: #0b0f12; --panel: #131c20; --line: #2e3c42; --text: #e8f0ef; --muted: #839397; --accent: #d7f16a; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column; overflow: hidden; }
+    body > header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+    header h1 { margin: 0; font-size: 14px; letter-spacing: 0.12em; }
+    nav { display: flex; gap: 8px; }
+    nav button, .row button, .actions button { background: #0d1519; color: var(--text); border: 1px solid #405057; min-height: 32px; padding: 0 12px; cursor: pointer; }
+    nav button.active, .device.inspected { border-color: var(--accent); color: var(--accent); }
+    main { display: none; flex: 1; min-height: 0; }
+    main.active { display: grid; }
+    #workspace-devices { grid-template-columns: 280px 1fr; }
+    #workspace-routes { grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+    #workspace-flight { grid-template-columns: 1fr 340px; }
+    section { padding: 16px; border-right: 1px solid var(--line); overflow: auto; }
+    section:last-child { border-right: 0; }
+    h2 { margin: 0 0 12px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+    .device { padding: 12px; margin-bottom: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
+    .device strong { word-break: break-all; }
+    .muted, .notice, .guide { color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .chain { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+    .ok { color: var(--accent); }
+    video { width: 100%; min-height: 280px; background: #000; }
+    .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .warn { color: #fc6; }
+    #confirm[hidden] { display: none; }
+    #connection-count.online { color: var(--accent); }
+    #workspace-routes > .route-preview-panel { padding: 0; overflow: hidden; border-right: 1px solid #263138; min-height: 0; height: 100%; }
+    #workspace-routes > .route-mission-wrap { padding: 16px; overflow: auto; min-height: 0; }
+    .route-preview-panel { height: 100%; min-height: 0; display: grid; grid-template-rows: 72px minmax(0, 1fr) 36px; background: #11181c; }
+    .route-preview-panel > header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid #263138; }
+    .route-preview-panel > header div { margin-right: 6px; }
+    .route-preview-panel > header span { display: block; font-size: 9px; color: #89979b; letter-spacing: 1.5px; }
+    .route-preview-panel > header h2 { margin: 4px 0 0; font-size: 17px; letter-spacing: .3px; text-transform: none; color: var(--text); }
+    .route-preview-panel > header p { flex: 1; margin: 0; color: #9aa7aa; font: 10px monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .route-preview-panel > header button { border: 1px solid #334149; background: #0b0f12; color: #d7f16a; padding: 7px 10px; cursor: pointer; min-height: 0; }
+    .route-preview-panel > header button:disabled { opacity: .5; cursor: wait; }
+    .cesium-host { min-height: 0; height: 100%; background: #182228; position: relative; overflow: hidden; }
+    .cesium-host .cesium-viewer, .cesium-host .cesium-viewer-cesiumWidget, .cesium-host .cesium-widget { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .cesium-host canvas { display: block; width: 100% !important; height: 100% !important; }
+    .cesium-host .cesium-viewer-bottom { display: none; }
+    .route-preview-panel .notice { margin: 0; padding: 10px 18px; color: #a8b3b6; font: 10px monospace; }
+    .route-mission-control { padding: 16px; border: 1px solid #34434a; background: #11191d; }
+    .route-mission-control .eyebrow { font-size: 9px; color: #89979b; letter-spacing: 1.5px; display: block; margin-bottom: 6px; }
+    .route-picker { display: grid; gap: 6px; margin-top: 12px; }
+    .route-picker[hidden], .route-details[hidden], #route-empty[hidden] { display: none !important; }
+    .route-picker span { color: #839397; font: 9px monospace; letter-spacing: 1px; }
+    .route-picker select { width: 100%; min-height: 34px; border: 1px solid #405057; background: #0a1013; color: #e7eeee; padding: 0 8px; font: 12px monospace; }
+    .route-details { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 12px; }
+    .route-details strong { display: block; color: #eff6f5; font-size: 13px; overflow-wrap: anywhere; }
+    .route-details small { display: block; margin-top: 5px; color: #8a999d; font: 9px monospace; }
+    .route-actions { display: flex; gap: 6px; }
+    .focus-route, .remove-route { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; cursor: pointer; min-height: 0; padding: 0; }
+    .focus-route svg, .remove-route svg { display: block; }
+    .focus-route { border: 1px solid #475948; background: #121a14; color: #d7f16a; }
+    .remove-route { border: 1px solid #704044; background: #161013; color: #ff9d9d; }
+    .route-mission-control > p { margin: 12px 0 0; color: #93a1a4; font: 11px/1.5 monospace; }
+  </style>
+  <link rel="stylesheet" href="./cesium/Widgets/widgets.css" />
+</head>
+<body>
+  <header>
+    <h1>Sky Command</h1>
+    <nav>
+      <button data-workspace="devices">设备</button>
+      <button data-workspace="routes">航线</button>
+      <button data-workspace="flight">飞行</button>
+    </nav>
+    <span id="connection-count" class="muted">等待手机连接</span>
+  </header>
+
+  <main id="workspace-devices">
+    <section>
+      <h2>手机</h2>
+      <div id="device-list"></div>
+    </section>
+    <section>
+      <h2>连接状态</h2>
+      <div id="device-detail" class="muted">从左侧选择已连接的手机。</div>
+      <p id="device-guide" class="guide"></p>
+    </section>
+  </main>
+
+  <main id="workspace-routes">
+    <section class="route-preview-panel">
+      <header>
+        <div><span>WAYLINE REVIEW</span><h2>航迹文件预览</h2></div>
+        <p id="route-summary">尚未导入航迹文件</p>
+        <button id="route-import" type="button">导入 KML / KMZ</button>
+      </header>
+      <div id="map" class="cesium-host"></div>
+      <p id="map-notice" class="notice">导入 Wayline 导出的 KML 或 KMZ 文件以预览航迹。</p>
+    </section>
+    <section class="route-mission-wrap">
+      <div class="route-mission-control">
+        <span class="eyebrow">ACTIVE WAYLINE</span>
+        <label id="route-picker-wrap" class="route-picker" hidden>
+          <span>CURRENT ROUTE</span>
+          <select id="route-select"></select>
+        </label>
+        <div id="route-details" class="route-details" hidden>
+          <div>
+            <strong id="route-file-name"></strong>
+            <small id="route-meta"></small>
+          </div>
+          <div class="route-actions">
+            <button id="route-locate" class="focus-route" type="button" title="定位到当前航线">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+            <button id="route-remove" class="remove-route" type="button" title="删除">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+            </button>
+          </div>
+        </div>
+        <p id="route-empty">导入 KML 或 KMZ 后，在这里选择待预览和发送的航线。</p>
+      </div>
+    </section>
+  </main>
+
+  <main id="workspace-flight">
+    <section>
+      <h2>图传监看</h2>
+      <video id="video" controls autoplay playsinline></video>
+      <p id="stream-label" class="notice"></p>
+      <p class="muted">先启动图传，等画面出现后再附着播放器。</p>
+    </section>
+    <section>
+      <h2>任务与安全</h2>
+      <label class="muted">任务飞机</label>
+      <select id="mission-select"></select>
+      <label class="muted">图传飞机</label>
+      <select id="stream-select"></select>
+      <p id="mission-label" class="notice"></p>
+      <p id="flight-route" class="notice"></p>
+      <div class="row">
+        <button data-action="mission-stage">传输到手机</button>
+        <button data-action="mission-upload">上传到飞机</button>
+        <button data-action="mission-start">开始</button>
+        <button data-action="mission-pause">暂停</button>
+        <button data-action="mission-resume">恢复</button>
+        <button data-action="mission-stop">停止</button>
+      </div>
+      <div class="row">
+        <button data-action="stream-start">启动图传</button>
+        <button data-action="stream-stop">停止图传</button>
+        <button data-action="stream-select">附着播放器</button>
+      </div>
+      <div class="row">
+        <button data-action="flight-takeoff">起飞</button>
+        <button data-action="flight-land">降落</button>
+        <button data-action="flight-return-home">返航</button>
+      </div>
+      <div id="confirm" class="warn" hidden>
+        <p id="confirm-text"></p>
+        <button id="confirm-yes">确认</button>
+        <button id="confirm-no">取消</button>
+      </div>
+      <p id="guidance" class="notice"></p>
+    </section>
+  </main>
+
+  <p id="status" class="notice" style="position: fixed; left: 16px; bottom: 8px; margin: 0;"></p>
+  <script>window.CESIUM_BASE_URL = "./cesium/";</script>
+  <script src="./cesium/Cesium.js"></script>
+  <script src="./console.js"></script>
+</body>
+</html>

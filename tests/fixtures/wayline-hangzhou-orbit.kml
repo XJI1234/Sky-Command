@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<name>无人机航线规划</name>
+<description>单点环绕采样航线</description>
+<Placemark>
+<name>航线路径</name>
+<Style>
+<LineStyle>
+<color>ff0000ff</color>
+<width>3</width>
+</LineStyle>
+</Style>
+<LineString>
+<tessellate>1</tessellate>
+<coordinates>
+120.16720400471,30.3221040027,43.25 120.16731556356,30.32079230001,43.25 120.16579600541,30.32069599353,43.25 120.16568442632,30.32200769493,43.25 </coordinates>
+</LineString>
+</Placemark>
+<Placemark>
+<name>0</name>
+<Point>
+<coordinates>120.16720400471,30.3221040027,43.25</coordinates>
+</Point>
+<description>
+航点编号: 0<br/>
+经度: 120.16720400471<br/>
+纬度: 30.3221040027<br/>
+高度: 43.25 m<br/>
+偏航角: 220.8°<br/>
+俯仰角: -10°<br/>
+环索引: 1<br/>
+类型: orbit
+</description>
+</Placemark>
+<Placemark>
+<name>1</name>
+<Point>
+<coordinates>120.16731556356,30.32079230001,43.25</coordinates>
+</Point>
+<description>
+航点编号: 1<br/>
+经度: 120.16731556356<br/>
+纬度: 30.32079230001<br/>
+高度: 43.25 m<br/>
+偏航角: 310.8°<br/>
+俯仰角: -10°<br/>
+环索引: 1<br/>
+类型: orbit
+</description>
+</Placemark>
+<Placemark>
+<name>2</name>
+<Point>
+<coordinates>120.16579600541,30.32069599353,43.25</coordinates>
+</Point>
+<description>
+航点编号: 2<br/>
+经度: 120.16579600541<br/>
+纬度: 30.32069599353<br/>
+高度: 43.25 m<br/>
+偏航角: 40.8°<br/>
+俯仰角: -10°<br/>
+环索引: 1<br/>
+类型: orbit
+</description>
+</Placemark>
+<Placemark>
+<name>3</name>
+<Point>
+<coordinates>120.16568442632,30.32200769493,43.25</coordinates>
+</Point>
+<description>
+航点编号: 3<br/>
+经度: 120.16568442632<br/>
+纬度: 30.32200769493<br/>
+高度: 43.25 m<br/>
+偏航角: 130.8°<br/>
+俯仰角: -10°<br/>
+环索引: 1<br/>
+类型: orbit
+</description>
+</Placemark>
+</Document>
+</kml>

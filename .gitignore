@@ -1,0 +1,12 @@
+node_modules/
+dist/
+electron/main.mjs
+electron/preload.cjs
+.stryker-tmp/
+coverage/
+reports/
+tmp/
+tmp-hls/
+*.log
+.claude/
+cross-runtime-verification-report.json

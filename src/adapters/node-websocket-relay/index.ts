@@ -1,0 +1,113 @@
+import { WebSocket, WebSocketServer } from "ws";
+import type { ListenAddress, RelayConnection, RelayTransport } from "../../modules/relay-link/relay-server/index.js";
+
+export interface WebSocketLike {
+  readonly readyState: number;
+  readonly OPEN: number;
+  send(data: Uint8Array, callback?: (error?: Error) => void): void;
+  close(): void;
+  on(event: string, listener: (...args: any[]) => void): this;
+  off?(event: string, listener: (...args: any[]) => void): this;
+}
+
+export interface WebSocketServerLike {
+  on(event: string, listener: (...args: any[]) => void): this;
+  off?(event: string, listener: (...args: any[]) => void): this;
+  close(callback?: (error?: Error) => void): void;
+}
+
+export interface WebSocketServerFactory {
+  readonly openState: number;
+  create(address: ListenAddress): WebSocketServerLike;
+}
+
+export interface NodeWebSocketRelayOptions { readonly factory?: WebSocketServerFactory; }
+
+const productionFactory: WebSocketServerFactory = Object.freeze({
+  openState: WebSocket.OPEN,
+  create: (address: ListenAddress) => new WebSocketServer({ host: address.host, port: address.port })
+});
+
+const stableReason = (reason: string): string => reason === "server-closed" || reason === "transport-error" ? reason : "peer-closed";
+const copyBytes = (data: unknown): Uint8Array | null => {
+  if (data instanceof Uint8Array) return data.slice();
+  if (data instanceof ArrayBuffer) return new Uint8Array(data.slice(0));
+  return null;
+};
+
+function adapt(socket: WebSocketLike, openState: number, onClosed: (connection: RelayConnection) => void): RelayConnection & { shutdown(reason: string): void } {
+  const messageListeners = new Set<(bytes: Uint8Array) => void>();
+  const closeListeners = new Set<(reason?: string) => void>();
+  const errorListeners = new Set<() => void>();
+  let closed = false;
+  const notifyClose = (reason: string): void => {
+    if (closed) return;
+    closed = true;
+    onClosed(connection);
+    for (const listener of [...closeListeners]) { try { listener(stableReason(reason)); } catch { /* isolate caller */ } }
+    messageListeners.clear(); errorListeners.clear();
+  };
+  const connection: RelayConnection & { shutdown(reason: string): void } = {
+    send: async (bytes) => {
+      if (closed || socket.readyState !== openState || !(bytes instanceof Uint8Array)) throw new Error("transport unavailable");
+      const copy = bytes.slice();
+      await new Promise<void>((resolve, reject) => {
+        try { socket.send(copy, (error) => error ? reject(new Error("transport send failed")) : resolve()); }
+        catch { reject(new Error("transport send failed")); }
+      });
+    },
+    close: async () => { connection.shutdown("peer-closed"); },
+    onMessage: (listener) => { if (closed) return () => undefined; messageListeners.add(listener); let active = true; return () => { if (active) { active = false; messageListeners.delete(listener); } }; },
+    onClose: (listener) => { closeListeners.add(listener); let active = true; return () => { if (active) { active = false; closeListeners.delete(listener); } }; },
+    onError: (listener) => { errorListeners.add(listener); let active = true; return () => { if (active) { active = false; errorListeners.delete(listener); } }; },
+    shutdown: (reason) => { if (closed) return; notifyClose(reason); try { socket.close(); } catch { /* cleanup remains committed */ } }
+  };
+  socket.on("message", (data: unknown, isBinary?: boolean) => {
+    if (closed) return;
+    if (isBinary === false) { connection.shutdown("transport-error"); return; }
+    const bytes = copyBytes(data);
+    if (!bytes) { connection.shutdown("transport-error"); return; }
+    for (const listener of [...messageListeners]) { try { listener(bytes.slice()); } catch { /* isolate caller */ } }
+  });
+  socket.on("error", () => {
+    for (const listener of [...errorListeners]) { try { listener(); } catch { /* isolate caller */ } }
+    connection.shutdown("transport-error");
+  });
+  socket.on("close", () => notifyClose("peer-closed"));
+  return connection;
+}
+
+function create(options: NodeWebSocketRelayOptions = {}): RelayTransport {
+  const factory = options.factory ?? productionFactory;
+  return Object.freeze({
+    listen(address: ListenAddress, onConnection: (connection: RelayConnection) => void): Promise<{ close(): Promise<void> }> {
+      return new Promise((resolve, reject) => {
+        let server: WebSocketServerLike;
+        let listening = false;
+        const connections = new Set<RelayConnection & { shutdown(reason: string): void }>();
+        try { server = factory.create({ ...address }); }
+        catch { reject(new Error("relay listener could not start")); return; }
+        const handleError = (): void => { if (!listening) reject(new Error("relay listener could not start")); };
+        const handleConnection = (socket: WebSocketLike): void => {
+          const connection = adapt(socket, factory.openState, (closed) => connections.delete(closed as RelayConnection & { shutdown(reason: string): void }));
+          connections.add(connection);
+          try { onConnection(connection); } catch { connection.shutdown("transport-error"); }
+        };
+        server.on("error", handleError).on("listening", () => {
+          listening = true;
+          let closePromise: Promise<void> | null = null;
+          resolve({ close: async () => {
+            if (closePromise) return closePromise;
+            closePromise = new Promise<void>((done) => {
+              for (const connection of [...connections]) connection.shutdown("server-closed");
+              try { server.close(() => done()); } catch { done(); }
+            });
+            return closePromise;
+          } });
+        }).on("connection", handleConnection);
+      });
+    }
+  });
+}
+
+export const NodeWebSocketRelayTransport = Object.freeze({ create });
