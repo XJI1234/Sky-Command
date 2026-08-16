@@ -1,0 +1,25 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "mutate": ["src/modules/relay-link/protocol-core/index.ts"],
+  "testFiles": [
+    "tests/protocol-core-contract.test.ts",
+    "tests/protocol-core-boundary.test.ts",
+    "tests/protocol-core-robustness.test.ts",
+    "tests/protocol-core-interop-vectors.test.ts",
+    "tests/cross-runtime-protocol-verification.test.ts"
+  ],
+  "reporters": ["clear-text", "progress", "json"],
+  "jsonReporter": { "fileName": "reports/mutation/protocol-core.json" },
+  "coverageAnalysis": "perTest",
+  "vitest": {
+    "configFile": "vitest.mutation.config.ts",
+    "related": false
+  },
+  "concurrency": 8,
+  "thresholds": {
+    "high": 100,
+    "low": 100,
+    "break": 100
+  }
+}

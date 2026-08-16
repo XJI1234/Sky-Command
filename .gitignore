@@ -3,6 +3,7 @@ dist/
 electron/main.mjs
 electron/preload.cjs
 .stryker-tmp/
+stryker-setup*.js
 coverage/
 reports/
 tmp/

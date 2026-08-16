@@ -1,0 +1,13 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "mutate": ["src/modules/flight-control/index.ts:28-80", "src/modules/flight-control/dangerous-action-confirm/index.ts:40-99", "src/modules/flight-control/flight-command-dispatcher/index.ts:38-80"],
+  "testFiles": ["tests/dangerous-action-confirm-contract.test.ts", "tests/flight-command-dispatcher-contract.test.ts", "tests/flight-control-contract.test.ts", "tests/flight-control-architecture.test.ts"],
+  "reporters": ["clear-text", "progress", "json"],
+  "coverageAnalysis": "off",
+  "vitest": { "related": false },
+  "mutator": { "excludedMutations": ["StringLiteral"] },
+  "concurrency": 4,
+  "thresholds": { "high": 100, "low": 100, "break": 100 },
+  "jsonReporter": { "fileName": "reports/mutation/flight-control.json" }
+}

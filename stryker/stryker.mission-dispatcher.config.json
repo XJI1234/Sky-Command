@@ -1,0 +1,12 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "mutate": ["src/modules/mission-control/mission-dispatcher/index.ts:97-195"],
+  "testFiles": ["tests/mission-dispatcher-contract.test.ts"],
+  "reporters": ["clear-text", "progress", "json"],
+  "coverageAnalysis": "off",
+  "mutator": { "excludedMutations": ["StringLiteral"] },
+  "concurrency": 4,
+  "thresholds": { "high": 100, "low": 100, "break": 100 },
+  "jsonReporter": { "fileName": "reports/mutation/mission-dispatcher.json" }
+}

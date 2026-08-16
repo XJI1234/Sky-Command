@@ -30,7 +30,7 @@ const gradleWrapper = resolve(mobileRoot, "gradle", "wrapper", "gradle-wrapper.j
 run(process.execPath, [tsc, "--noEmit", "-p", "tsconfig.type-tests.json"]);
 run(process.execPath, [vitest, "run", "--coverage"]);
 run(process.execPath, [vitest, "run", "--config", "vitest.performance.config.ts"]);
-run(process.execPath, [stryker, "run", "stryker.cross-runtime-verification.config.json"]);
+run(process.execPath, [stryker, "run", "stryker/stryker.cross-runtime-verification.config.json"]);
 run(java, ["-classpath", gradleWrapper, "org.gradle.wrapper.GradleWrapperMain", "check", ":app:assembleDebug", "--console=plain", "--quiet"], { cwd: mobileRoot });
 run(process.execPath, [vitest, "run",
   "tests/cross-runtime-e2e-contract.test.ts",

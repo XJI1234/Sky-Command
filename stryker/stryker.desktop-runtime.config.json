@@ -1,0 +1,13 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "mutate": ["src/production/desktop-runtime/index.ts"],
+  "testFiles": ["tests/desktop-runtime-contract.test.ts", "tests/desktop-runtime-architecture.test.ts"],
+  "reporters": ["clear-text", "progress", "json"],
+  "coverageAnalysis": "off",
+  "vitest": { "related": false },
+  "mutator": { "excludedMutations": ["StringLiteral"] },
+  "concurrency": 4,
+  "thresholds": { "high": 100, "low": 100, "break": 100 },
+  "jsonReporter": { "fileName": "reports/mutation/desktop-runtime.json" }
+}

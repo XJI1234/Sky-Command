@@ -15,7 +15,7 @@
     "test:cross-runtime-scenarios": "vitest run tests/cross-runtime-e2e-contract.test.ts tests/cross-runtime-workflow-model.test.ts tests/cross-runtime-protocol-verification.test.ts tests/cross-runtime-source-inventory.test.ts tests/cross-runtime-mission-ordering.test.ts tests/cross-runtime-resource-recovery.test.ts --reporter=default --reporter=./src/modules/cross-runtime-e2e/vitest-reporter.ts",
     "test:cross-runtime-e2e": "node scripts/run-cross-runtime-e2e.mjs",
     "test:types": "tsc --noEmit -p tsconfig.type-tests.json",
-    "test:mutation": "stryker run",
+    "test:mutation": "stryker run stryker/stryker.config.json",
     "build": "node scripts/build-desktop.mjs",
     "desktop": "electron electron/main.mjs",
     "start:desktop": "npm run build && npm run desktop",
