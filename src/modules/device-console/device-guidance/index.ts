@@ -109,14 +109,14 @@ function evaluate(value: unknown): DeviceGuidanceResult<DeviceGuidanceSnapshot> 
   switch (pairingState) {
     case "PAIRING":
     case "STOPPING":
-      return snapshot(link.deviceId, "WAIT_FOR_PAIRING", "wait-for-pairing", "等待配对", "正在对频，请稍候。");
+      return snapshot(link.deviceId, "WAIT_FOR_PAIRING", "wait-for-pairing", "正在对频", "正在对频，请稍候。");
     case "FAILED":
-      return snapshot(link.deviceId, "PAIRING_FAILED", "resolve-pairing-failure", "配对失败", "对频失败，请检查飞机后在手机上重试。");
+      return snapshot(link.deviceId, "PAIRING_FAILED", "resolve-pairing-failure", "对频失败", "对频失败，请在手机上重试。");
     case "PAIRED":
-      return snapshot(link.deviceId, "CONNECT_AIRCRAFT", "connect-aircraft", "连接飞行器", "已对频，正在等待飞机连上。");
+      return snapshot(link.deviceId, "CONNECT_AIRCRAFT", "connect-aircraft", "等待飞机", "已对频，正在等待飞机连上。");
     case "UNKNOWN":
     case "IDLE":
-      return snapshot(link.deviceId, "START_PAIRING", "start-pairing", "开始配对", "请在手机上开始对频。");
+      return snapshot(link.deviceId, "START_PAIRING", "start-pairing", "开始对频", "遥控器已连接。请在手机上开始对频，再等飞机连上。");
   }
 }
 

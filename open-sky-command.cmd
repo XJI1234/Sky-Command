@@ -2,19 +2,19 @@
 setlocal
 cd /d "%~dp0"
 if not exist "node_modules\electron\dist\electron.exe" (
-  echo 正在安装 Sky Command 桌面运行依赖，请稍候...
+  echo Installing Sky Command desktop dependencies...
   call npm install
   if errorlevel 1 (
-    echo 依赖安装失败，请检查网络后重试。
+    echo npm install failed. Check the network and retry.
     pause
     exit /b 1
   )
 )
 if not exist "electron\main.mjs" (
-  echo 正在构建 Sky Command 桌面程序，请稍候...
+  echo Building Sky Command desktop app...
   call npm run build
   if errorlevel 1 (
-    echo 构建失败。
+    echo npm run build failed.
     pause
     exit /b 1
   )

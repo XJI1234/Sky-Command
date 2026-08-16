@@ -165,7 +165,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     if (device.deviceId === view.missionDeviceId) node.classList.add("inspected");
     const connection = device.connection ?? {};
     const pairing = pairingFact(connection);
-    node.innerHTML = `<strong>${String(device.deviceId)}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "等待遥控器")} · ${connectionLabel(connection, "aircraft", "飞机已连接", "等待飞机")} · ${pairing.label}</div>`;
+    node.innerHTML = `<strong>${String(device.deviceId)}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "等待遥控器")} · ${pairing.label} · ${connectionLabel(connection, "aircraft", "飞机已连接", "等待飞机")}</div>`;
     node.addEventListener("click", () => { state.missionDeviceId = String(device.deviceId); void render(); });
     return node;
   }));
@@ -178,12 +178,12 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
       <div class="chain">
         <span class="ok">手机已连接</span>
         <span class="${connected(connection, "remoteController") ? "ok" : ""}">${connectionLabel(connection, "remoteController", "遥控器已连接", "等待遥控器")}</span>
-        <span class="${connected(connection, "aircraft") ? "ok" : ""}">${connectionLabel(connection, "aircraft", "飞机已连接", "等待飞机")}</span>
         <span class="${pairing.ok ? "ok" : ""}">${pairing.label}</span>
+        <span class="${connected(connection, "aircraft") ? "ok" : ""}">${connectionLabel(connection, "aircraft", "飞机已连接", "等待飞机")}</span>
       </div>
       <p>${extraFacts(connection)}</p>
       <p class="muted">对频请在手机上开始或停止。这里只显示手机回报的结果。</p>`;
-  el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。遥控器连上后，若飞机还没连上，请在手机上开始对频。电脑关掉后，需要在手机上重新连接。`;
+  el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。遥控器连上后，请在手机上开始对频，再等飞机连上。电脑关掉后，需要在手机上重新连接。`;
 }
 
 function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
