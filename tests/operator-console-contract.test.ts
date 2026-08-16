@@ -142,6 +142,32 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("import-route", view)).toEqual({ ok: true });
   });
 
+  it("删除后若当前选择为空或已不存在，投影到剩余航线，不得当成没有航线", () => {
+    const remaining = { routeId: "route-2", displayName: "canal.kmz", format: "kmz", classification: "upload-candidate" };
+    const missingSelection = OperatorConsole.project({
+      snapshot: snapshot([device()], { routes: [remaining], selectedRouteId: null }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "routes",
+    });
+    expect(missingSelection.routes).toHaveLength(1);
+    expect(missingSelection.selectedRoute).toMatchObject({ routeId: "route-2", displayName: "canal.kmz" });
+
+    const danglingSelection = OperatorConsole.project({
+      snapshot: snapshot([device()], { routes: [remaining], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "routes",
+    });
+    expect(danglingSelection.selectedRoute).toMatchObject({ routeId: "route-2" });
+
+    const emptied = OperatorConsole.project({
+      snapshot: snapshot([device()], { routes: [], selectedRouteId: null }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "routes",
+    });
+    expect(emptied.routes).toEqual([]);
+    expect(emptied.selectedRoute).toBeNull();
+  });
+
   it("飞行页在未上传、电量不足或能力未知时给出具体原因，不得写成正在执行", () => {
     const notUploaded = OperatorConsole.project({
       snapshot: snapshot([device({ mission: { phase: "staged", routeId: "route-1" } })], { routes: [kmz], selectedRouteId: "route-1" }),

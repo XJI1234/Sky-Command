@@ -202,7 +202,7 @@ function project(input: unknown): OperatorView {
   const streamDevice = devices.find((item) => read(item, "deviceId") === streamDeviceId);
   const routes = routesOf(snapshot);
   const selectedRouteId = text(read(read(snapshot, "workflow"), "selectedRouteId"));
-  const selectedRoute = routes.find((item) => item.routeId === selectedRouteId) ?? null;
+  const selectedRoute = routes.find((item) => item.routeId === selectedRouteId) ?? routes[0] ?? null;
   const videoPhase = text(read(read(streamDevice, "video"), "phase"));
   return freeze({
     workspace: workspaceOf(source === null ? null : read(source, "workspace")),

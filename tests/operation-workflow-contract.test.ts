@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OperationWorkflow } from "../src/production/operation-workflow/index.js";
+import { OperatorConsole } from "../src/production/operator-console/index.js";
+import { RouteLibrary } from "../src/modules/route-library/index.js";
 
 const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkflow.create({
   relayOperations: { devices: () => [{ deviceId: "relay-a" }], telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: {} }), subscribe: () => () => undefined },
@@ -384,6 +386,51 @@ describe("飞行作业工作流模块契约", () => {
     expect(workflow.assignRoute("relay-a", "route-missing")).toMatchObject({ ok: false, code: "ROUTE_NOT_UPLOADABLE" });
     expect(workflow.selectVideo("relay-a")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     expect(calls).toEqual(["player"]);
+  });
+
+  it("删除当前选中航线后只删除这一条，并采用航线库返回的剩余选择", () => {
+    const removed: string[] = [];
+    const workflow = workflowWith({
+      routeLibrary: {
+        list: () => [{ routeId: "route-a", classification: "upload-candidate" }, { routeId: "route-b", classification: "upload-candidate" }],
+        select: () => ({ ok: true }),
+        remove: (routeId: string) => {
+          removed.push(routeId);
+          return { ok: true, value: routeId === "route-a" ? { routeId: "route-b" } : null };
+        },
+      },
+    });
+    expect(workflow.selectRoute("route-a")).toMatchObject({ ok: true });
+    expect(workflow.removeRoute("route-a")).toMatchObject({ ok: true });
+    expect(removed).toEqual(["route-a"]);
+    expect(workflow.snapshot().selectedRouteId).toBe("route-b");
+    expect(workflow.removeRoute("route-b")).toMatchObject({ ok: true });
+    expect(removed).toEqual(["route-a", "route-b"]);
+    expect(workflow.snapshot().selectedRouteId).toBeNull();
+  });
+
+  it("真实航线库删除当前航线后只保留其余航线并选中剩余项", async () => {
+    const created = RouteLibrary.create({
+      idProvider: (() => { let n = 0; return () => `route-${++n}`; })(),
+      clock: () => "2026-08-10T00:00:00.000Z",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw created.error;
+    const kml = (coords: string) => new TextEncoder().encode(`<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><LineString><coordinates>${coords}</coordinates></LineString></Placemark></Document></kml>`);
+    expect(await created.value.importFile({ fileName: "west-lake.kml", bytes: kml("120.16450,30.32350,80 120.16880,30.32350,80") })).toMatchObject({ status: "imported" });
+    expect(await created.value.importFile({ fileName: "canal.kml", bytes: kml("120.16500,30.31850,120 120.16850,30.32300,110") })).toMatchObject({ status: "imported" });
+    const workflow = workflowWith({ routeLibrary: created.value });
+    expect(workflow.selectRoute("route-1")).toMatchObject({ ok: true });
+    expect(workflow.removeRoute("route-1")).toMatchObject({ ok: true });
+    expect(workflow.snapshot().selectedRouteId).toBe("route-2");
+    expect(workflow.snapshot().routes.map((route: { routeId: string }) => route.routeId)).toEqual(["route-2"]);
+    const view = OperatorConsole.project({
+      snapshot: { workflow: workflow.snapshot() },
+      selection: { missionDeviceId: null, streamDeviceId: null },
+      workspace: "routes",
+    });
+    expect(view.routes).toHaveLength(1);
+    expect(view.selectedRoute).toMatchObject({ routeId: "route-2", displayName: "canal.kml" });
   });
 
   it("处理坏设备条目、航线读取异常和释放后的迟到断连", () => {

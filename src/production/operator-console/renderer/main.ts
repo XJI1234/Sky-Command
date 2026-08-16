@@ -188,9 +188,9 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
 
 function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
   const selected = view.selectedRoute;
-  const hasRoute = selected !== null && selected !== undefined;
+  const hasRoute = view.routes.length > 0;
   el("route-picker-wrap").hidden = !hasRoute;
-  el("route-details").hidden = !hasRoute;
+  el("route-details").hidden = selected === null || selected === undefined;
   el("route-empty").hidden = hasRoute;
   const select = el("route-select") as HTMLSelectElement;
   select.replaceChildren(...view.routes.map((route) => Object.assign(document.createElement("option"), {
@@ -198,6 +198,7 @@ function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
     textContent: route.displayName,
     selected: selected?.routeId === route.routeId,
   })));
+  if (selected !== null && selected !== undefined) select.value = selected.routeId;
   select.onchange = async () => {
     const decision = OperatorConsole.evaluate("select-route", view);
     if (!decision.ok) { show(decision.reason ?? "无法选择航线"); return; }
@@ -205,7 +206,9 @@ function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
     await render();
   };
   if (selected === null || selected === undefined) {
-    el("route-summary").textContent = "尚未导入航迹文件";
+    el("route-file-name").textContent = "";
+    el("route-meta").textContent = "";
+    el("route-summary").textContent = hasRoute ? "请选择要预览的航线" : "尚未导入航迹文件";
     return;
   }
   el("route-file-name").textContent = selected.displayName;
@@ -369,9 +372,17 @@ el("route-remove").addEventListener("click", async () => {
   if (routeId === undefined || routeId === null) { show("请先选择要删除的航线"); return; }
   const decision = OperatorConsole.evaluate("remove-route", view);
   if (!decision.ok) { blocked("remove-route", decision.reason ?? "无法删除"); return; }
-  await bridge().invoke("route-remove", { routeId });
+  const removed = unwrap(await bridge().invoke("route-remove", { routeId }));
+  if (accepted(removed) !== true && read(removed, "ok") === false) {
+    show("当前航线无法删除");
+    await render();
+    return;
+  }
   clearRoutePreview();
-  show("已删除当前航线");
+  const remaining = await projectView();
+  const next = remaining.routes.find((route) => route.routeId !== routeId);
+  if (next !== undefined) await bridge().invoke("route-select", { routeId: next.routeId });
+  show(next !== undefined ? `已删除，当前为 ${next.displayName}` : "已删除当前航线");
   await render();
 });
 

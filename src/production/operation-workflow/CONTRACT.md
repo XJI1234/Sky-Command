@@ -187,7 +187,7 @@ interface WorkflowDevice {
 1. `importRoute(input, cancellation?)` 只调用 `routeLibrary.importFile`；它接收调用方已读取的文件名与字节，不读取本地文件系统。成功导入后发布新快照；拒绝、取消或重复导入保持航线库既有语义。
 2. `getRoutePreview(routeId)` 只调用 `routeLibrary.getPreview(routeId)`；它不初始化或驱动地图引擎。
 3. `selectRoute(routeId)` 只调用 `routeLibrary.select(routeId)`；成功后更新 `selectedRouteId`，失败保留旧选择。
-4. `removeRoute(routeId)` 必须先检查当前分配：被任何设备分配的航线一律拒绝删除，直到所有关联设备清除分配；通过后才调用 `routeLibrary.remove(routeId)`。
+4. `removeRoute(routeId)` 必须先检查当前分配：被任何设备分配的航线一律拒绝删除，直到所有关联设备清除分配；通过后才调用 `routeLibrary.remove(routeId)`。删除只针对这一条航线。若删除的是当前选中航线，工作流必须采用航线库返回的剩余选择；库为空时才将 `selectedRouteId` 置为 `null`。非当前选中航线被删除时，保留原选择。
 5. `assignRoute(deviceId, routeId)` 仅对当前在线设备和航线库中的 `upload-candidate` 航线成功。它不暂存、不上传、不改变飞行器状态。
 6. 若设备任务处于 `staging`、`staged`、`uploading`、`uploaded`、`starting`、`running`、`pausing`、`paused`、`resuming` 或 `stopping`，重新分配必须被拒绝，避免 UI 把在途任务的航线解释为另一条。
 7. `clearAssignment(deviceId)` 只允许没有活动任务时执行；它不删除航线库文件，也不调用 `missionControl.forget`。
