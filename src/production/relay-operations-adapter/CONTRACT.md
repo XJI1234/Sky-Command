@@ -34,6 +34,7 @@ instance.subscribe(listener) -> unsubscribe
 
 instance.missionGateway() -> MissionRelayGateway
 instance.streamGateway() -> StreamRelayGateway
+instance.whipStreamGateway() -> WhipStreamRelayGateway
 instance.pairingGateway() -> PairingRelayPort
 instance.flightGateway() -> FlightRelay
 instance.settingsGateway() -> RelaySettingsGateway
@@ -80,6 +81,8 @@ instance.dispose() -> void
 | 航线上传/启动/暂停/继续/停止 | `wayline.*` | `{ confirm: true }` |
 | 图传开始 | `live-stream.start` | `{ rtmpUrl: string }` |
 | 图传停止 | `live-stream.stop` | `{}` |
+| 低延迟图传开始 | `live-stream-webrtc.start` | `{ whipUrl: string }` |
+| 低延迟图传停止 | `live-stream-webrtc.stop` | `{}` |
 | 起飞/降落/返航 | `flight.takeoff` / `flight.land` / `flight.return-home` | `{ confirm: true }` |
 | 相机与图传设置 | `device.settings.*` | 由 `relay-device-settings` 契约规定的字段 |
 

@@ -9,6 +9,7 @@ import { DesktopShell } from "../desktop-shell/index.js";
 import { NodeDiagnosticStore } from "../../adapters/node-diagnostic-store/index.js";
 import { createMediaPorts, discoverFfmpegCandidates } from "./media-ports.js";
 import { IncidentJournal, mediaLogger, watchApplication, wrapGateway, wrapPhoneDiagnostics } from "./incident-journal.js";
+import { createMediaMtxProcessPort, createMediaPathPort, createWhepPlaybackBridge } from "./webrtc-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = [here, join(here, ".."), join(here, "..", "..", "..")].find((dir) => existsSync(join(dir, "package.json"))) ?? join(here, "..");
@@ -18,6 +19,9 @@ const preloadPath = [join(projectRoot, "electron/preload.cjs"), join(projectRoot
 const hlsRoot = join(projectRoot, "tmp-hls");
 const logPath = join(projectRoot, "tmp", "desktop-launch.log");
 const relayPort = 8_080;
+const webrtcHttpPort = 8_890;
+const webrtcUdpPort = 8_189;
+const webrtcApiPort = 9_997;
 
 const log = (message: string): void => {
   try {
@@ -33,8 +37,18 @@ const privateIpv4 = (value: string): boolean => {
   return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
 };
 
-const virtualName = (name: string): boolean => /vmware|vmnet|vbox|virtualbox|vethernet|hyper-v|loopback|docker|wsl|tun|tailscale|mihomo/i.test(name);
+const virtualName = (name: string): boolean => /vmware|vmnet|vbox|virtualbox|vethernet|hyper-v|loopback|docker|wsl|tun|tailscale|mihomo|openvpn|nord|wireguard|hamachi|zerotier|radmin|\bvpn\b/i.test(name);
 const wifiName = (name: string): boolean => /wi-?fi|wlan|wireless|无线/i.test(name);
+const mediaMtxPath = (): string => {
+  const configured = process.env.SKY_COMMAND_MEDIAMTX;
+  const candidates = [
+    configured,
+    join(projectRoot, "tools", "mediamtx", "mediamtx.exe"),
+    join(projectRoot, "mediamtx.exe"),
+    join(projectRoot, "tools", "mediamtx", "mediamtx"),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return candidates.find((value) => existsSync(value)) ?? candidates[0] ?? "mediamtx";
+};
 const cardScore = (name: string, ipv4: string, kind: "wifi" | "physical"): number => {
   if (virtualName(name)) return 100;
   if (kind === "wifi" || wifiName(name)) return 0;
@@ -46,7 +60,7 @@ const lanCards = (): readonly { readonly name: string; readonly enabled: true; r
   for (const [name, addresses] of Object.entries(networkInterfaces())) {
     for (const address of addresses ?? []) {
       const ipv4 = address.family === "IPv4" || address.family === 4 ? address.address : null;
-      if (ipv4 === null || address.internal || !privateIpv4(ipv4) || virtualName(name)) continue;
+      if (ipv4 === null || address.internal || !privateIpv4(ipv4) || virtualName(name) || ipv4.startsWith("192.168.56.")) continue;
       const kind = wifiName(name) ? "wifi" as const : "physical" as const;
       cards.push({ name, enabled: true, internal: false, kind, ipv4, score: cardScore(name, ipv4, kind) });
     }
@@ -80,13 +94,16 @@ async function launch(): Promise<void> {
   const mediaPorts = createMediaPorts((deviceId) => notifyPlaylistReady(deviceId), mediaLogger(journal));
   const usableFfmpeg = ffmpegCandidates.filter((candidate) => mediaPorts.fileFacts.isExecutableFile(candidate.executablePath));
   if (usableFfmpeg.length === 0) {
-    journal.record({ link: "uplink", level: "ERROR", event: "FFMPEG_NOT_FOUND", detail: "No usable FFmpeg executable" });
-    dialog.showErrorBox("Sky Command", "未找到可用的 FFmpeg。请安装 FFmpeg，或设置环境变量 SKY_COMMAND_FFMPEG。图传不能用替身凑合。");
-    app.exit(1);
-    return;
+    journal.record({ link: "uplink", level: "WARN", event: "FFMPEG_NOT_FOUND", detail: "Legacy RTMP/HLS media is unavailable" });
   }
+  let window: BrowserWindow | null = null;
+  const whepBridge = createWhepPlaybackBridge((channel, payload) => {
+    if (window === null) throw new Error("window unavailable");
+    window.webContents.send(channel, payload);
+  });
   const created = DesktopApplication.create({
     network: { listenPort: 19_500, relayPort, manualHost: preferred.ipv4 },
+    legacyMediaRequired: false,
     relay: {
       address: { host: "0.0.0.0", port: relayPort },
       handshakeTimeoutMs: 15_000,
@@ -112,6 +129,18 @@ async function launch(): Promise<void> {
         ffmpegCandidates: usableFfmpeg,
       },
     },
+    lowLatency: {
+      media: {
+        dependencies: {
+          process: createMediaMtxProcessPort(),
+          paths: createMediaPathPort({ apiPort: webrtcApiPort }),
+          player: whepBridge.port,
+          clock: () => Date.now(),
+        },
+        options: { httpPort: webrtcHttpPort, webRtcUdpPort, apiPort: webrtcApiPort, pathPrefix: "/live", mode: "whip-whep", publisherTimeoutMs: 15_000 },
+        startInput: { interfaces: mediaInterfaces, manualHost: preferred.ipv4, executablePath: mediaMtxPath() },
+      },
+    },
     mission: { createMissionId: (deviceId: string, routeId: string) => `mission-${deviceId}-${routeId}` },
     flight: { now: () => Date.now(), confirmation: { ttlMs: 15_000, createConfirmationId: () => `confirm-${Date.now()}` } },
     now: () => Date.now(),
@@ -134,7 +163,6 @@ async function launch(): Promise<void> {
     application: created.value,
     relayHint: () => lanCards().map((card) => `ws://${card.ipv4}:${relayPort}/relay`),
   }), journal);
-  let window: BrowserWindow | null = null;
   const shell = DesktopShell.create({
     applicationGateway: gateway,
     lifecycle: {
@@ -179,6 +207,12 @@ async function launch(): Promise<void> {
   for (const name of Object.keys(DesktopShell.methods)) {
     ipcMain.handle(name, (_event, input) => shell.invoke(name, input));
   }
+  ipcMain.on("webrtc-player-ready", (event, payload) => {
+    if (window !== null && event.sender === window.webContents) whepBridge.ready(payload);
+  });
+  ipcMain.on("webrtc-player-fatal", (event, payload) => {
+    if (window !== null && event.sender === window.webContents) whepBridge.fatal(payload);
+  });
   ipcMain.handle("route-select-file", async () => {
     if (window === null) return { ok: false };
     const selected = await dialog.showOpenDialog(window, {

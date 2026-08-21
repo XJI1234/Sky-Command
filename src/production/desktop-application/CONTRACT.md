@@ -18,12 +18,27 @@ application.stop() -> Promise<ApplicationResult>
 application.snapshot() -> ApplicationSnapshot
 application.subscribe(listener) -> unsubscribe
 application.workflow() -> OperationWorkflowInstance
+application.lowLatency() -> LowLatencyMediaInstance | null
 application.dispose() -> Promise<void>
 ```
 
 `workflow()` 仅供下一层桌面 UI 网关调用。Electron 主进程和渲染进程均不得把其返回值直接交给页面。
 
-`create` 只接受：已校验的网络设置、中继监听配置、航线库配置、媒体适配器和启动输入、任务 ID 生成器、飞控确认配置、时钟及可选诊断记录器。调用者不传入已经构造好的业务实例，避免出现不完整或所有权不清的对象图。
+`create` 只接受：已校验的网络设置、中继监听配置、航线库配置、媒体适配器和启动输入、任务 ID 生成器、飞控确认配置、时钟及可选诊断记录器。低延迟旁路配置可选，形状为：
+
+```text
+lowLatency?: {
+  media: {
+    dependencies: WebRtcMediaDependencies
+    options: WebRtcMediaOptions
+    startInput: unknown
+  }
+}
+```
+
+`legacyMediaRequired?: boolean` 为可选启动策略，默认 `true`。生产桌面同时装配低延迟旁路时必须传 `false`，使旧 RTMP/HLS 或 FFmpeg 的失败只影响旧链路；它不改变旧链路已构造的对象图，也不自动启动低延迟旁路。
+
+调用者不传入已经构造好的业务实例，避免出现不完整或所有权不清的对象图。
 
 WebSocket 中继口取自 `network.relayPort`，RTMP 收流口取自 `network.listenPort`，媒体启动的 `manualHost` 取自 `network.manualHost`。`relay.address.port` 与 `media.options.rtmpPort` 不得另开一套端口真相。`network` 无效时返回 `INVALID_CONFIGURATION`。
 
@@ -42,16 +57,21 @@ WebSocket 中继口取自 `network.relayPort`，RTMP 收流口取自 `network.li
 7. `FlightCommandDispatcher -> FlightControl`
 8. `DesktopRuntime`
 9. `OperationWorkflow`
+10. 可选 `WebRtcMedia -> WhipStreamControl` 低延迟旁路
 
 依赖方向只能从本模块指向上述公开一级接口。任一被组合模块不得反向依赖本模块，也不得依赖 UI 网关、Electron 或地图。
 
 ## 4. 生命周期
 
-初始阶段为 `idle`。`start()` 委托 `DesktopRuntime.start()`，其既定顺序为先启动中继监听，再启动媒体服务；两者成功后阶段为 `running`。
+初始阶段为 `idle`。`start()` 委托 `DesktopRuntime.start()`，其既定顺序为先启动中继监听，再启动旧媒体服务。默认策略要求两者成功；`legacyMediaRequired: false` 时，中继成功即允许应用进入 `running`，旧媒体失败只保留在运行时媒体快照。
 
 `stop()` 委托 `DesktopRuntime.stop()`，其既定顺序为先停止已知设备图传，再停止媒体服务，最后停止中继监听。任一步失败均不得阻止后续清理；结果映射为稳定的应用错误码。重复启动、重复停止、进行中的竞争操作和释放后的调用均返回稳定结果，不抛出底层异常。
 
 `dispose()` 幂等，并按以下顺序执行：若仍在运行先完成 `stop()`；停止工作流订阅；停止任务订阅；清空航线内存；清空飞控确认；释放运行时及其媒体资源；释放中继操作适配器；停止对外发布。释放不会发送新的航线、图传或飞控命令。
+
+低延迟旁路是可选配置。默认配置不创建它，不改变旧 RTMP/HLS 启动顺序。配置存在时，`lowLatency()` 返回独立门面，只有调用其 `start()` 才启动 MediaMTX；低延迟启动失败只能影响该门面。应用停止或处置时必须先尽力停止该门面的 WHIP 设备和 MediaMTX，再执行旧运行时停止。
+
+两条媒体链路的启动、运行、播放和停止结果互不升级：旧链路故障不得阻止 `lowLatency().start()`，低延迟故障不得阻止旧运行时启动或停止。两者仅共享中继控制面和手机连接；旧 `live-stream.*` 与新 `live-stream-webrtc.*` 命令、端口、进程、状态和播放器适配器保持分离。
 
 ## 5. 快照与订阅
 

@@ -65,4 +65,24 @@ describe("事故日志", () => {
     expect(log).toContain("downlink");
     expect(log).not.toContain("STREAM_REFRESH");
   });
+
+  it("把低延迟控制记为上行，并忽略低延迟周期刷新", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    const gateway = wrapGateway({
+      invoke: async (method) => method === "webrtc.start"
+        ? { ok: true as const, value: { ok: true, value: { phase: "running" } } }
+        : { ok: true as const, value: true },
+      snapshot: () => ({}),
+      subscribe: () => () => undefined,
+      dispose: () => undefined,
+    }, journal);
+    await gateway.invoke("webrtc.start", undefined);
+    await gateway.invoke("webrtc.refresh", undefined);
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toContain("WEBRTC_START_OK");
+    expect(log).toContain("uplink");
+    expect(log).not.toContain("WEBRTC_REFRESH");
+  });
 });

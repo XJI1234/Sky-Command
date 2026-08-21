@@ -1,6 +1,6 @@
 # webrtc-media 一级模块契约
 
-状态：实验设计，尚未实现。
+状态：实验模块契约。
 
 ## 唯一职责
 
@@ -10,20 +10,82 @@
 
 ## 公开接口
 
-```text
-WebRtcMedia.create(dependencies, options) -> WebRtcMediaInstance
+```ts
+interface NetworkInterfaceFact {
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly internal: boolean;
+  readonly kind: "physical" | "wifi" | "virtual" | "vpn" | "tunnel" | "bluetooth";
+  readonly ipv4: string;
+}
 
-instance.start(input) -> MediaResult<MediaSnapshot>
+interface StartInput {
+  readonly interfaces: readonly NetworkInterfaceFact[];
+  readonly manualHost: string | null;
+  readonly executablePath: string;
+}
+
+interface WebRtcMediaDependencies {
+  readonly process: MediaMtxProcessPort;
+  readonly paths: MediaPathPort;
+  readonly player: WhepPlaybackPort;
+  readonly clock?: () => number;
+}
+
+interface WebRtcMediaOptions {
+  readonly httpPort: number;
+  readonly webRtcUdpPort: number;
+  readonly apiPort: number;
+  readonly pathPrefix: string;
+  readonly mode: "whip-whep";
+  readonly publisherTimeoutMs: number;
+}
+
+interface MediaStreamSnapshot {
+  readonly deviceId: string;
+  readonly phase: "awaiting-publisher" | "publisher-ready" | "failed";
+  readonly diagnostic: string | null;
+}
+
+interface MediaSnapshot {
+  readonly phase: "idle" | "starting" | "running" | "stopping" | "failed" | "disposed";
+  readonly revision: number;
+  readonly streams: readonly MediaStreamSnapshot[];
+  readonly player: PlaybackSnapshot;
+  readonly diagnostic: string | null;
+}
+
+interface PublishTarget {
+  readonly kind: "whip";
+  readonly deviceId: string;
+  readonly url: string;
+}
+
+interface PlaybackTarget {
+  readonly kind: "whep";
+  readonly deviceId: string;
+  readonly url: string;
+}
+
+type MediaResult<T> =
+  | Readonly<{ readonly ok: true; readonly value: T }>
+  | Readonly<{ readonly ok: false; readonly code: string; readonly value: MediaSnapshot }>;
+
+WebRtcMedia.create(dependencies, options) -> WebRtcMediaInstance
+instance.start(input: unknown) -> MediaResult<MediaSnapshot>
 instance.stop() -> MediaResult<MediaSnapshot>
-instance.evaluate(now) -> MediaResult<MediaSnapshot>
-instance.playback(deviceId) -> MediaResult<PlaybackTarget>
-instance.selectPlayer(deviceId) -> MediaResult<MediaSnapshot>
+instance.evaluate(now: unknown) -> Promise<MediaResult<MediaSnapshot>>
+instance.publishTarget(deviceId: unknown) -> MediaResult<PublishTarget>
+instance.playback(deviceId: unknown) -> MediaResult<PlaybackTarget>
+instance.selectPlayer(deviceId: unknown) -> MediaResult<MediaSnapshot>
 instance.clearPlayer() -> MediaResult<MediaSnapshot>
 instance.snapshot() -> MediaSnapshot
 instance.dispose() -> Unit
 ```
 
-`start` 只接受局域网网卡事实、实验 HTTP/UDP 端口、MediaMTX 候选和可选手工主机。端口、进程路径、原始 WHIP/WHEP 地址和异常不得进入公开快照。
+`publishTarget` 只在媒体服务运行后生成受控的局域网 WHIP 地址，供 `whip-stream-control` 构造手机命令；`playback` 只在对应设备已发布后生成受控的本机 WHEP 地址，供 `whep-playback` 播放。两者都不把地址写入 `MediaSnapshot`。
+
+`start` 只接受局域网网卡事实、MediaMTX 可执行文件和可选手工主机；端口、进程路径、原始 WHIP/WHEP 地址和异常不得进入公开快照。
 
 ## 状态
 
@@ -37,9 +99,21 @@ instance.dispose() -> Unit
 
 URL 只能绑定本机回环地址、无凭据、无查询串和 fragment，并且 path 必须属于指定设备。
 
+发布目标是独立受控结果：
+
+```text
+{ kind: "whip", deviceId: string, url: http(s)://{private-lan-host}:{httpPort}/{pathPrefix}/{encodedDeviceId}/whip }
+```
+
+发布 URL 只能绑定已校验的私网 IPv4、无凭据、无查询串和 fragment；设备路径必须使用 `encodeURIComponent`。
+
+启动、停止和播放结果的错误码固定为：`INVALID_INPUT`、`ALREADY_ACTIVE`、`HOST_UNAVAILABLE`、`MEDIA_PROCESS_FAILED`、`PATH_MONITOR_FAILED`、`NOT_RUNNING`、`UNKNOWN_DEVICE`、`VIDEO_NOT_READY`、`PLAYER_FAILED`、`EVALUATION_FAILED`、`STOP_FAILED` 和 `DISPOSED`。错误结果只带当前脱敏快照，不带适配器异常。
+
 ## 生命周期
 
-启动顺序为：解析媒体主机 -> 定位 MediaMTX -> 启动 MediaMTX -> 启动 path 观察器。任何步骤失败都清理已经启动的资源。停止顺序为：清理播放器 -> 停止 path 观察器 -> 停止 MediaMTX；前一步失败不能阻止后续清理。
+启动顺序为：解析媒体主机 -> 启动 MediaMTX -> 启动 path 观察器。任何步骤失败都清理已经启动的资源。停止顺序为：清理播放器 -> 停止 path 观察器 -> 停止 MediaMTX；前一步失败不能阻止后续清理。`evaluate` 调用一次 path 列表 API，将发布/断开事件转换为按设备隔离的健康状态；它不创建定时器。
+
+`publisher-ready` 只表示 MediaMTX 已观察到 WHIP 发布。只有 `selectPlayer` 调用适配器并收到首帧后，播放器快照才会进入 `playing`；播放器失败不得把其他设备流改为失败。
 
 发布、断开、超时和进程退出必须按设备和监听代次隔离。旧代次事件不得恢复新会话，也不得影响其他设备。
 

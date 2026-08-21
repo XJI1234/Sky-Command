@@ -44,6 +44,10 @@ export interface StreamRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
   readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
 }
+export interface WhipStreamRelayGateway {
+  readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream-webrtc.start" | "live-stream-webrtc.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
+}
 export interface AdapterFlightRelay extends FlightRelay {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
   readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "flight.takeoff" | "flight.land" | "flight.return-home"; readonly fields: Readonly<{ readonly confirm: true }> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
@@ -58,6 +62,7 @@ export interface RelayOperationsAdapterInstance {
   readonly subscribe: (listener: (snapshot: RelayOperationsSnapshot) => void) => () => void;
   readonly missionGateway: () => MissionRelayGateway;
   readonly streamGateway: () => StreamRelayGateway;
+  readonly whipStreamGateway: () => WhipStreamRelayGateway;
   readonly pairingGateway: () => PairingRelayPort;
   readonly flightGateway: () => AdapterFlightRelay;
   readonly settingsGateway: () => RelaySettingsGateway;
@@ -218,6 +223,14 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
       return send(deviceId, request.name, { rtmpUrl: text(request.fields.rtmpUrl) });
     }
   });
+  const whipStreamGateway: WhipStreamRelayGateway = freeze({
+    latestTelemetry: telemetry,
+    sendCommand: async (deviceId, request) => {
+      if (request.name === "live-stream-webrtc.stop" && Object.keys(request.fields).length === 0) return send(deviceId, request.name, {});
+      if (request.name !== "live-stream-webrtc.start" || Object.keys(request.fields).length !== 1 || typeof request.fields.whipUrl !== "string" || request.fields.whipUrl.trim().length === 0 || /[\p{Cc}]/u.test(request.fields.whipUrl)) return commandFailure();
+      return send(deviceId, request.name, { whipUrl: text(request.fields.whipUrl) });
+    },
+  });
   const pairingGateway: PairingRelayPort = freeze({
     sendCommand: async (deviceId, request) => {
       if ((request.name !== "pairing.start" && request.name !== "pairing.stop" && request.name !== "pairing.status") || Object.keys(request.fields).length !== 0) return freeze({ status: "rejected" as const, detail: "请求无效" });
@@ -251,6 +264,7 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
     subscribe: (listener) => { if (disposed) return () => undefined; listeners.add(listener); let active = true; return () => { if (active) { active = false; listeners.delete(listener); } }; },
     missionGateway: () => missionGateway,
     streamGateway: () => streamGateway,
+    whipStreamGateway: () => whipStreamGateway,
     pairingGateway: () => pairingGateway,
     flightGateway: () => flightGateway,
     settingsGateway: () => settingsGateway,

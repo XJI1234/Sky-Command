@@ -6,6 +6,7 @@ const methods = Object.freeze([
   "assignment-assign", "assignment-clear",
   "mission-stage", "mission-upload", "mission-start", "mission-pause", "mission-resume", "mission-stop",
   "stream-start", "stream-stop", "stream-refresh", "stream-select", "stream-clear",
+  "webrtc-start", "webrtc-stop", "webrtc-refresh", "webrtc-stream-start", "webrtc-stream-stop", "webrtc-stream-select", "webrtc-stream-clear",
   "settings-transmission-read", "settings-transmission-write", "settings-camera-read", "settings-camera-write",
   "flight-request", "flight-confirm", "flight-cancel",
   "video-playback",
@@ -14,6 +15,12 @@ const methods = Object.freeze([
 
 const relayHint = (process.argv.find((value) => value.startsWith("--relay-hint=")) ?? "--relay-hint=ws://<电脑IPv4>:8080/relay").slice("--relay-hint=".length);
 const incidentLog = (process.argv.find((value) => value.startsWith("--incident-log=")) ?? "--incident-log=").slice("--incident-log=".length);
+const listen = (channel, listener) => {
+  if (typeof listener !== "function") return () => undefined;
+  const handler = (_event, payload) => listener(payload);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+};
 
 contextBridge.exposeInMainWorld("skyCommand", {
   relayHint,
@@ -23,4 +30,8 @@ contextBridge.exposeInMainWorld("skyCommand", {
     return ipcRenderer.invoke(name, input);
   },
   selectRouteFile: () => ipcRenderer.invoke("route-select-file"),
+  onWhepSelect: (listener) => listen("webrtc-player-select", listener),
+  onWhepClear: (listener) => listen("webrtc-player-clear", listener),
+  whepReady: (generation) => ipcRenderer.send("webrtc-player-ready", { generation }),
+  whepFatal: (generation) => ipcRenderer.send("webrtc-player-fatal", { generation }),
 });

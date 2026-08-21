@@ -80,6 +80,7 @@ describe("DesktopApplication", () => {
       { ...base, mission: { ...base.mission, createMissionId: null } },
       { ...base, flight: { ...base.flight, now: null } },
       { ...base, flight: { ...base.flight, confirmation: null } },
+      { ...base, legacyMediaRequired: "yes" },
       { ...base, routeLibrary: null },
       { ...base, network: null },
     ];
@@ -112,6 +113,60 @@ describe("DesktopApplication", () => {
     await expect(created.value.start()).resolves.toMatchObject({ ok: false, code: "DISPOSED" });
   });
 
+  it("保留旧链路默认对象图，并在启用旁路时先停止低延迟媒体", async () => {
+    const calls: string[] = [];
+    const base = options(await reservePort(), calls);
+    const defaultCreated = DesktopApplication.create(base);
+    expect(defaultCreated.ok).toBe(true);
+    if (!defaultCreated.ok) return;
+    expect(defaultCreated.value.lowLatency()).toBeNull();
+    await defaultCreated.value.dispose();
+    calls.length = 0;
+
+    let exit: ((event: { readonly kind: "exited" | "failed" }) => void) | null = null;
+    const created = DesktopApplication.create({
+      ...base,
+      lowLatency: {
+        media: {
+          dependencies: {
+            process: {
+              launch: (_input: unknown, onExit: (event: { readonly kind: "exited" | "failed" }) => void) => {
+                calls.push("webrtc-launch");
+                exit = onExit;
+                return { terminate: () => { calls.push("webrtc-terminate"); exit?.({ kind: "exited" }); } };
+              },
+            },
+            paths: {
+              listPaths: async () => [],
+            },
+            player: {
+              setTarget: () => undefined,
+              clear: () => { calls.push("webrtc-player-clear"); },
+            },
+          },
+          options: { httpPort: 18_890, webRtcUdpPort: 18_189, apiPort: 19_997, pathPrefix: "/live", mode: "whip-whep", publisherTimeoutMs: 5_000 },
+          startInput: {
+            interfaces: [{ name: "test-wifi", enabled: true, internal: false, kind: "wifi", ipv4: "192.168.1.8" }],
+            manualHost: "192.168.1.8",
+            executablePath: "D:/mediamtx.exe",
+          },
+        },
+      },
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const lowLatency = created.value.lowLatency();
+    expect(lowLatency).not.toBeNull();
+    if (lowLatency === null) return;
+
+    await expect(created.value.start()).resolves.toMatchObject({ ok: true });
+    await expect(lowLatency.start()).resolves.toMatchObject({ ok: true });
+    await expect(created.value.stop()).resolves.toMatchObject({ ok: true });
+    expect(calls.indexOf("webrtc-terminate")).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf("webrtc-terminate")).toBeLessThan(calls.indexOf("player-clear"));
+    await created.value.dispose();
+  });
+
   it("媒体启动失败时回收已启动中继并回到可重试空闲态", async () => {
     const calls: string[] = [];
     const created = DesktopApplication.create(options(await reservePort(), calls, { failRtmpStart: true }));
@@ -122,6 +177,101 @@ describe("DesktopApplication", () => {
     expect(created.value.snapshot()).toMatchObject({ phase: "idle", runtime: { phase: "idle" } });
     expect(calls).toEqual(["hls-listen", "rtmp-listen", "hls-close"]);
     await expect(created.value.stop()).resolves.toMatchObject({ ok: false, code: "NOT_RUNNING" });
+    await created.value.dispose();
+  });
+
+  it("显式允许旧媒体失败时仍保持应用和控制面运行", async () => {
+    const calls: string[] = [];
+    const created = DesktopApplication.create({
+      ...options(await reservePort(), calls, { failRtmpStart: true }),
+      legacyMediaRequired: false,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    await expect(created.value.start()).resolves.toMatchObject({ ok: true, value: { phase: "running", runtime: { phase: "running" } } });
+    expect(calls).not.toContain("relay-close");
+    await expect(created.value.stop()).resolves.toMatchObject({ ok: true, value: { phase: "idle" } });
+    await created.value.dispose();
+  });
+
+  it("旧媒体失败后仍可独立启动并停止 WebRTC 旁路", async () => {
+    const calls: string[] = [];
+    let exit: ((event: { readonly kind: "exited" | "failed" }) => void) | null = null;
+    const created = DesktopApplication.create({
+      ...options(await reservePort(), calls, { failRtmpStart: true }),
+      legacyMediaRequired: false,
+      lowLatency: {
+        media: {
+          dependencies: {
+            process: {
+              launch: (_input: unknown, onExit: (event: { readonly kind: "exited" | "failed" }) => void) => {
+                calls.push("webrtc-launch");
+                exit = onExit;
+                return { terminate: () => { calls.push("webrtc-terminate"); exit?.({ kind: "exited" }); } };
+              },
+            },
+            paths: { listPaths: async () => [] },
+            player: { setTarget: () => undefined, clear: () => { calls.push("webrtc-player-clear"); } },
+          },
+          options: { httpPort: 18_890, webRtcUdpPort: 18_189, apiPort: 19_997, pathPrefix: "/live", mode: "whip-whep", publisherTimeoutMs: 5_000 },
+          startInput: {
+            interfaces: [{ name: "test-wifi", enabled: true, internal: false, kind: "wifi", ipv4: "192.168.1.8" }],
+            manualHost: "192.168.1.8",
+            executablePath: "D:/mediamtx.exe",
+          },
+        },
+      },
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const lowLatency = created.value.lowLatency();
+    expect(lowLatency).not.toBeNull();
+    if (lowLatency === null) return;
+
+    await expect(created.value.start()).resolves.toMatchObject({ ok: true, value: { phase: "running" } });
+    await expect(lowLatency.start()).resolves.toMatchObject({ ok: true });
+    expect(calls).toContain("webrtc-launch");
+    await expect(created.value.stop()).resolves.toMatchObject({ ok: true, value: { phase: "idle" } });
+    expect(calls).toContain("webrtc-terminate");
+    expect(calls).toContain("hls-close");
+    await created.value.dispose();
+  });
+
+  it("WebRTC 停止失败时仍继续清理旧 RTMP/HLS", async () => {
+    const calls: string[] = [];
+    const created = DesktopApplication.create({
+      ...options(await reservePort(), calls),
+      lowLatency: {
+        media: {
+          dependencies: {
+            process: {
+              launch: () => ({ terminate: () => { calls.push("webrtc-terminate"); throw new Error("受控 WebRTC 停止失败"); } }),
+            },
+            paths: { listPaths: async () => [] },
+            player: { setTarget: () => undefined, clear: () => { calls.push("webrtc-player-clear"); } },
+          },
+          options: { httpPort: 18_890, webRtcUdpPort: 18_189, apiPort: 19_997, pathPrefix: "/live", mode: "whip-whep", publisherTimeoutMs: 5_000 },
+          startInput: {
+            interfaces: [{ name: "test-wifi", enabled: true, internal: false, kind: "wifi", ipv4: "192.168.1.8" }],
+            manualHost: "192.168.1.8",
+            executablePath: "D:/mediamtx.exe",
+          },
+        },
+      },
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const lowLatency = created.value.lowLatency();
+    expect(lowLatency).not.toBeNull();
+    if (lowLatency === null) return;
+
+    await created.value.start();
+    await lowLatency.start();
+    await expect(created.value.stop()).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE", value: { phase: "idle" } });
+    expect(calls).toContain("webrtc-terminate");
+    expect(calls).toContain("rtmp-close");
+    expect(calls).toContain("hls-close");
     await created.value.dispose();
   });
 

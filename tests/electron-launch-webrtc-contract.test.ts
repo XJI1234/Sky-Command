@@ -1,0 +1,22 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+const source = () => readFileSync(new URL("../src/production/electron-host/launch.ts", import.meta.url), "utf8");
+
+describe("Electron 主进程低延迟装配", () => {
+  it("使用独立 MediaMTX 端口和端口适配器，并保留旧启动链路", () => {
+    const text = source();
+    for (const fragment of ["createMediaMtxProcessPort", "createMediaPathPort", "createWhepPlaybackBridge", "const webrtcHttpPort = 8_890", "const webrtcUdpPort = 8_189", "const webrtcApiPort = 9_997", "lowLatency:"]) expect(text).toContain(fragment);
+    expect(text).toContain("executablePath");
+    expect(text).toContain("webrtc-player-ready");
+    expect(text).toContain("webrtc-player-fatal");
+    expect(text).toContain('await created.value.start()');
+  });
+
+  it("旧 FFmpeg 缺失只记录旧链路故障，不阻断 WebRTC 应用启动", () => {
+    const text = source();
+    expect(text).toContain("legacyMediaRequired: false");
+    expect(text).toContain('event: "FFMPEG_NOT_FOUND"');
+    expect(text).not.toContain('dialog.showErrorBox("Sky Command", "未找到可用的 FFmpeg');
+  });
+});

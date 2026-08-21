@@ -20,16 +20,35 @@ describe("桌面外壳 IPC", () => {
           snapshot: () => ({}),
           start: async (deviceId: string) => { calls.push(deviceId); return { ok: true }; },
         }),
+        lowLatency: () => ({
+          start: async () => { calls.push("webrtc-start"); return { ok: true }; },
+          stop: async () => ({ ok: true }),
+          refresh: async () => ({ ok: true }),
+          startStream: async () => ({ ok: true }),
+          stopStream: async () => ({ ok: true }),
+          selectPlayer: () => ({ ok: true }),
+          clearPlayer: () => ({ ok: true }),
+          snapshot: () => ({}),
+          dispose: async () => undefined,
+        }),
       },
     });
     const shell = DesktopShell.create({ applicationGateway: gateway, ...ports() }, { csp: "default-src 'self'" });
     await shell.start();
 
     await expect(shell.invoke("mission-start", { deviceId: "phone-1" })).resolves.toMatchObject({ ok: true, value: { ok: true, value: { ok: true } } });
+    await expect(shell.invoke("webrtc-start", undefined)).resolves.toMatchObject({ ok: true, value: { ok: true, value: { ok: true } } });
     await expect(shell.invoke("state-snapshot", undefined)).resolves.toMatchObject({ ok: true, value: { ok: true, value: { phase: "running" } } });
     await expect(shell.invoke("gateway-invoke", { method: "mission.start", input: { deviceId: "phone-1" } })).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
-    expect(calls).toEqual(["phone-1"]);
+    expect(calls).toEqual(["phone-1", "webrtc-start"]);
     expect(shell.snapshot().ipcMethods).toContain("mission-start");
+    expect(shell.snapshot().ipcMethods).toContain("webrtc-start");
+    expect(shell.snapshot().ipcMethods).toContain("webrtc-stop");
+    expect(shell.snapshot().ipcMethods).toContain("webrtc-refresh");
+    expect(shell.snapshot().ipcMethods).toContain("webrtc-stream-start");
+    expect(shell.snapshot().ipcMethods).toContain("webrtc-stream-stop");
+    expect(shell.snapshot().ipcMethods).toContain("webrtc-stream-select");
+    expect(shell.snapshot().ipcMethods).toContain("webrtc-stream-clear");
     expect(shell.snapshot().ipcMethods).not.toContain("gateway-invoke");
     await shell.dispose();
   });

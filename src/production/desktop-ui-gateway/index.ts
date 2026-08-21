@@ -1,9 +1,12 @@
+import type { LowLatencyMediaInstance } from "../low-latency-media/index.js";
+
 type WorkflowPort = Record<string, unknown>;
 
 export interface DesktopUiApplicationPort {
   readonly snapshot: () => unknown;
   readonly subscribe: (listener: (snapshot: unknown) => void) => () => void;
   readonly workflow: () => WorkflowPort;
+  readonly lowLatency?: () => LowLatencyMediaInstance | null;
 }
 
 export interface DesktopUiGatewayOptions {
@@ -102,6 +105,15 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
     /* c8 ignore next -- 应用装配契约保证 workflow 可读；异常仍映射为依赖失败。 */
     catch { return null; }
   };
+  const lowLatency = (): LowLatencyMediaInstance | null => {
+    if (typeof options.application.lowLatency !== "function") return null;
+    try { return options.application.lowLatency(); } catch { return null; }
+  };
+  const callLowLatency = async (operation: (instance: LowLatencyMediaInstance) => unknown): Promise<GatewayResult> => {
+    const instance = lowLatency();
+    if (instance === null) return failure("DEPENDENCY_FAILURE");
+    try { return success(await operation(instance)); } catch { return failure("DEPENDENCY_FAILURE"); }
+  };
   const call = async (method: string, args: readonly unknown[]): Promise<GatewayResult> => {
     const target = workflow();
     const operation = target === null ? null : read(target, method);
@@ -134,6 +146,19 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
       if (method === "stream.clear") return empty(input) ? call("clearVideo", []) : failure("INVALID_INPUT");
       const streams: Readonly<Record<string, string>> = freeze({ "stream.start": "startStream", "stream.stop": "stopStream", "stream.select": "selectVideo" });
       if (typeof method === "string" && streams[method] !== undefined) { const deviceId = one(input, "deviceId"); return deviceId === null ? failure("INVALID_INPUT") : call(streams[method]!, [deviceId]); }
+      if (method === "webrtc.start") return empty(input) ? callLowLatency((instance) => instance.start()) : failure("INVALID_INPUT");
+      if (method === "webrtc.stop") return empty(input) ? callLowLatency((instance) => instance.stop()) : failure("INVALID_INPUT");
+      if (method === "webrtc.refresh") return empty(input) ? callLowLatency((instance) => instance.refresh(Date.now())) : failure("INVALID_INPUT");
+      if (method === "webrtc.stream-clear") return empty(input) ? callLowLatency((instance) => instance.clearPlayer()) : failure("INVALID_INPUT");
+      const lowLatencyStreams: Readonly<Record<string, (instance: LowLatencyMediaInstance, deviceId: string) => unknown>> = freeze({
+        "webrtc.stream-start": (instance, deviceId) => instance.startStream(deviceId),
+        "webrtc.stream-stop": (instance, deviceId) => instance.stopStream(deviceId),
+        "webrtc.stream-select": (instance, deviceId) => instance.selectPlayer(deviceId),
+      });
+      if (typeof method === "string" && lowLatencyStreams[method] !== undefined) {
+        const deviceId = one(input, "deviceId");
+        return deviceId === null ? failure("INVALID_INPUT") : callLowLatency((instance) => lowLatencyStreams[method]!(instance, deviceId));
+      }
       const settings: Readonly<Record<string, string>> = freeze({ "settings.transmission.read": "readTransmissionSettings", "settings.camera.read": "readCameraSettings" });
       if (typeof method === "string" && settings[method] !== undefined) { const deviceId = one(input, "deviceId"); return deviceId === null ? failure("INVALID_INPUT") : call(settings[method]!, [deviceId]); }
       const writes: Readonly<Record<string, string>> = freeze({ "settings.transmission.write": "writeTransmissionSettings", "settings.camera.write": "writeCameraSettings" });

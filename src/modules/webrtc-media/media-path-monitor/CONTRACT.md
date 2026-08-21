@@ -8,6 +8,18 @@
 
 ## 对外接口
 
+```ts
+MediaPathMonitor.create(port) -> MediaPathMonitorInstance
+instance.start() -> StartResult
+instance.refresh() -> Promise<RefreshResult>
+instance.stop() -> StopResult
+instance.snapshot() -> PathMonitorSnapshot
+```
+
+注入端口只提供 `listPaths(): Promise<readonly string[]>`。本模块不创建定时器；组合根决定刷新频率。`refresh` 将当前路径集合与上一次集合比较，并按设备标识字典序返回变化。
+
+## 对外接口
+
 ```text
 MediaPathMonitor.create(port, options) -> MediaPathMonitorInstance
 instance.start(events) -> Result
@@ -15,9 +27,9 @@ instance.stop() -> Result
 instance.snapshot() -> PathMonitorSnapshot
 ```
 
-观察端口只接受注入的 HTTP/API 适配器。轮询或回调产生的路径必须经过严格解析：只允许 `/live/{encodedDeviceId}`，必须验证编码往返一致，拒绝路径穿越、空设备标识和未授权路径。
+观察端口只接受注入的 HTTP/API 适配器。轮询产生的路径必须经过严格解析：只允许 `/live/{encodedDeviceId}`，必须验证编码往返一致，拒绝路径穿越、空设备标识和未授权路径。
 
-同一设备重复发布必须产生稳定拒绝或幂等事实；旧监听代次的结果必须被忽略。一个设备的路径异常不得清空其他设备。
+同一设备在连续刷新中保持发布时不得重复产生事件；旧监听代次的结果必须被忽略。一个设备的路径异常不得清空其他设备。端口抛出的异常必须转为固定的 `LIST_FAILED` 诊断。
 
 ## 验收
 

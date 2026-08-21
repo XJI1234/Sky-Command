@@ -1,0 +1,25 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+const preload = () => readFileSync(new URL("../src/production/electron-host/preload.cjs", import.meta.url), "utf8");
+const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8");
+
+describe("Electron WHEP 播放链路", () => {
+  it("preload 只暴露低延迟播放器的固定事件桥", () => {
+    const source = preload();
+    for (const channel of ["webrtc-player-select", "webrtc-player-clear", "webrtc-player-ready", "webrtc-player-fatal"]) expect(source).toContain(channel);
+    expect(source).toContain("onWhepSelect");
+    expect(source).toContain("onWhepClear");
+    expect(source).toContain("whepReady");
+    expect(source).toContain("whepFatal");
+    expect(source).not.toContain("gateway-invoke");
+  });
+
+  it("渲染器通过 recvonly PeerConnection 完成 WHEP offer/answer，并只在首帧后回报", () => {
+    const source = renderer();
+    for (const fragment of ["RTCPeerConnection", "recvonly", "createOffer", "application/sdp", "setRemoteDescription", "ontrack", "loadeddata", "whepReady", "whepFatal"]) expect(source).toContain(fragment);
+    expect(source).toContain('bridge().invoke("stream-refresh")');
+    expect(source).toContain("whepPeer !== null");
+    for (const method of ["webrtc-start", "webrtc-stop", "webrtc-refresh", "webrtc-stream-start", "webrtc-stream-stop", "webrtc-stream-select"]) expect(source).toContain(method);
+  });
+});

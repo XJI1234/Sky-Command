@@ -27,6 +27,20 @@ describe("DesktopRuntime", () => {
     expect(calls).toEqual(["relay.start", "media.start", "relay.stop"]);
   });
 
+  it("keeps the relay running when legacy media is optional and startup fails", async () => {
+    const calls: string[] = [];
+    const runtime = DesktopRuntime.create({
+      relay: { start: async () => { calls.push("relay.start"); return { ok: true }; }, stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({}), subscribe: () => () => undefined },
+      media: { start: () => { calls.push("media.start"); return { ok: false }; }, stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({ phase: "failed" }), dispose: () => undefined },
+      live: { list: () => [], stop: async () => ({ ok: true }) }
+    }, { mediaStartInput: {}, mediaRequired: false });
+
+    await expect(runtime.start()).resolves.toMatchObject({ ok: true, value: { phase: "running", media: { phase: "failed" } } });
+    expect(calls).toEqual(["relay.start", "media.start"]);
+    await expect(runtime.stop()).resolves.toMatchObject({ ok: true, value: { phase: "idle" } });
+    expect(calls).toEqual(["relay.start", "media.start", "media.stop", "relay.stop"]);
+  });
+
   it("stops active live devices before media and relay services", async () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({

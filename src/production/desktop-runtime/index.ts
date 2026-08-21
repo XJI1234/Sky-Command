@@ -28,6 +28,7 @@ export interface DesktopRuntimeDependencies {
 
 export interface DesktopRuntimeOptions {
   readonly mediaStartInput: unknown;
+  readonly mediaRequired?: boolean;
 }
 
 export interface DesktopRuntimeServices {
@@ -75,6 +76,7 @@ const activeLiveDevice = (value: unknown): string | null => {
 };
 
 function create(dependencies: DesktopRuntimeDependencies, options: DesktopRuntimeOptions): DesktopRuntimeInstance {
+  const mediaRequired = options.mediaRequired !== false;
   let phase: DesktopRuntimePhase = "idle";
   let revision = 0;
   let operation: Operation = null;
@@ -121,7 +123,7 @@ function create(dependencies: DesktopRuntimeDependencies, options: DesktopRuntim
         return result(false, "RELAY_START_FAILED");
       }
       const mediaStarted = safely(() => dependencies.media.start(options.mediaStartInput));
-      if (!successful(mediaStarted)) {
+      if (!successful(mediaStarted) && mediaRequired) {
         await safelyAsync(dependencies.relay.stop);
         operation = null;
         transition("idle");

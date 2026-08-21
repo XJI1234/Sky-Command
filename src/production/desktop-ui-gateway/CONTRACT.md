@@ -19,6 +19,8 @@ gateway.subscribe(listener) -> unsubscribe
 gateway.dispose() -> void
 ```
 
+`application` 至少提供 `snapshot()`、`subscribe(listener)` 和 `workflow()`；低延迟旁路可额外提供 `lowLatency() -> LowLatencyMediaInstance | null`。未提供或返回 `null` 时，所有 `webrtc.*` 方法均返回 `DEPENDENCY_FAILURE`。
+
 所有入口均接收 `unknown`，网关先验证精确输入形状再调用下游；不允许“通用方法名 + 任意对象”的透传。
 
 ## 3. 白名单
@@ -30,6 +32,7 @@ gateway.dispose() -> void
 | 分配 | `assignment.assign`、`assignment.clear` |
 | 任务 | `mission.stage`、`mission.upload`、`mission.start`、`mission.pause`、`mission.resume`、`mission.stop` |
 | 图传 | `stream.start`、`stream.stop`、`stream.refresh`、`stream.select`、`stream.clear` |
+| 低延迟图传 | `webrtc.start`、`webrtc.stop`、`webrtc.stream-start`、`webrtc.stream-stop`、`webrtc.stream-select`、`webrtc.stream-clear`、`webrtc.refresh` |
 | 设置 | `settings.transmission.read`、`settings.transmission.write`、`settings.camera.read`、`settings.camera.write` |
 | 飞控 | `flight.request`、`flight.confirm`、`flight.cancel` |
 | 受控视频 | `video.playback` |
@@ -49,6 +52,8 @@ gateway.dispose() -> void
 `network.hint` 返回当前可填写的局域网 Relay 地址列表 `{ hints }`。地址必须是 `ws://<IPv4>:<port>/relay`。未提供探测函数时返回空列表。探测抛错为 `DEPENDENCY_FAILURE`，不回显内部异常。
 
 `video.playback` 是唯一能返回播放地址的方法。仅当指定设备在工作流媒体快照中为 `ready` 且地址为无凭据的 `http(s)://127.0.0.1/...` 或 `http(s)://localhost/...` 时，返回 `{ deviceId, url }`。未就绪、未知设备或任何非本机地址均返回稳定业务失败，不泄露候选地址。
+
+低延迟方法只调用可选 `lowLatency()` 门面：`webrtc.start`、`webrtc.stop`、`webrtc.refresh` 和 `webrtc.stream-clear` 不接受输入；`webrtc.stream-start`、`webrtc.stream-stop`、`webrtc.stream-select` 接收唯一 `{ deviceId }`。低延迟播放地址由 `webrtc.stream-select` 触发播放器适配器，首帧事实由该门面返回；不能把手机命令成功当作首帧成功。
 
 ## 6. 生命周期
 

@@ -10,12 +10,17 @@
 
 ```text
 WhepPlayback.create(port) -> WhepPlaybackInstance
-instance.select({ deviceId, target }, onFatalError) -> Result
+instance.select({ deviceId, target }) -> SelectResult
 instance.clear() -> Result
 instance.snapshot() -> PlaybackSnapshot
+
+port.setTarget({ deviceId, url }, onReady, onFatalError) -> Unit
+port.clear() -> Unit
 ```
 
-`target` 必须为 `{ kind: "whep", url }`。适配器必须负责 HTTP offer/answer、ICE、PeerConnection 和资源释放，但这些细节不能进入本模块公开状态。每次 select/clear 产生新的代次，旧代次故障不得污染新目标。
+`target` 必须为 `{ kind: "whep", url }`，且 URL 只能是本机回环 HTTP(S) WHEP 地址。适配器必须负责 HTTP offer/answer、ICE、PeerConnection 和资源释放，但这些细节不能进入本模块公开状态。每次 select/clear 产生新的代次，旧代次首帧和故障不得污染新目标。
+
+选择后状态为 `connecting`；适配器调用当前代次的 `onReady` 后进入 `playing`。适配器同步抛错或当前代次调用 `onFatalError` 后进入 `failed`，诊断固定为：`WHEP 播放器无法建立连接。请检查桌面媒体服务。`。
 
 ## 验收
 

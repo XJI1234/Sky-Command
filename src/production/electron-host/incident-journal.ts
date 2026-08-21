@@ -22,7 +22,7 @@ export interface IncidentJournal {
 }
 
 const MAX_DETAIL = 512;
-const quietMethods = new Set(["state.snapshot", "network.hint", "stream.refresh", "diagnostics.record"]);
+const quietMethods = new Set(["state.snapshot", "network.hint", "stream.refresh", "webrtc.refresh", "diagnostics.record"]);
 
 function defaultDirectory(): string {
   const localAppData = process.env.LOCALAPPDATA;
@@ -82,7 +82,7 @@ function create(directory = defaultDirectory()): IncidentJournal {
 }
 
 function linkForMethod(method: string): IncidentLink {
-  if (method.startsWith("stream.") || method.startsWith("video.")) return "uplink";
+  if (method.startsWith("stream.") || method.startsWith("video.") || method.startsWith("webrtc.")) return "uplink";
   if (method.startsWith("network.")) return "phone-pc";
   return "downlink";
 }
@@ -132,7 +132,7 @@ function invokeDetail(method: string, input: unknown, result: GatewayResult): st
 
 export function wrapGateway(gateway: DesktopUiGatewayInstance, journal: IncidentJournal): DesktopUiGatewayInstance {
   return Object.freeze({
-    invoke: async (method, input) => {
+    invoke: async (method: unknown, input: unknown) => {
       if (method === "diagnostics.record") {
         const source = asRecord(input);
         const action = text(source?.action);
