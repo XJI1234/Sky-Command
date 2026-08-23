@@ -38,4 +38,18 @@ describe("RelayOperationsAdapter WHIP gateway", () => {
     expect(JSON.stringify(adapter.snapshot())).not.toContain("transport-secret");
     expect(object({})).toBeDefined();
   });
+
+  it("forwards bounded phone rejection details to the WHIP command result", async () => {
+    const adapter = RelayOperationsAdapter.create({ relay: {
+      latestTelemetry: () => null,
+      devices: () => [],
+      sendMission: async () => ({ status: "rejected" }),
+      sendCommand: async () => ({ status: "rejected", detail: "Another video transport is active" }),
+    } });
+
+    await expect(adapter.whipStreamGateway().sendCommand("phone-1", { name: "live-stream-webrtc.start", fields: { whipUrl: "http://192.168.1.20:8889/live/phone-1/whip" } })).resolves.toEqual({
+      status: "rejected",
+      detail: "Another video transport is active",
+    });
+  });
 });

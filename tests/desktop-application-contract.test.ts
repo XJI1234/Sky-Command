@@ -377,7 +377,7 @@ describe("DesktopApplication", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     await expect(created.value.start()).resolves.toMatchObject({ ok: true });
-    const socket = new WebSocket(`ws://127.0.0.1:${relayPort}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${relayPort}/relay`);
     try {
       await once(socket, "open");
       expect(rtmpPorts[0]).toBe(19_351);
@@ -394,7 +394,7 @@ describe("DesktopApplication", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     await expect(created.value.start()).resolves.toMatchObject({ ok: true });
-    const socket = new WebSocket(`ws://127.0.0.1:${relayPort}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${relayPort}/relay`);
     try {
       await once(socket, "open");
       const hello = RelayFrameCodec.encode({ type: "hello", deviceId: "settings-device", protocolVersion: "1" });

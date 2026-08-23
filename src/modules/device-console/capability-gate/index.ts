@@ -50,7 +50,7 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
   if (input.relayConnected !== true) return decision(operation, false, "RELAY_OFFLINE");
   if (input.sdkRegistered !== true) return decision(operation, false, "SDK_NOT_READY");
   if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
-  if (operation === "pairing") return input.flightControllerConnected === true || input.aircraftConnected === true ? decision(operation, false, "PAIRING_NOT_NEEDED") : decision(operation, true, null);
+  if (operation === "pairing") return input.aircraftConnected === true ? decision(operation, false, "PAIRING_NOT_NEEDED") : decision(operation, true, null);
   if (input.flightControllerConnected !== true || input.aircraftConnected !== true) return decision(operation, false, "AIRCRAFT_NOT_CONNECTED");
   if (operation === "live-stream") return capabilities === null || capabilities.liveVideo === undefined ? decision(operation, false, "CAPABILITY_UNKNOWN") : capabilities.liveVideo ? decision(operation, true, null) : decision(operation, false, "LIVE_VIDEO_UNSUPPORTED");
   if (operation === "waypoint-mission") {

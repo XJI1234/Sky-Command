@@ -116,7 +116,7 @@ describe("desktop-settings settings-store public contract", () => {
     const storage = new MemoryStorage();
     storage.bytes = encode(JSON.stringify({
       version: 1,
-      network: { listenPort: 19501, manualHost: "[fd00::1]" },
+      network: { listenPort: 19501, manualHost: "10.0.0.8" },
       map: { basemap: "tianditu-image", credential: " key-2 " },
       unknown: "ignored"
     }));
@@ -126,7 +126,7 @@ describe("desktop-settings settings-store public contract", () => {
       status: "loaded",
       snapshot: {
         version: 1,
-        network: { listenPort: 19501, relayPort: 8080, manualHost: "fd00::1" },
+        network: { listenPort: 19501, relayPort: 8080, manualHost: "10.0.0.8" },
         map: { basemap: "tianditu-image", credential: "key-2" }
       }
     });

@@ -76,7 +76,8 @@ instance.dispose() -> void
 
 | 桌面动作 | 线协议命令 | 唯一允许字段 |
 | --- | --- | --- |
-| 配对开始/停止/查询 | `pairing.start` / `pairing.stop` / `pairing.status` | `{}` |
+| 配对查询 | `pairing.status` | `{}` |
+| 配对开始/停止 | 不下发 | 桌面适配器本地拒绝；对频只在手机上操作 |
 | 一次性遥测刷新 | `telemetry.read` | `{}` |
 | 航线上传/启动/暂停/继续/停止 | `wayline.*` | `{ confirm: true }` |
 | 图传开始 | `live-stream.start` | `{ rtmpUrl: string }` |
@@ -101,7 +102,7 @@ instance.dispose() -> void
 - 设置读写成功必须携带可解码的 `command-result.result` 完整快照；缺失或畸形结果是 `invalid-result`，不得乐观更新。
 - `pairing.status` 仅在命令 `succeeded` 时携带根契约 §7.4 的结构化 `result`（`pairingState`、`aircraftConnected`、`flightControllerConnected`、`aircraftModel`、`motorsOn`、`sdkRegistered`）。失败、超时或 `pairing.start` / `pairing.stop` 不得附带该 `result`。实时配对显示仍以入站遥测的 `pairingState` 为准，命令成功不等于已配对。
 
-所有命令结果统一保留为业务模块已有的 `succeeded`、`rejected`、`timed-out`、`disconnected` 或 `transport-failed` 语义。不得泄露连接 ID、会话 ID、字节、路径、令牌、DJI 异常或原始协议详情。
+所有命令结果统一保留为业务模块已有的 `succeeded`、`rejected`、`timed-out`、`disconnected` 或 `transport-failed` 语义。`streamGateway` 与 `whipStreamGateway` 可以把手机 `command-result.detail` 原样转成有界字符串（1..256 码点、无控制字符），供图传调度映射封闭原因码；不得泄露连接 ID、会话 ID、字节、路径、令牌、DJI 异常。
 
 ## 会话、断连与迟到事件
 

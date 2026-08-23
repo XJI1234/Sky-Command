@@ -40,7 +40,7 @@ StreamProtocolConfig.createRtmpTarget(input: unknown) -> StreamTargetResult
 ## 构造与校验规则
 
 1. `deviceId` 为 1..128 个 Unicode 码点，去空白后非空，且不含控制字符。其路径片段必须使用 `encodeURIComponent(deviceId)`；不得直接拼接原始标识。
-2. `host` 为 1..253 个码点，不含空白、控制字符、`/`、`?`、`#`、`@` 或 `:`；IPv6 不是当前媒体端点公开格式，因此必须拒绝，不能猜测方括号规则。
+2. `host` 为 1..253 个码点，不含空白、控制字符、`/`、`?`、`#`、`@` 或 `:`，也不得为回环主机（`localhost`、`127.0.0.0/8`）；IPv6 不是当前媒体端点公开格式，因此必须拒绝，不能猜测方括号规则。
 3. `port` 必须是 1024..65535 的安全整数。
 4. 唯一目标格式为 `rtmp://{host}:{port}/live/{encodedDeviceId}`，没有用户信息、查询或 fragment。最终 URL 必须再次经本模块 RTMP 语法检查后才能成功返回。
 5. RTMP URL 总长度不能超过手机端已实现限制 2048 个 Unicode 码点；含控制字符、用户信息、空主机、无路径、错误 scheme、fragment 或无效端口的目标必须拒绝。

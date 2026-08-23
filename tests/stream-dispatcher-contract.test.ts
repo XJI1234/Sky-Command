@@ -83,6 +83,8 @@ describe("StreamDispatcher", () => {
   it("maps command rejection, dependency faults and invalid input without throwing", async () => {
     const rejected = fixture({ send: async () => ({ status: "rejected" }) });
     await expect(rejected.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "RELAY_REJECTED", state: { phase: "failed" } });
+    const occupied = fixture({ send: async () => ({ status: "rejected", detail: "Another video transport is active" }) });
+    await expect(occupied.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "RELAY_REJECTED", reason: "ANOTHER_VIDEO_TRANSPORT_ACTIVE" });
     const failed = fixture({ send: async () => { throw new Error("transport"); } });
     await expect(failed.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     await expect(failed.dispatcher.start(" ")).resolves.toMatchObject({ ok: false, code: "INVALID_INPUT", state: null });

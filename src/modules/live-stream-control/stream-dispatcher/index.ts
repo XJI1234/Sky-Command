@@ -36,6 +36,7 @@ const attemptAsync = async <T>(action: () => Promise<T>): Promise<Readonly<{ rea
 };
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；空快照由公开查询契约覆盖。
 const empty = (deviceId: string): StreamDispatchSnapshot => freeze({ deviceId, phase: "idle", lastOperation: null, failureCode: null, reason: null });
+const relayRejectionReason = (value: unknown): string | null => value === "Another video transport is active" ? "ANOTHER_VIDEO_TRANSPORT_ACTIVE" : null;
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；断线迟到结果由公开契约覆盖。
 const isDisconnected = (lane: Lane): boolean => lane.phase === "disconnected";
 
@@ -66,18 +67,24 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     if (!allowed.ok) return freeze({ ok: false as const, operation, code: allowed.code, state: snapshot(deviceId, lane), ...(allowed.reason === undefined ? {} : { reason: allowed.reason }) });
     return null;
   };
-  const result = (deviceId: string, lane: Lane, operation: StreamOperation, ok: boolean, code: StreamDispatchCode | null): StreamDispatchResult => {
-    lane.busy = false; lane.lastOperation = operation; lane.failureCode = code; lane.reason = null; lane.phase = ok ? operation === "start" ? "streaming" : "idle" : "failed";
+  const result = (deviceId: string, lane: Lane, operation: StreamOperation, ok: boolean, code: StreamDispatchCode | null, reason: string | null = null): StreamDispatchResult => {
+    lane.busy = false; lane.lastOperation = operation; lane.failureCode = code; lane.reason = reason; lane.phase = ok ? operation === "start" ? "streaming" : "idle" : "failed";
     const state = snapshot(deviceId, lane); publish();
-    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state });
+    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state, ...(reason === null ? {} : { reason }) });
   };
   const send = async (deviceId: string, lane: Lane, operation: StreamOperation, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>): Promise<StreamDispatchResult> => {
     lane.busy = true; lane.phase = operation === "start" ? "starting" : "stopping"; publish();
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, request));
     if (isDisconnected(lane)) return freeze({ ok: false as const, operation, code: "DISCONNECTED" as const, state: snapshot(deviceId, lane) });
     if (!sent.ok) return result(deviceId, lane, operation, false, "DEPENDENCY_FAILURE");
-    const status = attempt(() => record(sent.value) ? sent.value.status : null);
-    return status.ok && status.value === "succeeded" ? result(deviceId, lane, operation, true, null) : result(deviceId, lane, operation, false, "RELAY_REJECTED");
+    const payload = attempt(() => {
+      if (!record(sent.value)) return null;
+      return freeze({ status: sent.value.status, detail: sent.value.detail });
+    });
+    if (!payload.ok || payload.value === null) return result(deviceId, lane, operation, false, "RELAY_REJECTED");
+    return payload.value.status === "succeeded"
+      ? result(deviceId, lane, operation, true, null)
+      : result(deviceId, lane, operation, false, "RELAY_REJECTED", relayRejectionReason(payload.value.detail));
   };
   return freeze({
     check,

@@ -32,6 +32,7 @@ export interface WebRtcMediaOptions {
 export interface MediaStreamSnapshot {
   readonly deviceId: string;
   readonly phase: "awaiting-publisher" | "publisher-ready" | "failed";
+  readonly lastEvent: "publisher-connected" | "publisher-disconnected" | "first-frame-rendered" | "process-exited" | "stop" | null;
   readonly diagnostic: string | null;
 }
 
@@ -186,9 +187,22 @@ function create(dependencies: WebRtcMediaDependencies, options: WebRtcMediaOptio
 
   const process: MediaMtxProcessInstance = MediaMtxProcess.create(dependencies.process);
   const paths: MediaPathMonitorInstance = MediaPathMonitor.create(dependencies.paths);
-  const player: WhepPlaybackInstance = WhepPlayback.create(dependencies.player);
   const clock = dependencies.clock ?? (() => Date.now());
   const health = new Map<string, WebRtcHealthInstance>();
+  const player: WhepPlaybackInstance = WhepPlayback.create(freeze({
+    setTarget: (input, onReady, onFatalError) => {
+      dependencies.player.setTarget(input, () => {
+        try {
+          const now = clock();
+          if (typeof now === "number" && Number.isFinite(now) && now >= 0) {
+            health.get(input.deviceId)?.observe(input.deviceId, "first-frame-rendered", now);
+          }
+        } catch { /* first-frame observation must not break playback */ }
+        onReady();
+      }, onFatalError);
+    },
+    clear: () => { dependencies.player.clear(); }
+  }));
   let phase: MediaSnapshot["phase"] = "idle";
   let revision = 0;
   let diagnostic: string | null = null;
@@ -203,7 +217,7 @@ function create(dependencies: WebRtcMediaDependencies, options: WebRtcMediaOptio
     revision,
     streams: freeze([...health.entries()].map(([deviceId, item]) => {
       const snapshot = item.snapshot(deviceId);
-      return freeze({ deviceId, phase: snapshot?.state ?? "failed", diagnostic: snapshot?.diagnostic ?? null });
+      return freeze({ deviceId, phase: snapshot?.state ?? "failed", lastEvent: snapshot?.lastEvent ?? null, diagnostic: snapshot?.diagnostic ?? null });
     }).sort((left, right) => left.deviceId.localeCompare(right.deviceId))),
     player: player.snapshot(),
     diagnostic

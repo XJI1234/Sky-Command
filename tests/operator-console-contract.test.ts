@@ -253,6 +253,18 @@ describe("操作台工作区", () => {
       reason: "飞机已在空中，禁止启动航线",
     });
 
+    const unknownFlight = flight({ connection: { ...device().connection, flightState: "unknown" } });
+    expect(OperatorConsole.evaluate("mission-start", unknownFlight)).toEqual({
+      ok: false,
+      reason: "尚未确认飞机是否在地面，禁止启动航线",
+    });
+
+    const unpaired = flight({ connection: { ...device().connection, pairingState: "IDLE" } });
+    expect(OperatorConsole.evaluate("mission-start", unpaired)).toEqual({
+      ok: false,
+      reason: "飞机尚未完成对频，禁止启动航线",
+    });
+
     const noFc = flight({ connection: { ...device().connection, flightController: "disconnected" } });
     expect(OperatorConsole.evaluate("mission-start", noFc)).toEqual({
       ok: false,
@@ -282,6 +294,43 @@ describe("操作台工作区", () => {
     expect(ready.streamLabel).toBe("已获取 HLS，可附着播放器");
   });
 
+  it("低延迟图传阶段优先于 HLS 标签，并允许飞行页启动低延迟图传", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        whipStream: { phase: "streaming" },
+        video: { phase: "unavailable", selected: false },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(view.streamLabel).toBe("低延迟图传已启动，等待画面");
+    expect(OperatorConsole.evaluate("webrtc-stream-start", view)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("webrtc-stream-stop", view)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("stream-start", view)).toEqual({
+      ok: false,
+      reason: "另一路图传正在使用，请先停止",
+    });
+    expect(OperatorConsole.evaluate("stream-stop", view)).toEqual({
+      ok: false,
+      reason: "另一路图传正在使用，请先停止",
+    });
+
+    const hlsView = OperatorConsole.project({
+      snapshot: snapshot([device({ stream: { phase: "streaming" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("webrtc-stream-start", hlsView)).toEqual({
+      ok: false,
+      reason: "另一路图传正在使用，请先停止",
+    });
+    expect(OperatorConsole.evaluate("webrtc-stream-stop", hlsView)).toEqual({
+      ok: false,
+      reason: "另一路图传正在使用，请先停止",
+    });
+    expect(OperatorConsole.evaluate("stream-start", hlsView)).toEqual({ ok: true });
+  });
+
   it("对频由手机端完成，桌面只说明事实，不假装已经发出命令", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device()]),
@@ -296,5 +345,27 @@ describe("操作台工作区", () => {
       ok: false,
       reason: "请到手机上开始或停止对频。",
     });
+  });
+
+  it("起飞按钮必须与真实放行一致，电量或飞行状态未确认时不能点", () => {
+    const flight = (overrides: Record<string, unknown> = {}) => OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, ...overrides } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("flight-takeoff", flight())).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-takeoff", flight({ batteryPercent: null }))).toEqual({
+      ok: false,
+      reason: "尚未取得所选飞机的电池遥测",
+    });
+    expect(OperatorConsole.evaluate("flight-takeoff", flight({ flightState: "unknown" }))).toEqual({
+      ok: false,
+      reason: "尚未确认飞机是否在地面，不能起飞",
+    });
+    expect(OperatorConsole.evaluate("flight-takeoff", flight({ flightState: "flying" }))).toEqual({
+      ok: false,
+      reason: "飞机已在空中，不能起飞",
+    });
+    expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "flying" }))).toEqual({ ok: true });
   });
 });

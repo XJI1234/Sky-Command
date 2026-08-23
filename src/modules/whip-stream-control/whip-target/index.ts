@@ -20,11 +20,16 @@ function validDeviceId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 }
 
+function loopbackHost(value: string): boolean {
+  return value.toLowerCase() === "localhost" || /^127(?:\.\d{1,3}){3}$/u.test(value);
+}
+
 function validHost(value: unknown): value is string {
   return typeof value === "string"
     && Array.from(value).length >= 1
     && Array.from(value).length <= 253
-    && !/[\s\p{Cc}/?#@:]/u.test(value);
+    && !/[\s\p{Cc}/?#@:]/u.test(value)
+    && !loopbackHost(value);
 }
 
 function validPort(value: unknown): value is number {

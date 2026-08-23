@@ -27,7 +27,7 @@ describe("whip-target 契约", () => {
   it("覆盖设备标识和端点边界", () => {
     expect(WhipTarget.create({ deviceId: "x".repeat(128), endpoint: { host: "a".repeat(253), port: 65_535 } })).toMatchObject({ ok: true });
     expect(WhipTarget.create({ deviceId: "x".repeat(129), endpoint: { host: "computer", port: 18_889 } })).toEqual({ ok: false, code: "INVALID_DEVICE_ID" });
-    for (const host of ["", "computer name", "computer:18889", "computer?x=1", "computer#x", "user@computer"]) {
+    for (const host of ["", "computer name", "computer:18889", "computer?x=1", "computer#x", "user@computer", "127.0.0.1", "localhost", "LOCALHOST"]) {
       expect(WhipTarget.create({ deviceId: "device-1", endpoint: { host, port: 18_889 } })).toEqual({ ok: false, code: "INVALID_ENDPOINT_HOST" });
     }
     for (const port of [1023, 65_536, 18_889.5, Number.NaN, "18889"]) {

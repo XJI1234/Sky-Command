@@ -42,8 +42,31 @@ const el = (id: string): HTMLElement => {
 
 const show = (message: string): void => { el("status").textContent = message; };
 
+const operatorNotice = (value: unknown): string => {
+  const inner = unwrap(value);
+  const codeOf = (source: unknown): string | null => typeof read(source, "code") === "string" ? read(source, "code") as string : null;
+  const reasonOf = (source: unknown): string | null => typeof read(source, "reason") === "string" ? read(source, "reason") as string : null;
+  const reason = reasonOf(inner) ?? reasonOf(value);
+  const code = codeOf(inner) ?? codeOf(value);
+  if (reason === "ANOTHER_VIDEO_TRANSPORT_ACTIVE") return "另一路图传正在使用，请先停止";
+  if (reason === "VIDEO_TRANSPORT_FAILED") return "图传未能完成";
+  if (reason === "VIDEO_TRANSPORT_UNAVAILABLE") return "图传当前不可用";
+  if (code === "RELAY_REJECTED") return "手机拒绝了该命令";
+  if (code === "WEBRTC_MEDIA_UNAVAILABLE") return "请先启动低延迟服务";
+  if (code === "TARGET_INVALID") return "低延迟地址无效";
+  if (code === "CAPABILITY_BLOCKED") return "当前飞机不支持图传";
+  if (code === "OPERATION_IN_PROGRESS") return "上一条图传命令尚未完成";
+  if (code === "VIDEO_NOT_READY") return "画面尚未就绪";
+  if (code === "DISCONNECTED") return "手机已离线";
+  if (code === "DEPENDENCY_FAILURE") return "无法完成该操作";
+  if (read(inner, "ok") === true) return "已完成";
+  if (read(value, "ok") === true && read(inner, "ok") !== false) return "已完成";
+  return code === null ? "已完成" : "无法完成该操作";
+};
+
 let hlsPlayer: Hls | null = null;
 let attachedUrl: string | null = null;
+let hlsBlocked = false;
 let whepPeer: RTCPeerConnection | null = null;
 let whepGeneration = 0;
 
@@ -68,8 +91,24 @@ const attachVideo = (url: string): void => {
   attachedUrl = url;
   const play = (): void => { void video.play().catch(() => undefined); };
   if (Hls.isSupported()) {
-    hlsPlayer = new Hls({ enableWorker: true, lowLatencyMode: true });
+    hlsPlayer = new Hls({
+      enableWorker: true,
+      lowLatencyMode: true,
+      liveSyncDurationCount: 1,
+      liveMaxLatencyDurationCount: 4,
+      maxLiveSyncPlaybackRate: 1.2,
+      liveDurationInfinity: true,
+      maxBufferLength: 4,
+      maxMaxBufferLength: 8,
+      backBufferLength: 0,
+    });
     hlsPlayer.on(Hls.Events.MANIFEST_PARSED, play);
+    hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
+      if (data?.fatal !== true) return;
+      hlsBlocked = true;
+      show("经典图传画面中断，请停止后重试");
+      detachVideo();
+    });
     hlsPlayer.loadSource(url);
     hlsPlayer.attachMedia(video);
     return;
@@ -195,6 +234,8 @@ const playbackUrl = (value: unknown): string | null => {
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
   if (whepPeer !== null) return;
+  if (!view.playbackReady) hlsBlocked = false;
+  if (hlsBlocked) return;
   if (!view.playbackReady) return;
   const deviceId = view.playingVideoDeviceId ?? view.streamDeviceId;
   if (deviceId === null) return;
@@ -206,6 +247,9 @@ async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>):
 const connectionLabel = (connection: unknown, key: string, ok: string, wait: string): string => {
   const value = read(connection, key);
   if (value === "ready" || value === "connected" || value === "online") return ok;
+  if ((key === "remoteController" || key === "aircraft") && read(connection, "sdk") !== "ready") {
+    return "等待手机就绪";
+  }
   return wait;
 };
 
@@ -230,7 +274,8 @@ const extraFacts = (connection: unknown): string => {
   const parts = [typeof battery === "number" ? `电量 ${battery}%` : "电量尚未取得"];
   const flightState = read(connection, "flightState");
   if (flightState === "flying") parts.push("飞机在空中");
-  if (flightState === "grounded") parts.push("飞机在地面");
+  else if (flightState === "grounded") parts.push("飞机在地面");
+  else parts.push("飞行状态尚未确认");
   const pose = read(connection, "pose");
   const latitude = read(pose, "latitude");
   const longitude = read(pose, "longitude");
@@ -264,12 +309,12 @@ async function run(action: string, invokeName: string, input: unknown): Promise<
   const view = await projectView();
   const decision = OperatorConsole.evaluate(action, view);
   if (!decision.ok) { blocked(action, decision.reason ?? "无法执行"); return; }
-  show(JSON.stringify(unwrap(await bridge().invoke(invokeName, input))));
+  show(operatorNotice(await bridge().invoke(invokeName, input)));
   await render();
 }
 
 async function runWebRtcService(invokeName: string): Promise<void> {
-  show(JSON.stringify(unwrap(await bridge().invoke(invokeName, undefined))));
+  show(operatorNotice(await bridge().invoke(invokeName, undefined)));
   await render();
 }
 

@@ -175,14 +175,15 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       relay: operations.streamGateway(),
       capabilityGate: DeviceConsole.CapabilityGate,
     });
+    let whipStreamControl: ReturnType<typeof WhipStreamControl.create> | null = null;
     const lowLatency = options.lowLatency === undefined ? null : (() => {
       const media = WebRtcMedia.create(options.lowLatency.media.dependencies, options.lowLatency.media.options);
-      const control = WhipStreamControl.create({
+      whipStreamControl = WhipStreamControl.create({
         media,
         relay: operations.whipStreamGateway(),
         capabilityGate: DeviceConsole.CapabilityGate,
       });
-      return LowLatencyMedia.create({ media, control, startInput: options.lowLatency.media.startInput });
+      return LowLatencyMedia.create({ media, control: whipStreamControl, startInput: options.lowLatency.media.startInput });
     })();
     const flightControl = FlightControl.create({
       dispatcher: FlightCommandDispatcher.create({
@@ -213,6 +214,7 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       flightControl,
       deviceSettings,
       now: options.now,
+      ...(whipStreamControl === null ? {} : { whipStreamControl }),
     } as never);
     return freeze({ ok: true as const, value: instance({ runtime, workflow, operations, routeLibrary: routeCreated.value, missionControl, flightControl, lowLatency }) });
   } catch {

@@ -23,7 +23,7 @@ instance.snapshot() -> LowLatencySnapshot
 instance.dispose() -> Promise<void>
 ```
 
-`start()` 只启动 `WebRtcMedia`，不自动给任何手机发命令。`stop()` 固定先停止所有 `starting`、`streaming`、`stopping` 的 WHIP 设备，再停止 `WebRtcMedia`；某个设备失败不能跳过其他设备或 MediaMTX 清理。`refresh` 只委托 `WebRtcMedia.evaluate`。
+`start()` 只启动 `WebRtcMedia`，不自动给任何手机发命令。`stop()` 固定先停止所有 `starting`、`streaming`、`stopping` 的 WHIP 设备，再停止 `WebRtcMedia`；某个设备失败不能跳过其他设备或 MediaMTX 清理。`refresh` 先委托 `WebRtcMedia.evaluate`；若评估失败，先停止所有仍在 `starting`/`streaming`/`stopping` 的 WHIP 设备再返回失败。若评估成功且某设备媒体流已是 `failed`、或 WHEP 播放器已是 `failed`，再对该设备调用 `WhipStreamControl.stop`。它不在 15 秒发布超时之前停止仍在连接的发布器。
 
 快照只包含低延迟媒体快照和按设备排序的 WHIP 控制快照，不包含 WHIP/WHEP 地址、端口、进程路径、异常或凭据。处置幂等，处置后不再启动或下发命令。
 

@@ -47,14 +47,10 @@ describe("desktop-settings network-settings public contract", () => {
   });
 
   it.each([
-    ["loopback IPv4", "127.0.0.1", "127.0.0.1"],
     ["10/8 IPv4", "10.0.0.1", "10.0.0.1"],
     ["172.16 lower boundary", "172.16.0.1", "172.16.0.1"],
     ["172.16/12 IPv4", "172.31.255.254", "172.31.255.254"],
-    ["192.168/16 IPv4", "192.168.1.5", "192.168.1.5"],
-    ["IPv6 loopback", "[0:0:0:0:0:0:0:1]", "::1"],
-    ["IPv6 unique local", "FD00:0:0:0000:0:0:0:ABCD", "fd00::abcd"],
-    ["IPv6 link local", "FE80:0:0:0:0:0:0:2", "fe80::2"]
+    ["192.168/16 IPv4", "192.168.1.5", "192.168.1.5"]
   ])("accepts and canonicalizes %s", (_, manualHost, expected) => {
     expect(NetworkSettings.create({ listenPort: 19500, manualHost })).toMatchObject({
       ok: true,
@@ -65,13 +61,17 @@ describe("desktop-settings network-settings public contract", () => {
   it.each([
     ["privileged port", { listenPort: 80, manualHost: null }, "listenPort", "out-of-range"],
     ["fractional port", { listenPort: 1024.5, manualHost: null }, "listenPort", "not-safe-integer"],
+    ["loopback IPv4", { listenPort: 19500, manualHost: "127.0.0.1" }, "manualHost", "not-local"],
+    ["IPv6 loopback", { listenPort: 19500, manualHost: "::1" }, "manualHost", "ipv6-unsupported"],
+    ["IPv6 unique local", { listenPort: 19500, manualHost: "FD00:0:0:0000:0:0:0:ABCD" }, "manualHost", "ipv6-unsupported"],
+    ["IPv6 link local", { listenPort: 19500, manualHost: "FE80:0:0:0:0:0:0:2" }, "manualHost", "ipv6-unsupported"],
     ["public IPv4", { listenPort: 19500, manualHost: "8.8.8.8" }, "manualHost", "not-local"],
     ["hostname", { listenPort: 19500, manualHost: "relay.local" }, "manualHost", "invalid-ip"],
-    ["address with port", { listenPort: 19500, manualHost: "192.168.1.2:19500" }, "manualHost", "invalid-ip"],
+    ["address with port", { listenPort: 19500, manualHost: "192.168.1.2:19500" }, "manualHost", "ipv6-unsupported"],
     ["CIDR", { listenPort: 19500, manualHost: "192.168.1.2/24" }, "manualHost", "invalid-ip"],
     ["whitespace", { listenPort: 19500, manualHost: " 192.168.1.2" }, "manualHost", "unsafe-text"],
-    ["IPv4-mapped IPv6", { listenPort: 19500, manualHost: "::ffff:192.168.1.2" }, "manualHost", "invalid-ip"],
-    ["public IPv6", { listenPort: 19500, manualHost: "2001:4860:4860::8888" }, "manualHost", "not-local"]
+    ["IPv4-mapped IPv6", { listenPort: 19500, manualHost: "::ffff:192.168.1.2" }, "manualHost", "ipv6-unsupported"],
+    ["public IPv6", { listenPort: 19500, manualHost: "2001:4860:4860::8888" }, "manualHost", "ipv6-unsupported"]
   ])("rejects %s without echoing the unsafe input", (_, input, field, reason) => {
     const result = NetworkSettings.create(input);
 

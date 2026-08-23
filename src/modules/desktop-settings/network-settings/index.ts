@@ -64,62 +64,9 @@ function readIpv4(value: string): string | null {
   const first = octets[0]!;
   const second = octets[1]!;
   const isLocal = first === 10
-    || first === 127
     || (first === 172 && second >= 16 && second <= 31)
     || (first === 192 && second === 168);
   return isLocal ? octets.join(".") : "";
-}
-
-function parseIpv6Group(value: string): number | null {
-  if (!/^[0-9a-f]{1,4}$/iu.test(value)) return null;
-  return Number.parseInt(value, 16);
-}
-
-function readIpv6(value: string): readonly number[] | null {
-  const marker = value.indexOf("::");
-  const parseSide = (side: string): number[] | null => {
-    if (side.length === 0) return [];
-    const parts = side.split(":");
-    const groups = parts.map(parseIpv6Group);
-    return groups.some((group) => group === null) ? null : groups as number[];
-  };
-
-  if (marker === -1) {
-    const groups = parseSide(value);
-    return groups === null || groups.length !== 8 ? null : groups;
-  }
-  const left = parseSide(value.slice(0, marker));
-  const right = parseSide(value.slice(marker + 2));
-  // Stryker disable next-line all: equivalent mutations cannot change the canonical result.
-  if (left === null || right === null || left.length + right.length >= 8) return null;
-  // Stryker disable next-line all: equivalent zero-run arithmetic is erased by canonicalization.
-  return [...left, ...Array.from({ length: 8 - left.length - right.length }, () => 0), ...right];
-}
-
-function canonicalIpv6(groups: readonly number[]): string {
-  let bestStart = -1;
-  let bestLength = 1;
-  let runStart = 0;
-    // Stryker disable next-line all: the extra terminal iteration has no observable effect.
-    while (runStart < groups.length) {
-    if (groups[runStart] !== 0) {
-      runStart += 1;
-      continue;
-    }
-    let runEnd = runStart;
-    // Stryker disable next-line all: undefined is not a zero group.
-    while (runEnd < groups.length && groups[runEnd] === 0) runEnd += 1;
-    if (runEnd - runStart > bestLength) {
-      bestStart = runStart;
-      bestLength = runEnd - runStart;
-    }
-    runStart = runEnd;
-  }
-  const text = groups.map((group) => group.toString(16));
-  if (bestStart === -1) return text.join(":");
-  const before = text.slice(0, bestStart).join(":");
-  const after = text.slice(bestStart + bestLength).join(":");
-  return before + "::" + after;
 }
 
 function readHost(value: unknown): NetworkSettingsResult<string | null> {
@@ -132,20 +79,14 @@ function readHost(value: unknown): NetworkSettingsResult<string | null> {
     return failure("INVALID_NETWORK_SETTINGS", "manualHost", "invalid-ip");
   }
   const text = startsBracket ? value.slice(1, -1) : value;
+  if (text.includes(":")) return failure("INVALID_NETWORK_SETTINGS", "manualHost", "ipv6-unsupported");
   const ipv4 = readIpv4(text);
   if (ipv4 !== null) {
     return ipv4.length === 0
       ? failure("INVALID_NETWORK_SETTINGS", "manualHost", "not-local")
       : success(ipv4);
   }
-  const ipv6 = readIpv6(text);
-  if (ipv6 === null) return failure("INVALID_NETWORK_SETTINGS", "manualHost", "invalid-ip");
-  const loopback = ipv6.slice(0, 7).every((group) => group === 0) && ipv6[7] === 1;
-  const uniqueLocal = (ipv6[0]! & 0xfe00) === 0xfc00;
-  const linkLocal = (ipv6[0]! & 0xffc0) === 0xfe80;
-  return loopback || uniqueLocal || linkLocal
-    ? success(canonicalIpv6(ipv6))
-    : failure("INVALID_NETWORK_SETTINGS", "manualHost", "not-local");
+  return failure("INVALID_NETWORK_SETTINGS", "manualHost", "invalid-ip");
 }
 
 function create(input: unknown): NetworkSettingsResult<NetworkSettingsValue> {

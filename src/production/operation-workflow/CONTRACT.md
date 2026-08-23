@@ -101,6 +101,7 @@ instance.dispose() -> void
   readonly routeLibrary: RouteLibraryInstance;
   readonly missionControl: MissionControlInstance;
   readonly liveStreamControl: LiveStreamControlInstance;
+  readonly whipStreamControl?: WhipStreamControlInstance;
   readonly mediaPipeline: MediaPipelineInstance;
   readonly flightControl: FlightControlInstance;
   readonly deviceSettings: DeviceSettingsPanelInstance;
@@ -169,6 +170,7 @@ interface WorkflowDevice {
   readonly mission: MissionDispatchSnapshot;
   readonly preflight: PreflightSummary;
   readonly stream: StreamDispatchSnapshot;
+  readonly whipStream: WhipDispatchSnapshot;
   readonly video: {
     readonly phase: "unavailable" | "awaiting-ingest" | "awaiting-playlist" | "ready" | "failed";
     readonly selected: boolean;
@@ -228,9 +230,9 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 2. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
 3. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。
 4. 图传与航线任务彼此独立：可以在航线开始前或飞行期间启动；图传失败不修改任务状态，任务失败不替其他设备停止图传。
-5. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`；任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
+5. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`；若装配了低延迟旁路，还必须调用 `whipStreamControl.recordDisconnected(deviceId)`。同一设备编号换了会话时同样必须复位这两条图传车道，不得继续显示“已启动”。任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
 6. `clearVideo()` 只清空本地播放器选择，不向手机发送停止推流命令。
-7. `refreshMedia()` 只调用已运行媒体管线的 `mediaPipeline.evaluate(now())`，并据其返回的既有媒体快照更新工作流快照。它不启动媒体服务、不启动或停止图传命令、不构造 RTMP 地址，也不创建额外的转码、播放或健康状态机。
+7. `refreshMedia()` 调用已运行媒体管线的 `mediaPipeline.evaluate(now())`，并据其返回的既有媒体快照更新工作流快照。它不启动媒体服务、不构造 RTMP 地址，也不创建额外的转码、播放或健康状态机。仅当媒体快照中某在线设备已 `failed`、且该设备图传仍为 `starting` 或 `streaming` 时，必须对该设备调用 `stopStream`；设备已离线时不得补发停止。
 8. `notifyPlaylistReady(deviceId)` 只委托 `mediaPipeline.notifyPlaylistReady(deviceId)`。它由桌面装配在 FFmpeg 写出 HLS 播放列表后调用，不启动图传、不伪造 `ready`。
 
 ## 9. 设备设置规则
@@ -256,7 +258,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 1. 从 `devices` 移除该设备；
 2. 清除该设备的本地航线分配；
 3. 让 `mission-control` 保留其 `disconnected` 任务终态；
-4. 调用 `live-stream-control.recordDisconnected(deviceId)`；
+4. 调用 `live-stream-control.recordDisconnected(deviceId)`；若存在 `whipStreamControl`，同时调用其 `recordDisconnected(deviceId)`；
 5. 用保存的确认 ID 取消该设备尚未确认的直接飞行动作；
 6. 不发送 `wayline.stop`、`live-stream.stop` 或任何飞控命令；
 7. 不自动重连、不自动重传、不自动恢复任务或图传。

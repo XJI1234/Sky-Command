@@ -44,6 +44,7 @@ interface WebRtcMediaOptions {
 interface MediaStreamSnapshot {
   readonly deviceId: string;
   readonly phase: "awaiting-publisher" | "publisher-ready" | "failed";
+  readonly lastEvent: "publisher-connected" | "publisher-disconnected" | "first-frame-rendered" | "process-exited" | "stop" | null;
   readonly diagnostic: string | null;
 }
 
@@ -113,7 +114,7 @@ URL 只能绑定本机回环地址、无凭据、无查询串和 fragment，并�
 
 启动顺序为：解析媒体主机 -> 启动 MediaMTX -> 启动 path 观察器。任何步骤失败都清理已经启动的资源。停止顺序为：清理播放器 -> 停止 path 观察器 -> 停止 MediaMTX；前一步失败不能阻止后续清理。`evaluate` 调用一次 path 列表 API，将发布/断开事件转换为按设备隔离的健康状态；它不创建定时器。
 
-`publisher-ready` 只表示 MediaMTX 已观察到 WHIP 发布。只有 `selectPlayer` 调用适配器并收到首帧后，播放器快照才会进入 `playing`；播放器失败不得把其他设备流改为失败。
+`publisher-ready` 只表示 MediaMTX 已观察到 WHIP 发布。`selectPlayer` 调用适配器并收到首帧后，播放器快照进入 `playing`，并把该设备健康事件记为 `first-frame-rendered`；首帧不改变 `publisher-ready`。播放器失败不得把其他设备流改为失败。
 
 发布、断开、超时和进程退出必须按设备和监听代次隔离。旧代次事件不得恢复新会话，也不得影响其他设备。
 

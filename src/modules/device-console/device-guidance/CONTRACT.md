@@ -73,7 +73,9 @@ interface DeviceGuidanceSnapshot {
 6. 同一链路下状态为 `PAIRED`：`CONNECT_AIRCRAFT`；该状态绝不代表飞行器已连接。
 7. 同一链路下状态缺失、`UNKNOWN`、`IDLE` 或未知未来值：`START_PAIRING`。
 8. 遥控器已连接、飞行器状态未知：`WAIT_FOR_SDK`。
-9. 三段链路均已连接：`READY`。
+9. 三段链路均已连接，但对频为 `PAIRING` 或 `STOPPING`：`WAIT_FOR_PAIRING`。
+10. 三段链路均已连接，但对频为 `FAILED`：`PAIRING_FAILED`。
+11. 三段链路均已连接：`READY`。
 
 文案是稳定、可显示的中文文本，不得包含 `deviceId`、内部异常、网络地址、DJI 原始状态或命令结果。
 

@@ -2,8 +2,20 @@ import { describe, expect, it } from "vitest";
 import { LinkChain } from "../src/modules/device-console/link-chain/index.js";
 
 describe("设备链路状态契约", () => {
-  it("只在三段事实均已连接时报告就绪", () => {
-    expect(LinkChain.evaluate({ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true } })).toEqual({ ok: true, value: { deviceId: "phone-1", overall: "ready", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "connected" } });
+  it("飞机已连接但未对频时整体仍为降级", () => {
+    expect(LinkChain.evaluate({
+      deviceId: "phone-1",
+      relayConnected: true,
+      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, pairingState: "IDLE" },
+    })).toEqual({
+      ok: true,
+      value: { deviceId: "phone-1", overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "connected" },
+    });
+    expect(LinkChain.evaluate({
+      deviceId: "phone-1",
+      relayConnected: true,
+      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, pairingState: "PAIRED" },
+    })).toMatchObject({ ok: true, value: { overall: "ready" } });
   });
 
   it.each([

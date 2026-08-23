@@ -14,9 +14,9 @@ NodeWebSocketRelayTransport.create(options) -> RelayTransport
 
 ## 行为
 
-`listen({host, port}, onConnection)` 仅在服务器报告监听后成功；绑定/启动失败返回稳定适配器错误。监听器 `close` 幂等，并在停止接收连接后完成。
+`listen({host, port}, onConnection)` 仅在服务器报告监听后成功；绑定/启动失败返回稳定适配器错误。生产 `WebSocketServer` 只接受路径 `/relay`。监听器 `close` 幂等，并在停止接收连接后完成。
 
-每个客户端成为一个 `RelayConnection`：二进制数据复制为新的 `Uint8Array` 后才通知消息监听器；文本帧立即关闭连接，绝不被当作 UTF-8 协议输入。`send(bytes)` 复制后发送二进制帧，Socket 未打开或库报错时拒绝。`close` 幂等，只请求一次正常关闭；任意顺序的回调最多触发一次关闭通知。三类监听器均返回幂等退订函数，监听器异常不得影响清理或其他监听器。
+每个客户端成为一个 `RelayConnection`：二进制数据复制为新的 `Uint8Array` 后才通知消息监听器；文本帧立即关闭连接，绝不被当作 UTF-8 协议输入。`send(bytes)` 复制后发送二进制帧，Socket 未打开或库报错时拒绝。`close` 幂等，只请求一次正常关闭；任意顺序的回调最多触发一次关闭通知。三类监听器均返回幂等退订函数，监听器异常不得影响清理或其他监听器。已打开的套接字必须按固定间隔发送 WebSocket ping；连续两次未收到 pong 时按 `peer-closed` 关闭，避免半死连接继续显示“手机已连接”。
 
 适配器不缓存应用数据、不重试发送、不施加中继协议限制；这些由 `relay-server` 和 `protocol-core` 负责。
 

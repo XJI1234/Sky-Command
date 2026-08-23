@@ -38,7 +38,7 @@ describe("StreamProtocolConfig", () => {
     const longDeviceId = "x".repeat(129);
     const maximumDeviceId = "x".repeat(128);
     const longHost = "a".repeat(254);
-    const invalidHosts = ["", "computer name", "computer:1935", "computer/live", "computer?token=1", "computer#fragment", "user@computer"];
+    const invalidHosts = ["", "computer name", "computer:1935", "computer/live", "computer?token=1", "computer#fragment", "user@computer", "127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST"];
     for (const host of invalidHosts) expect(StreamProtocolConfig.createRtmpTarget({ deviceId: "device-1", endpoint: { host, port: 1935 } })).toEqual({ ok: false, code: "INVALID_ENDPOINT_HOST" });
     expect(StreamProtocolConfig.createRtmpTarget(1)).toEqual({ ok: false, code: "INVALID_INPUT" });
     expect(StreamProtocolConfig.createRtmpTarget({ deviceId: 1, endpoint: { host: "computer", port: 1935 } })).toEqual({ ok: false, code: "INVALID_DEVICE_ID" });

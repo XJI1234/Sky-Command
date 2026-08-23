@@ -17,14 +17,14 @@ describe("desktop-settings network-settings defensive coverage", () => {
     expect(NetworkSettings.create(input)).toMatchObject({ ok: false });
   });
 
-  it("canonicalizes uncompressed IPv6 and a zero run at the end", () => {
+  it("rejects IPv6 publish hosts, including canonical unique-local forms", () => {
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "fd00:1:2:3:4:5:6:7" })).toMatchObject({
-      ok: true,
-      value: { manualHost: "fd00:1:2:3:4:5:6:7" }
+      ok: false,
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "fd00:1:2:0:0:0:0:0" })).toMatchObject({
-      ok: true,
-      value: { manualHost: "fd00:1:2::" }
+      ok: false,
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
   });
 
@@ -54,11 +54,11 @@ describe("desktop-settings network-settings defensive coverage", () => {
     [{ listenPort: 19500, manualHost: "8.16.0.1" }, "manualHost", "not-local"],
     [{ listenPort: 19500, manualHost: "192.167.0.1" }, "manualHost", "not-local"],
     [{ listenPort: 19500, manualHost: "193.168.0.1" }, "manualHost", "not-local"],
-    [{ listenPort: 19500, manualHost: "fd00::1::" }, "manualHost", "invalid-ip"],
-    [{ listenPort: 19500, manualHost: "zz::1" }, "manualHost", "invalid-ip"],
-    [{ listenPort: 19500, manualHost: "fd00::zz" }, "manualHost", "invalid-ip"],
-    [{ listenPort: 19500, manualHost: "fd00:1:2:3:4:5:6:7x" }, "manualHost", "invalid-ip"],
-    [{ listenPort: 19500, manualHost: "fd00:1:2:3:4:5:6:7::" }, "manualHost", "invalid-ip"],
+    [{ listenPort: 19500, manualHost: "fd00::1::" }, "manualHost", "ipv6-unsupported"],
+    [{ listenPort: 19500, manualHost: "zz::1" }, "manualHost", "ipv6-unsupported"],
+    [{ listenPort: 19500, manualHost: "fd00::zz" }, "manualHost", "ipv6-unsupported"],
+    [{ listenPort: 19500, manualHost: "fd00:1:2:3:4:5:6:7x" }, "manualHost", "ipv6-unsupported"],
+    [{ listenPort: 19500, manualHost: "fd00:1:2:3:4:5:6:7::" }, "manualHost", "ipv6-unsupported"],
     [{ listenPort: 19500, manualHost: "[fd00::1" }, "manualHost", "invalid-ip"],
     [{ listenPort: 19500, manualHost: "fd00::1]" }, "manualHost", "invalid-ip"],
     [{ listenPort: 19500, manualHost: "[]" }, "manualHost", "invalid-ip"]
@@ -69,30 +69,34 @@ describe("desktop-settings network-settings defensive coverage", () => {
     });
   });
 
-  it("uses the leftmost longest IPv6 zero run and only accepts a true loopback", () => {
+  it("rejects IPv6 and loopback as publish hosts", () => {
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "::1" })).toMatchObject({
-      ok: true,
-      value: { manualHost: "::1" }
+      ok: false,
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "fd00::1" })).toMatchObject({
-      ok: true,
-      value: { manualHost: "fd00::1" }
+      ok: false,
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
+    });
+    expect(NetworkSettings.create({ listenPort: 19500, manualHost: "[fd00::1]" })).toMatchObject({
+      ok: false,
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "fd00:1::2" })).toMatchObject({
-      ok: true,
-      value: { manualHost: "fd00:1::2" }
+      ok: false,
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "fd00:0:0:1:0:0:2:3" })).toMatchObject({
-      ok: true,
-      value: { manualHost: "fd00::1:0:0:2:3" }
+      ok: false,
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "::2" })).toMatchObject({
       ok: false,
-      error: { details: { field: "manualHost", reason: "not-local" } }
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
     expect(NetworkSettings.create({ listenPort: 19500, manualHost: "0:0:0:0:0:0:2:1" })).toMatchObject({
       ok: false,
-      error: { details: { field: "manualHost", reason: "not-local" } }
+      error: { details: { field: "manualHost", reason: "ipv6-unsupported" } }
     });
   });
 

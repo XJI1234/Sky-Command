@@ -43,6 +43,8 @@ http://{电脑局域网主机}:{WHIP HTTP 端口}/live/{encodeURIComponent(devic
 
 错误码只能是：`INVALID_INPUT`、`WEBRTC_MEDIA_UNAVAILABLE`、`TARGET_INVALID`、`CAPABILITY_BLOCKED`、`OPERATION_IN_PROGRESS`、`RELAY_REJECTED`、`DEPENDENCY_FAILURE`、`DISCONNECTED` 或 `ILLEGAL_STATE`。
 
+`RELAY_REJECTED` 可以把手机端已知拒绝详情映射为封闭原因码 `ANOTHER_VIDEO_TRANSPORT_ACTIVE`、`VIDEO_TRANSPORT_FAILED` 或 `VIDEO_TRANSPORT_UNAVAILABLE`，不得把原始命令详情、URL 或异常带入快照。
+
 每个 `deviceId` 的快照阶段只能是 `idle`、`starting`、`streaming`、`stopping`、`failed` 或 `disconnected`，快照不包含 WHIP 地址。不同设备互不阻塞；断线会使在途结果失效；`forget` 只能删除稳定终态。订阅快照按设备标识排序、冻结且监听器隔离。
 
 实验命令完成只表示手机 WHIP 发布器的操作终态。媒体是否已发布、WHEP 是否已连接和首帧是否显示由 `webrtc-media` 与 `whep-playback` 分别负责。

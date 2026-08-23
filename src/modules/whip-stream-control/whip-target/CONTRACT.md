@@ -14,7 +14,7 @@ WhipTarget.create({ deviceId, endpoint }) ->
   | { ok: false, code }
 ```
 
-设备标识必须进行 `encodeURIComponent`，且编码后必须能往返解析。主机不得包含空白、控制字符、路径、查询、fragment、凭据或端口分隔符。端口必须是 1024..65535 的安全整数。URL 只能使用 HTTP 或 HTTPS，不能含查询串、fragment、用户名或密码。
+设备标识必须进行 `encodeURIComponent`，且编码后必须能往返解析。主机不得包含空白、控制字符、路径、查询、fragment、凭据或端口分隔符，也不得为回环主机（`localhost`、`127.0.0.0/8`）。端口必须是 1024..65535 的安全整数。URL 只能使用 HTTP 或 HTTPS，不能含查询串、fragment、用户名或密码。
 
 ## 验收
 

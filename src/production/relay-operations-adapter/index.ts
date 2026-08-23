@@ -34,7 +34,7 @@ export interface DesktopRelayTelemetry {
   }>;
 }
 
-export interface DesktopRelayDevice { readonly deviceId: string; }
+export interface DesktopRelayDevice { readonly deviceId: string; readonly sessionId?: string; }
 export interface RelayOperationsSnapshot {
   readonly devices: readonly DesktopRelayDevice[];
   readonly telemetry: readonly DesktopRelayTelemetry[];
@@ -42,11 +42,11 @@ export interface RelayOperationsSnapshot {
 }
 export interface StreamRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string }>>;
 }
 export interface WhipStreamRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream-webrtc.start" | "live-stream-webrtc.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream-webrtc.start" | "live-stream-webrtc.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string }>>;
 }
 export interface AdapterFlightRelay extends FlightRelay {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
@@ -124,6 +124,10 @@ const status = (value: unknown): CommandStatus => {
   return current === "succeeded" || current === "rejected" || current === "timed-out" || current === "disconnected" || current === "transport-failed" ? current : "transport-failed";
 };
 const commandFailure = (): Readonly<{ readonly status: CommandStatus }> => freeze({ status: "rejected" as const });
+const commandDetail = (value: unknown): string | undefined => {
+  const detail = read(value, "detail");
+  return typeof detail === "string" && detail.trim().length > 0 && Array.from(detail).length <= 256 && !/[\p{Cc}]/u.test(detail) ? detail : undefined;
+};
 
 function project(deviceId: string, source: unknown): DesktopRelayTelemetry | null {
   const raw = record(source);
@@ -171,9 +175,14 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
     try {
       const source = relay.devices();
       if (!Array.isArray(source)) return freeze([]);
-      const unique = new Set<string>();
-      for (const item of source) { const deviceId = read(item, "deviceId"); if (validId(deviceId)) unique.add(deviceId); }
-      return freeze([...unique].sort().map((deviceId) => freeze({ deviceId })));
+      const unique = new Map<string, string | undefined>();
+      for (const item of source) {
+        const deviceId = read(item, "deviceId");
+        if (!validId(deviceId)) continue;
+        const sessionId = read(item, "sessionId");
+        unique.set(deviceId, validId(sessionId) ? sessionId : unique.get(deviceId));
+      }
+      return freeze([...unique].sort(([left], [right]) => left.localeCompare(right)).map(([deviceId, sessionId]) => freeze(sessionId === undefined ? { deviceId } : { deviceId, sessionId })));
     } catch { return freeze([]); }
   };
   const phases = (): RelayOperationsSnapshot["missionPhases"] => {
@@ -202,6 +211,14 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
         : freeze({ status: status(outcome) });
     } catch { return freeze({ status: "transport-failed" as const }); }
   };
+  const sendVideo = async (deviceId: string, name: string, fields: Record<string, JsonValue>): Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string }>> => {
+    if (disposed || !validId(deviceId) || typeof relay.sendCommand !== "function") return commandFailure();
+    try {
+      const outcome = await relay.sendCommand(deviceId, freeze({ name, fields: object(fields) }));
+      const detail = commandDetail(outcome);
+      return freeze({ status: status(outcome), ...(detail === undefined ? {} : { detail }) });
+    } catch { return freeze({ status: "transport-failed" as const }); }
+  };
   const missionGateway: MissionRelayGateway = freeze({
     latestTelemetry: telemetry,
     sendMission: async (deviceId, payload) => {
@@ -218,25 +235,28 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
   const streamGateway: StreamRelayGateway = freeze({
     latestTelemetry: telemetry,
     sendCommand: async (deviceId, request) => {
-      if (request.name === "live-stream.stop" && Object.keys(request.fields).length === 0) return send(deviceId, request.name, {});
+      if (request.name === "live-stream.stop" && Object.keys(request.fields).length === 0) return sendVideo(deviceId, request.name, {});
       if (request.name !== "live-stream.start" || Object.keys(request.fields).length !== 1 || typeof request.fields.rtmpUrl !== "string" || request.fields.rtmpUrl.trim().length === 0) return commandFailure();
-      return send(deviceId, request.name, { rtmpUrl: text(request.fields.rtmpUrl) });
+      return sendVideo(deviceId, request.name, { rtmpUrl: text(request.fields.rtmpUrl) });
     }
   });
   const whipStreamGateway: WhipStreamRelayGateway = freeze({
     latestTelemetry: telemetry,
     sendCommand: async (deviceId, request) => {
-      if (request.name === "live-stream-webrtc.stop" && Object.keys(request.fields).length === 0) return send(deviceId, request.name, {});
+      if (request.name === "live-stream-webrtc.stop" && Object.keys(request.fields).length === 0) return sendVideo(deviceId, request.name, {});
       if (request.name !== "live-stream-webrtc.start" || Object.keys(request.fields).length !== 1 || typeof request.fields.whipUrl !== "string" || request.fields.whipUrl.trim().length === 0 || /[\p{Cc}]/u.test(request.fields.whipUrl)) return commandFailure();
-      return send(deviceId, request.name, { whipUrl: text(request.fields.whipUrl) });
+      return sendVideo(deviceId, request.name, { whipUrl: text(request.fields.whipUrl) });
     },
   });
   const pairingGateway: PairingRelayPort = freeze({
     sendCommand: async (deviceId, request) => {
-      if ((request.name !== "pairing.start" && request.name !== "pairing.stop" && request.name !== "pairing.status") || Object.keys(request.fields).length !== 0) return freeze({ status: "rejected" as const, detail: "请求无效" });
+      if (request.name === "pairing.start" || request.name === "pairing.stop") {
+        return freeze({ status: "rejected" as const, detail: "请到手机上开始或停止对频。" });
+      }
+      if (request.name !== "pairing.status" || Object.keys(request.fields).length !== 0) return freeze({ status: "rejected" as const, detail: "请求无效" });
       const result = await send(deviceId, request.name, {});
       const mapped = freeze({ status: result.status === "succeeded" ? "accepted" as const : result.status === "timed-out" ? "timeout" as const : "rejected" as const, detail: result.status });
-      return request.name === "pairing.status" && result.status === "succeeded" && result.result !== undefined ? freeze({ ...mapped, result: result.result }) : mapped;
+      return result.status === "succeeded" && result.result !== undefined ? freeze({ ...mapped, result: result.result }) : mapped;
     }
   });
   const flightGateway: AdapterFlightRelay = freeze({

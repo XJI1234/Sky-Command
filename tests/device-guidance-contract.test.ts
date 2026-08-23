@@ -20,7 +20,10 @@ describe("设备连接引导契约", () => {
     [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "STOPPING" }, "WAIT_FOR_PAIRING", "wait-for-pairing"],
     [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "FAILED" }, "PAIRING_FAILED", "resolve-pairing-failure"],
     [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "PAIRED" }, "CONNECT_AIRCRAFT", "connect-aircraft"],
-    [{ link: readyLink, pairingState: "PAIRED" }, "READY", null]
+    [{ link: readyLink, pairingState: "PAIRED" }, "READY", null],
+    [{ link: readyLink, pairingState: "PAIRING" }, "WAIT_FOR_PAIRING", "wait-for-pairing"],
+    [{ link: readyLink, pairingState: "STOPPING" }, "WAIT_FOR_PAIRING", "wait-for-pairing"],
+    [{ link: readyLink, pairingState: "FAILED" }, "PAIRING_FAILED", "resolve-pairing-failure"]
   ])("对当前阻塞步骤给出唯一且可执行的 %s 引导", (input, code, action) => {
     const result = DeviceGuidance.evaluate(input);
     expect(result).toMatchObject({ ok: true, value: { deviceId: "phone-1", code, action } });

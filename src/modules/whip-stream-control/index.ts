@@ -78,6 +78,13 @@ function safeReason(value: unknown): string {
   return typeof value === "string" && value.length <= 64 && !/[\p{Cc}]/u.test(value) ? value : "CAPABILITY_UNKNOWN";
 }
 
+function relayRejectionReason(value: unknown): string | null {
+  if (value === "Another video transport is active") return "ANOTHER_VIDEO_TRANSPORT_ACTIVE";
+  if (value === "WHIP stream failed" || value === "WHIP stream operation was rejected") return "VIDEO_TRANSPORT_FAILED";
+  if (value === "Video transport is unavailable") return "VIDEO_TRANSPORT_UNAVAILABLE";
+  return null;
+}
+
 function validPrivateIpv4(value: string): boolean {
   const parts = value.split(".");
   if (parts.length !== 4 || parts.some((part) => !/^(?:0|[1-9]\d{0,2})$/u.test(part))) return false;
@@ -153,15 +160,15 @@ function create(dependencies: WhipStreamControlDependencies): WhipStreamControlI
     return null;
   };
 
-  const finish = (deviceId: string, lane: Lane, operation: WhipOperation, ok: boolean, code: WhipDispatchCode | null): WhipDispatchResult => {
+  const finish = (deviceId: string, lane: Lane, operation: WhipOperation, ok: boolean, code: WhipDispatchCode | null, reason: string | null = null): WhipDispatchResult => {
     lane.busy = false;
     lane.lastOperation = operation;
     lane.failureCode = code;
-    lane.reason = null;
+    lane.reason = reason;
     lane.phase = ok ? operation === "start" ? "streaming" : "idle" : "failed";
     const state = snapshot(deviceId, lane);
     publish();
-    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state });
+    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state, ...(reason === null ? {} : { reason }) });
   };
 
   const send = async (
@@ -176,8 +183,14 @@ function create(dependencies: WhipStreamControlDependencies): WhipStreamControlI
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, request));
     if ((lane.phase as WhipDispatchSnapshot["phase"]) === "disconnected") return freeze({ ok: false as const, operation, code: "DISCONNECTED" as const, state: snapshot(deviceId, lane) });
     if (!sent.ok) return finish(deviceId, lane, operation, false, "DEPENDENCY_FAILURE");
-    const status = attempt(() => record(sent.value) ? sent.value.status : null);
-    return status.ok && status.value === "succeeded" ? finish(deviceId, lane, operation, true, null) : finish(deviceId, lane, operation, false, "RELAY_REJECTED");
+    const payload = attempt(() => {
+      if (!record(sent.value)) return null;
+      return freeze({ status: sent.value.status, detail: sent.value.detail });
+    });
+    if (!payload.ok || payload.value === null) return finish(deviceId, lane, operation, false, "RELAY_REJECTED");
+    return payload.value.status === "succeeded"
+      ? finish(deviceId, lane, operation, true, null)
+      : finish(deviceId, lane, operation, false, "RELAY_REJECTED", relayRejectionReason(payload.value.detail));
   };
 
   return freeze({

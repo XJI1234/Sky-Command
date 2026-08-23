@@ -21,5 +21,12 @@ describe("Electron WHEP 播放链路", () => {
     expect(source).toContain('bridge().invoke("stream-refresh")');
     expect(source).toContain("whepPeer !== null");
     for (const method of ["webrtc-start", "webrtc-stop", "webrtc-refresh", "webrtc-stream-start", "webrtc-stream-stop", "webrtc-stream-select"]) expect(source).toContain(method);
+    expect(source).toContain("ANOTHER_VIDEO_TRANSPORT_ACTIVE");
+    expect(source).toContain("另一路图传正在使用，请先停止");
+    expect(source).toContain("飞行状态尚未确认");
+    expect(source).toContain("等待手机就绪");
+    expect(source).toContain('read(connection, "sdk") !== "ready"');
+    expect(source).not.toContain("value !== \"disconnected\" && read(connection, \"sdk\")");
+    expect(source).not.toContain("JSON.stringify(unwrap(");
   });
 });

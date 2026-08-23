@@ -122,6 +122,37 @@ describe("飞行任务控制模块契约", () => {
     expect(control.get("phone-1")).toMatchObject({ phase: "running" });
   });
 
+  it("会话替换视为断线，并忽略更老代际的航线开始事件", async () => {
+    let receiveRelaySnapshot!: (snapshot: unknown) => void;
+    const control = MissionControl.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) },
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "accepted" }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
+        subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; }
+      }
+    }, { createMissionId: () => "mission-1" });
+
+    await control.stage("phone-1", "route-1");
+    await control.upload("phone-1");
+    await control.start("phone-1");
+    receiveRelaySnapshot({
+      devices: [{ deviceId: "phone-1", sessionId: "session-1" }],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 2, sequence: 2, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
+    });
+    expect(control.get("phone-1")).toMatchObject({ phase: "running" });
+
+    receiveRelaySnapshot({
+      devices: [{ deviceId: "phone-1", sessionId: "session-1" }],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 1, sequence: 9, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
+    });
+    expect(control.get("phone-1")).toMatchObject({ phase: "running" });
+
+    receiveRelaySnapshot({ devices: [{ deviceId: "phone-1", sessionId: "session-2" }], missionPhases: [] });
+    expect(control.get("phone-1")).toMatchObject({ phase: "disconnected" });
+  });
+
   it("只接受与当前任务匹配的 Android 终态遥测，并保留启动与执行的区别", async () => {
     let receiveRelaySnapshot!: (snapshot: unknown) => void;
     const control = MissionControl.create({

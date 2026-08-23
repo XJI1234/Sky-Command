@@ -15,6 +15,7 @@ export interface FlightControlInstance {
   readonly confirm: (deviceId: string, confirmationId: string) => Promise<FlightCommandResult>;
   readonly cancel: (deviceId: string, confirmationId: string) => FlightActionRequest;
   readonly get: (deviceId: string) => PendingConfirmation | null;
+  readonly clear: (deviceId: string) => boolean;
   readonly subscribe: (listener: (pending: readonly PendingConfirmation[]) => void) => () => void;
   readonly dispose: () => void;
 }
@@ -83,6 +84,12 @@ function create(dependencies: FlightControlDependencies, options: FlightControlO
     },
     // Stryker disable next-line ConditionalExpression, LogicalOperator: released, invalid and stale reads return null.
     get: (deviceId) => disposed || !validId(deviceId) ? null : (() => { const now = readNow(options.now); const value = now === null ? null : confirmations.get(deviceId, now); if (value === null) deviceIds.delete(deviceId); return value; })(),
+    clear: (deviceId) => {
+      if (disposed || !validId(deviceId)) return false;
+      const removed = confirmations.clear(deviceId);
+      if (removed) { deviceIds.delete(deviceId); publish(); }
+      return removed;
+    },
     // Stryker disable next-line BooleanLiteral, BlockStatement, ConditionalExpression: unsubscribe is idempotent.
     subscribe: (listener) => { listeners.add(listener); let active = true; return () => { if (active) { active = false; listeners.delete(listener); } }; },
     // Stryker disable next-line ConditionalExpression: dispose is idempotent cleanup.

@@ -19,7 +19,8 @@ const failure = (code: Extract<StreamTargetResult, { readonly ok: false }>['code
 // Stryker disable next-line ArrowFunction: static helper replacement is not re-observable after ESM transform caching; public validation boundaries are tested.
 const validDeviceId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 // Stryker disable next-line ArrowFunction: static helper replacement is not re-observable after ESM transform caching; public validation boundaries are tested.
-const validHost = (value: unknown): value is string => typeof value === "string" && Array.from(value).length >= 1 && Array.from(value).length <= 253 && !/[\s\p{Cc}/?#@:]/u.test(value);
+const loopbackHost = (value: string): boolean => value.toLowerCase() === "localhost" || /^127(?:\.\d{1,3}){3}$/u.test(value);
+const validHost = (value: unknown): value is string => typeof value === "string" && Array.from(value).length >= 1 && Array.from(value).length <= 253 && !/[\s\p{Cc}/?#@:]/u.test(value) && !loopbackHost(value);
 // Stryker disable next-line ArrowFunction, ConditionalExpression: Number.isSafeInteger already rejects every non-number; typeof is needed only for TypeScript narrowing.
 const validPort = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 1024 && value <= 65_535;
 

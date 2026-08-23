@@ -43,7 +43,7 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
 
 - 中继离线时全部拒绝 `RELAY_OFFLINE`。
 - SDK 不是 `true` 时全部拒绝 `SDK_NOT_READY`；遥控器不是 `true` 时全部拒绝 `REMOTE_CONTROLLER_OFFLINE`。
-- `pairing` 仅在 SDK/遥控器就绪且飞控、飞行器均不是 true 时允许；已连接任一飞行器段时拒绝 `PAIRING_NOT_NEEDED`。
+- `pairing` 仅在 SDK/遥控器就绪且飞行器未连接时允许；飞行器已连接时拒绝 `PAIRING_NOT_NEEDED`。飞控已连接但飞行器未连接时仍允许对频。
 - 其余操作均要求飞控和飞行器均为 true，否则拒绝 `AIRCRAFT_NOT_CONNECTED`。
 - `live-stream` 还要求 `capabilities.liveVideo === true`。能力对象缺失或字段缺失为 `CAPABILITY_UNKNOWN`，显式 false 为 `LIVE_VIDEO_UNSUPPORTED`。
 - `waypoint-mission` 还要求 `waypointMission === true` 且 `waypointMissionSupport === "supported"`。字段缺失为 `CAPABILITY_UNKNOWN`，其他情况为 `WAYPOINT_UNSUPPORTED`。

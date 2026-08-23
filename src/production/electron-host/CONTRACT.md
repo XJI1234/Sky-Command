@@ -1,6 +1,6 @@
 # Electron 宿主
 
-状态：窗口装配已接线；RTMP 19500 / HLS 18080 / FFmpeg 为真实媒体端口。Relay 提示地址与图传 RTMP 主机使用同一块网卡 IPv4。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。图传收流等待 20s，HLS 播放列表等待 45s。
+状态：窗口装配已接线；RTMP 19500 / HLS 18080 / FFmpeg 为真实媒体端口。Relay 提示地址与图传 RTMP 主机使用同一块网卡 IPv4。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。手机 DJI 操作超时为 30s，超时会回 `command-result`，操作台应在约 30s 看到失败；120s 只覆盖手机无应答或排队中的遗留 DJI 调用。图传收流等待 20s，HLS 播放列表等待 45s。
 
 启动方式与 `MSDK-upgraded` 对齐：
 
@@ -12,9 +12,17 @@ npm run desktop
 
 `npm run build` 把主进程打进 `electron/main.mjs`，把操作台渲染器打进 `dist/renderer/`。桌面快捷方式运行构建后的 Electron，不再用 `tsx` 直接执行源码。
 
-Relay 监听 `0.0.0.0:8080`。设备页每次刷新都会重新读取本机局域网 IPv4，列出全部 `ws://<IPv4>:8080/relay`。手机填写其中能通的一条。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。
+Relay 监听 `0.0.0.0:8080`。设备页提示与图传 RTMP/WHIP 主机使用同一块首选网卡：`ws://<首选IPv4>:8080/relay`。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。
 
-事故日志写在 `%LOCALAPPDATA%\Sky Command\diagnostics\`：`incident.log` 给人读，`incident.ndjson` 给检索。同一目录的 `relay-events.ndjson` 仍是手机上报原件。日志按三条链路标记 `phone-pc` / `uplink` / `downlink` / `phone`，记录配对、命令结局、图传 RTMP/FFmpeg/HLS，以及操作台拦住未发出的动作。不记录密钥、路径、RTMP URL 或原始异常。
+事故日志写在 `%LOCALAPPDATA%\Sky Command\diagnostics\`：`incident.log` 给人读，`incident.ndjson` 给检索。同一目录的 `relay-events.ndjson` 仍是手机上报原件。日志按链路标记 `phone-pc`（配对/连接）、`uplink`（飞控/航线/设置命令）、`downlink`（图传 RTMP/FFmpeg/HLS/WebRTC 画面）、`phone`（手机上报），记录配对、命令结局、图传画面，以及操作台拦住未发出的动作。不记录密钥、路径、RTMP URL 或原始异常。
+
+## 旧 HLS 图传
+
+旧 RTMP 到 HLS 链路的目标是稳定约 3--5 秒玻璃到玻璃延迟；它不是低延迟旁路，不能承诺亚秒。`node-media-server` 必须保留 `gop_cache: true`：缓存只在新的本地 FFmpeg RTMP 播放端加入时补发当前可解码 GOP，不为已连接播放器持续囤积延迟；关闭它会让 FFmpeg 等待下一关键帧。
+
+`media-ports` 是这条链路唯一可以调整 FFmpeg 参数的适配器。输入侧必须在 `-i` 前使用无缓冲、损坏包丢弃、小探测量和零分析时长；视频必须 `-c:v copy`，输出必须 `-an`，不得转码或等待音频。HLS 必须以 1 秒为切片目标、保留 3 段列表、即时冲刷输出包，并以 `delete_segments+append_list+independent_segments` 维护列表。不得使用 `split_by_time`，因为 copy 传输必须等关键帧切片，不能在预测帧处硬切。真实片长仍受 DJI GOP 约束，GOP 大于 1 秒时允许片长随之变长。
+
+这些限制不改变手机推流、旧端口、媒体管线模块或 WHIP/WHEP 旁路。FFmpeg 参数缩短的是收流与切片缓冲；最终延迟须以真机秒表验收，弱网允许短暂卡顿后恢复。
 
 ## 低延迟 Electron 适配器
 

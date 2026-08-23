@@ -5,6 +5,7 @@ export interface LinkChainTelemetry {
   readonly remoteControllerConnected?: boolean;
   readonly flightControllerConnected?: boolean;
   readonly connected?: boolean;
+  readonly pairingState?: string;
 }
 
 export interface LinkChainSnapshot {
@@ -51,6 +52,7 @@ function readTelemetry(value: unknown): Readonly<LinkChainTelemetry> | null | Re
     const telemetry = value as LinkChainTelemetry;
     const fields = ["sdkRegistered", "remoteControllerConnected", "flightControllerConnected", "connected"] as const;
     for (const field of fields) if (telemetry[field] !== undefined && typeof telemetry[field] !== "boolean") return freeze({ field: `telemetry.${field}`, reason: "invalid-type" });
+    if (telemetry.pairingState !== undefined && typeof telemetry.pairingState !== "string") return freeze({ field: "telemetry.pairingState", reason: "invalid-type" });
     return freeze({
       // Stryker disable next-line ConditionalExpression: omitted optional telemetry fields and explicit undefined have identical public link semantics.
       ...(telemetry.sdkRegistered === undefined ? {} : { sdkRegistered: telemetry.sdkRegistered }),
@@ -59,7 +61,8 @@ function readTelemetry(value: unknown): Readonly<LinkChainTelemetry> | null | Re
       // Stryker disable next-line ConditionalExpression: omitted optional telemetry fields and explicit undefined have identical public link semantics.
       ...(telemetry.flightControllerConnected === undefined ? {} : { flightControllerConnected: telemetry.flightControllerConnected }),
       // Stryker disable next-line ConditionalExpression: omitted optional telemetry fields and explicit undefined have identical public link semantics.
-      ...(telemetry.connected === undefined ? {} : { connected: telemetry.connected })
+      ...(telemetry.connected === undefined ? {} : { connected: telemetry.connected }),
+      ...(telemetry.pairingState === undefined ? {} : { pairingState: telemetry.pairingState })
     });
   } catch {
     return freeze({ field: "input", reason: "unreadable" });
@@ -78,7 +81,8 @@ function evaluate(value: unknown): LinkChainResult<LinkChainSnapshot> {
   if (telemetry === null || telemetry.sdkRegistered !== true) return success(freeze({ deviceId: input.deviceId, overall: "degraded" as const, computerToPhone: "connected" as const, phoneToRemoteController: "unknown" as const, remoteControllerToAircraft: "unknown" as const }));
   const remoteController = telemetry.remoteControllerConnected === true ? "connected" as const : "disconnected" as const;
   const aircraft = remoteController === "connected" ? telemetry.flightControllerConnected === true && telemetry.connected === true ? "connected" as const : "disconnected" as const : "unknown" as const;
-  return success(freeze({ deviceId: input.deviceId, overall: aircraft === "connected" ? "ready" as const : "degraded" as const, computerToPhone: "connected" as const, phoneToRemoteController: remoteController, remoteControllerToAircraft: aircraft }));
+  const paired = telemetry.pairingState === undefined || telemetry.pairingState === "PAIRED";
+  return success(freeze({ deviceId: input.deviceId, overall: aircraft === "connected" && paired ? "ready" as const : "degraded" as const, computerToPhone: "connected" as const, phoneToRemoteController: remoteController, remoteControllerToAircraft: aircraft }));
 }
 
 // Stryker disable next-line ObjectLiteral: the ESM-static facade is instantiated before a transformed test module can re-import it; public identity is covered.

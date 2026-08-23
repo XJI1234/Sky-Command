@@ -74,4 +74,52 @@ describe("LowLatencyMedia", () => {
     expect(calls).toEqual(["media.refresh:42", "media.select:phone-1", "media.clear"]);
     expect(JSON.stringify(lowLatency.snapshot())).not.toContain("192.168.1.20");
   });
+
+  it("stops a still-active WHIP publisher after health marks the stream failed", async () => {
+    const calls: string[] = [];
+    const media = {
+      ...mediaFixture(calls),
+      snapshot: () => ({
+        phase: "running" as const,
+        revision: 4,
+        streams: [{ deviceId: "phone-1", phase: "failed" as const, diagnostic: "timeout" }],
+        player: { phase: "idle" },
+        diagnostic: null,
+      }),
+    };
+    const lowLatency = LowLatencyMedia.create({ media, control: controlFixture(calls), startInput: {} });
+    await lowLatency.refresh(15_000);
+    expect(calls).toEqual(["media.refresh:15000", "stream.stop:phone-1"]);
+  });
+
+  it("路径健康失败时停止仍在推流的手机 WHIP", async () => {
+    const calls: string[] = [];
+    const media = {
+      ...mediaFixture(calls),
+      evaluate: async () => {
+        calls.push("media.refresh:failed");
+        return { ok: false, code: "PATH_MONITOR_FAILED", value: { phase: "failed" } };
+      },
+    };
+    const lowLatency = LowLatencyMedia.create({ media, control: controlFixture(calls), startInput: {} });
+    await expect(lowLatency.refresh(1)).resolves.toMatchObject({ ok: false, code: "PATH_MONITOR_FAILED" });
+    expect(calls).toEqual(["media.refresh:failed", "stream.stop:phone-1"]);
+  });
+
+  it("WHEP 播放失败时停止对应设备的手机 WHIP", async () => {
+    const calls: string[] = [];
+    const media = {
+      ...mediaFixture(calls),
+      snapshot: () => ({
+        phase: "running" as const,
+        revision: 5,
+        streams: [{ deviceId: "phone-1", phase: "publisher-ready" as const, diagnostic: null }],
+        player: { phase: "failed" as const, deviceId: "phone-1" },
+        diagnostic: null,
+      }),
+    };
+    const lowLatency = LowLatencyMedia.create({ media, control: controlFixture(calls), startInput: {} });
+    await lowLatency.refresh(20);
+    expect(calls).toEqual(["media.refresh:20", "stream.stop:phone-1"]);
+  });
 });

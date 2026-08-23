@@ -104,8 +104,16 @@ function evaluate(value: unknown): DeviceGuidanceResult<DeviceGuidanceSnapshot> 
   if (link.computerToPhone === "disconnected") return snapshot(link.deviceId, "CONNECT_PHONE", "reconnect-phone", "连接手机", "请在手机上重新连接。");
   if (link.phoneToRemoteController === "disconnected") return snapshot(link.deviceId, "CONNECT_REMOTE_CONTROLLER", "connect-remote-controller", "连接遥控器", "请打开并连接遥控器。");
   if (link.remoteControllerToAircraft === "unknown") return snapshot(link.deviceId, "WAIT_FOR_SDK", "wait-for-sdk", "等待设备状态", "正在确认遥控器和飞机的连接状态。");
-  if (link.remoteControllerToAircraft === "connected") return snapshot(link.deviceId, "READY", null, "设备已就绪", "手机、遥控器和飞机均已连接。");
   const pairingState = asKnownPairingState(input.pairingState);
+  if (link.remoteControllerToAircraft === "connected") {
+    if (pairingState === "PAIRING" || pairingState === "STOPPING") {
+      return snapshot(link.deviceId, "WAIT_FOR_PAIRING", "wait-for-pairing", "正在对频", "飞机已出现，仍在对频，请稍候。");
+    }
+    if (pairingState === "FAILED") {
+      return snapshot(link.deviceId, "PAIRING_FAILED", "resolve-pairing-failure", "对频失败", "飞机已出现但对频失败，请在手机上重试。");
+    }
+    return snapshot(link.deviceId, "READY", null, "设备已就绪", "手机、遥控器和飞机均已连接。");
+  }
   switch (pairingState) {
     case "PAIRING":
     case "STOPPING":

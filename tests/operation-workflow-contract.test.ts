@@ -508,4 +508,87 @@ describe("飞行作业工作流模块契约", () => {
     expect(assigned.clearAssignment("relay-a")).toMatchObject({ ok: false, code: "DISPOSED" });
     expect(assigned.selectVideo("relay-a")).toMatchObject({ ok: false, code: "DISPOSED" });
   });
+
+  it("同一手机换了会话时必须复位图传车道，不得继续显示已启动", () => {
+    let sessionId = "session-1";
+    let signal!: () => void;
+    const disconnected: string[] = [];
+    const whip: string[] = [];
+    const workflow = workflowWith({
+      relayOperations: { devices: () => [{ deviceId: "relay-a", sessionId }], telemetry: () => null, subscribe: (listener: () => void) => { signal = listener; return () => undefined; } },
+      liveStreamControl: {
+        start: async () => ({ ok: true }),
+        stop: async () => ({ ok: true }),
+        get: () => ({ phase: "streaming" }),
+        list: () => [],
+        recordDisconnected: (id: string) => { disconnected.push(id); return { phase: "disconnected" }; },
+        forget: () => false,
+        subscribe: () => () => undefined,
+      },
+      whipStreamControl: {
+        get: () => ({ deviceId: "relay-a", phase: "streaming", lastOperation: "start", failureCode: null, reason: null }),
+        recordDisconnected: (id: string) => { whip.push(id); return { phase: "disconnected" }; },
+        subscribe: () => () => undefined,
+      },
+    });
+    sessionId = "session-2";
+    signal();
+    expect(disconnected).toEqual(["relay-a"]);
+    expect(whip).toEqual(["relay-a"]);
+  });
+
+  it("转码失败且手机仍在线时必须停止这一路图传，手机已离线则不得补发停止", async () => {
+    const stops: string[] = [];
+    const online = workflowWith({
+      liveStreamControl: {
+        start: async () => ({ ok: true }),
+        stop: async (id: string) => { stops.push(id); return { ok: true }; },
+        get: () => ({ phase: "streaming" }),
+        list: () => [],
+        recordDisconnected: () => null,
+        forget: () => false,
+        subscribe: () => () => undefined,
+      },
+      mediaPipeline: { snapshot: () => ({ streams: [{ deviceId: "relay-a", phase: "failed" }] }), evaluate: () => ({ ok: true }) },
+    });
+    expect(online.refreshMedia()).toMatchObject({ ok: true });
+    await Promise.resolve();
+    expect(stops).toEqual(["relay-a"]);
+
+    const offlineStops: string[] = [];
+    const offline = workflowWith({
+      relayOperations: { devices: () => [], telemetry: () => null, subscribe: () => () => undefined },
+      liveStreamControl: {
+        start: async () => ({ ok: true }),
+        stop: async (id: string) => { offlineStops.push(id); return { ok: true }; },
+        get: () => ({ phase: "streaming" }),
+        list: () => [],
+        recordDisconnected: () => null,
+        forget: () => false,
+        subscribe: () => () => undefined,
+      },
+      mediaPipeline: { snapshot: () => ({ streams: [{ deviceId: "relay-a", phase: "failed" }] }), evaluate: () => ({ ok: true }) },
+    });
+    expect(offline.refreshMedia()).toMatchObject({ ok: true });
+    await Promise.resolve();
+    expect(offlineStops).toEqual([]);
+  });
+
+  it("设备离线时同时标记旧图传和低延迟图传为断连", () => {
+    let online = true;
+    let signal!: () => void;
+    const whip: string[] = [];
+    const workflow = workflowWith({
+      relayOperations: { devices: () => online ? [{ deviceId: "relay-a" }] : [], telemetry: () => null, subscribe: (listener: () => void) => { signal = listener; return () => undefined; } },
+      whipStreamControl: {
+        get: () => ({ deviceId: "relay-a", phase: "streaming", lastOperation: "start", failureCode: null, reason: null }),
+        recordDisconnected: (id: string) => { whip.push(id); return { phase: "disconnected" }; },
+        subscribe: () => () => undefined,
+      },
+    });
+    expect(workflow.snapshot().devices[0]).toMatchObject({ whipStream: { phase: "streaming" } });
+    online = false;
+    signal();
+    expect(whip).toEqual(["relay-a"]);
+  });
 });

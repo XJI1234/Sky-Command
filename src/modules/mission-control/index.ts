@@ -56,20 +56,53 @@ function create(dependencies: MissionControlDependencies, options: MissionDispat
   const dispatcher = MissionDispatcher.create({ routeSource: dependencies.routeSource, relay: dependencies.relay }, options);
   let disposed = false;
   let previousDevices: ReadonlySet<string> | null = null;
+  const previousSessions = new Map<string, string>();
+  const appliedPhases = new Map<string, Readonly<{ readonly deviceGeneration: number; readonly missionRevision: number; readonly sequence: number }>>();
+  const validSessionId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
+  const sessionsOf = (snapshot: unknown): Map<string, string> => {
+    const sessions = new Map<string, string>();
+    try {
+      const devices = (snapshot as { readonly devices?: unknown }).devices;
+      if (!Array.isArray(devices)) return sessions;
+      for (const device of devices) {
+        const deviceId = (device as { readonly deviceId?: unknown }).deviceId;
+        const sessionId = (device as { readonly sessionId?: unknown }).sessionId;
+        if (typeof deviceId === "string" && validSessionId(sessionId)) sessions.set(deviceId, sessionId);
+      }
+    } catch {
+      return sessions;
+    }
+    return sessions;
+  };
+  const stalePhase = (deviceId: string, phase: { readonly deviceGeneration: number; readonly missionRevision: number; readonly sequence: number }): boolean => {
+    const applied = appliedPhases.get(deviceId);
+    if (applied === undefined) return false;
+    if (phase.deviceGeneration < applied.deviceGeneration) return true;
+    if (phase.deviceGeneration === applied.deviceGeneration && phase.missionRevision < applied.missionRevision) return true;
+    return phase.deviceGeneration === applied.deviceGeneration && phase.missionRevision === applied.missionRevision && phase.sequence <= applied.sequence;
+  };
   const receiveRelaySnapshot = (snapshot: unknown): void => {
     if (disposed) return;
     const currentDevices = RelayDeviceSnapshotReader.read(snapshot);
     if (currentDevices === null) return;
+    const currentSessions = sessionsOf(snapshot);
     if (previousDevices !== null) {
       for (const deviceId of previousDevices) {
-        if (!currentDevices.has(deviceId)) dispatcher.recordDisconnected(deviceId);
+        const sessionChanged = previousSessions.has(deviceId) && currentSessions.has(deviceId) && previousSessions.get(deviceId) !== currentSessions.get(deviceId);
+        if (!currentDevices.has(deviceId) || sessionChanged) dispatcher.recordDisconnected(deviceId);
       }
     }
     previousDevices = currentDevices;
+    previousSessions.clear();
+    for (const [deviceId, sessionId] of currentSessions) previousSessions.set(deviceId, sessionId);
     const missionPhases = RelayMissionPhaseSnapshotReader.read(snapshot);
     if (missionPhases === null) return;
     for (const phase of missionPhases) {
-      if (phase.phase === "ROUTE_EXECUTION_STARTED") dispatcher.recordExecutionStarted(phase.deviceId, phase.fileName);
+      if (stalePhase(phase.deviceId, phase)) continue;
+      if (phase.phase === "ROUTE_EXECUTION_STARTED") {
+        const applied = dispatcher.recordExecutionStarted(phase.deviceId, phase.fileName);
+        if (applied !== null) appliedPhases.set(phase.deviceId, freeze({ deviceGeneration: phase.deviceGeneration, missionRevision: phase.missionRevision, sequence: phase.sequence }));
+      }
     }
     const terminals = RelayMissionPhaseSnapshotReader.readTerminalStates(snapshot);
     if (terminals === null) return;

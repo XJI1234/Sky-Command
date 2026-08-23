@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { IncidentJournal, sanitizeDetail, wrapGateway, wrapPhoneDiagnostics } from "../src/production/electron-host/incident-journal.js";
+import { IncidentJournal, sanitizeDetail, watchApplication, wrapGateway, wrapPhoneDiagnostics } from "../src/production/electron-host/incident-journal.js";
 
 const directories: string[] = [];
 
@@ -46,7 +46,7 @@ describe("事故日志", () => {
     });
   });
 
-  it("命令超时记为下行 WARN，刷新图传不写日志", async () => {
+  it("命令超时记为上行 WARN，刷新图传不写日志", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
     const journal = IncidentJournal.create(directory);
@@ -62,11 +62,11 @@ describe("事故日志", () => {
     await gateway.invoke("stream.refresh", undefined);
     const log = readFileSync(journal.logPath, "utf8");
     expect(log).toContain("MISSION_START_TIMED_OUT");
-    expect(log).toContain("downlink");
+    expect(log).toContain("uplink");
     expect(log).not.toContain("STREAM_REFRESH");
   });
 
-  it("把低延迟控制记为上行，并忽略低延迟周期刷新", async () => {
+  it("把低延迟控制记为下行，并忽略低延迟周期刷新", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
     const journal = IncidentJournal.create(directory);
@@ -82,7 +82,34 @@ describe("事故日志", () => {
     await gateway.invoke("webrtc.refresh", undefined);
     const log = readFileSync(journal.logPath, "utf8");
     expect(log).toContain("WEBRTC_START_OK");
-    expect(log).toContain("uplink");
+    expect(log).toContain("downlink");
     expect(log).not.toContain("WEBRTC_REFRESH");
+  });
+
+  it("把图传画面变化记为下行，把任务阶段记为上行", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    let listener: ((snapshot: unknown) => void) | undefined;
+    const stop = watchApplication({
+      snapshot: () => ({
+        workflow: { devices: [{ deviceId: "phone-1", mission: { phase: "idle" }, stream: { phase: "idle" }, video: { phase: "idle" } }] },
+        runtime: { media: { streams: [{ deviceId: "phone-1", phase: "idle" }] } }
+      }),
+      subscribe: (next) => {
+        listener = next;
+        return () => undefined;
+      }
+    }, journal);
+    listener?.({
+      workflow: { devices: [{ deviceId: "phone-1", mission: { phase: "running" }, stream: { phase: "live" }, video: { phase: "playing" } }] },
+      runtime: { media: { streams: [{ deviceId: "phone-1", phase: "publisher-ready" }] } }
+    });
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/uplink MISSION_RUNNING/);
+    expect(log).toMatch(/downlink STREAM_LIVE/);
+    expect(log).toMatch(/downlink VIDEO_PLAYING/);
+    expect(log).toMatch(/downlink MEDIA_PUBLISHER_READY/);
+    stop();
   });
 });

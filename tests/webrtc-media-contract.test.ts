@@ -82,6 +82,10 @@ describe("webrtc-media 一级组合根契约", () => {
     expect(targets).toEqual([{ deviceId: "drone-a", url: "http://127.0.0.1:18889/live/drone-a/whep" }]);
     readies[0]!();
     expect(media.snapshot().player).toEqual({ phase: "playing", deviceId: "drone-a", revision: 2, diagnostic: null });
+    expect(media.snapshot().streams).toEqual([
+      { deviceId: "drone-a", phase: "publisher-ready", lastEvent: "first-frame-rendered", diagnostic: null },
+      { deviceId: "drone-b", phase: "publisher-ready", lastEvent: "publisher-connected", diagnostic: null }
+    ]);
     expect(media.selectPlayer("missing")).toMatchObject({ ok: false, code: "UNKNOWN_DEVICE" });
   });
 

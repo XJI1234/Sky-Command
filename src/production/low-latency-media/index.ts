@@ -78,6 +78,21 @@ function create(dependencies: LowLatencyMediaDependencies): LowLatencyMediaInsta
     }
     return clean;
   };
+  const stopTimedOutPublishers = async (): Promise<void> => {
+    let failed = new Set<string>();
+    try {
+      const snapshot = media.snapshot();
+      failed = new Set(snapshot.streams.filter((item) => item.phase === "failed").map((item) => item.deviceId));
+      const player = snapshot.player;
+      if (player.phase === "failed" && typeof player.deviceId === "string") failed.add(player.deviceId);
+    } catch { return; }
+    let lanes: readonly WhipDispatchSnapshot[] = [];
+    try { lanes = control.list(); } catch { return; }
+    for (const item of lanes) {
+      if (!failed.has(item.deviceId) || (item.phase !== "starting" && item.phase !== "streaming")) continue;
+      try { await control.stop(item.deviceId); } catch { /* isolated */ }
+    }
+  };
   const invokeMedia = (action: () => unknown): LowLatencyResult => {
     try {
       const result = action();
@@ -117,8 +132,12 @@ function create(dependencies: LowLatencyMediaDependencies): LowLatencyMediaInsta
       if (disposed) return failure("DISPOSED");
       try {
         const result = await media.evaluate(now);
-        if (result.ok) return success();
-        return failure(result.code);
+        if (!result.ok) {
+          await stopActiveStreams();
+          return failure(result.code);
+        }
+        await stopTimedOutPublishers();
+        return success();
       } catch { return failure("DEPENDENCY_FAILURE"); }
     },
     startStream: async (deviceId) => {

@@ -51,7 +51,7 @@ describe("NodeRuntime", () => {
     const port = await availablePort();
     const relay = NodeRuntime.createRelay({ address: { host: "127.0.0.1", port }, handshakeTimeoutMs: 1_000, maxConnections: 1, commandTimeoutMs: 1_000, missionTimeoutMs: 1_000 });
     await relay.start();
-    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/relay`);
     await once(socket, "open");
     const hello = RelayFrameCodec.encode({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
     if (!hello.ok) throw new Error("test setup failed");
@@ -72,7 +72,7 @@ describe("NodeRuntime", () => {
     const relay = NodeRuntime.createRelay({ address: { host: "127.0.0.1", port }, handshakeTimeoutMs: 1_000, maxConnections: 1, commandTimeoutMs: 1_000, missionTimeoutMs: 1_000 });
     try {
       await relay.start();
-      const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/relay`);
       await once(socket, "open");
       const hello = RelayFrameCodec.encode({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
       if (!hello.ok) throw new Error("test setup failed");

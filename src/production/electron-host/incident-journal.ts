@@ -82,9 +82,9 @@ function create(directory = defaultDirectory()): IncidentJournal {
 }
 
 function linkForMethod(method: string): IncidentLink {
-  if (method.startsWith("stream.") || method.startsWith("video.") || method.startsWith("webrtc.")) return "uplink";
-  if (method.startsWith("network.")) return "phone-pc";
-  return "downlink";
+  if (method.startsWith("stream.") || method.startsWith("video.") || method.startsWith("webrtc.")) return "downlink";
+  if (method.startsWith("network.") || method.startsWith("pairing.")) return "phone-pc";
+  return "uplink";
 }
 
 function invokeLevel(result: GatewayResult): IncidentLevel {
@@ -141,7 +141,7 @@ export function wrapGateway(gateway: DesktopUiGatewayInstance, journal: Incident
           return Object.freeze({ ok: false as const, code: "INVALID_INPUT" as const });
         }
         journal.record({
-          link: action.startsWith("stream") ? "uplink" : action.startsWith("pairing") ? "phone-pc" : "downlink",
+          link: action.startsWith("stream") || action.startsWith("video") || action.startsWith("webrtc") ? "downlink" : action.startsWith("pairing") ? "phone-pc" : "uplink",
           level: "WARN",
           event: "CONSOLE_BLOCKED",
           detail: `${action} ${reason}`,
@@ -258,7 +258,7 @@ export function watchApplication(application: { snapshot: () => unknown; subscri
       const last = previousFacts.get(deviceId) ?? {};
       for (const [key, value] of Object.entries(facts)) {
         if (last[key] === value) continue;
-        const link: IncidentLink = key === "mission" || key === "stream" ? "downlink" : key === "video" || key === "media" ? "uplink" : "phone-pc";
+        const link: IncidentLink = key === "mission" ? "uplink" : key === "stream" || key === "video" || key === "media" ? "downlink" : "phone-pc";
         const level: IncidentLevel = value === "failed" || value === "disconnected" || value === "not-ready" ? "WARN" : "INFO";
         journal.record({
           link,
@@ -286,7 +286,7 @@ export function mediaLogger(journal: IncidentJournal): (event: { readonly kind: 
   return (event) => {
     const failed = /fail|error|stderr/i.test(event.kind);
     journal.record({
-      link: "uplink",
+      link: "downlink",
       level: failed ? "WARN" : "INFO",
       event: event.kind.toUpperCase().replace(/[^A-Z0-9]+/g, "_"),
       ...(event.deviceId === undefined ? {} : { deviceId: event.deviceId }),

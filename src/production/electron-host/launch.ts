@@ -49,8 +49,11 @@ const mediaMtxPath = (): string => {
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
   return candidates.find((value) => existsSync(value)) ?? candidates[0] ?? "mediamtx";
 };
+const hotspotIpv4 = (ipv4: string): boolean =>
+  ipv4.startsWith("172.20.10.") || ipv4.startsWith("192.168.42.") || ipv4.startsWith("192.168.43.") || ipv4.startsWith("192.168.137.");
 const cardScore = (name: string, ipv4: string, kind: "wifi" | "physical"): number => {
   if (virtualName(name)) return 100;
+  if (hotspotIpv4(ipv4)) return -10;
   if (kind === "wifi" || wifiName(name)) return 0;
   if (ipv4.startsWith("192.168.56.")) return 40;
   return 10;
@@ -87,6 +90,7 @@ async function launch(): Promise<void> {
   }
   const mediaInterfaces = [preferred];
   const relayHint = `ws://${preferred.ipv4}:${relayPort}/relay`;
+  let nextConfirmationId = 0;
   journal.record({ link: "phone-pc", level: "INFO", event: "RELAY_HINT", detail: `relay ${relayHint}` });
   app.setName("Sky Command");
   const ffmpegCandidates = discoverFfmpegCandidates(projectRoot);
@@ -94,7 +98,7 @@ async function launch(): Promise<void> {
   const mediaPorts = createMediaPorts((deviceId) => notifyPlaylistReady(deviceId), mediaLogger(journal));
   const usableFfmpeg = ffmpegCandidates.filter((candidate) => mediaPorts.fileFacts.isExecutableFile(candidate.executablePath));
   if (usableFfmpeg.length === 0) {
-    journal.record({ link: "uplink", level: "WARN", event: "FFMPEG_NOT_FOUND", detail: "Legacy RTMP/HLS media is unavailable" });
+    journal.record({ link: "downlink", level: "WARN", event: "FFMPEG_NOT_FOUND", detail: "Legacy RTMP/HLS media is unavailable" });
   }
   let window: BrowserWindow | null = null;
   const whepBridge = createWhepPlaybackBridge((channel, payload) => {
@@ -137,12 +141,12 @@ async function launch(): Promise<void> {
           player: whepBridge.port,
           clock: () => Date.now(),
         },
-        options: { httpPort: webrtcHttpPort, webRtcUdpPort, apiPort: webrtcApiPort, pathPrefix: "/live", mode: "whip-whep", publisherTimeoutMs: 15_000 },
+        options: { httpPort: webrtcHttpPort, webRtcUdpPort: webrtcUdpPort, apiPort: webrtcApiPort, pathPrefix: "/live", mode: "whip-whep", publisherTimeoutMs: 15_000 },
         startInput: { interfaces: mediaInterfaces, manualHost: preferred.ipv4, executablePath: mediaMtxPath() },
       },
     },
     mission: { createMissionId: (deviceId: string, routeId: string) => `mission-${deviceId}-${routeId}` },
-    flight: { now: () => Date.now(), confirmation: { ttlMs: 15_000, createConfirmationId: () => `confirm-${Date.now()}` } },
+    flight: { now: () => Date.now(), confirmation: { ttlMs: 15_000, createConfirmationId: () => `confirm-${++nextConfirmationId}` } },
     now: () => Date.now(),
   });
   if (!created.ok) throw new Error("桌面应用配置无效");
@@ -161,7 +165,7 @@ async function launch(): Promise<void> {
   watchApplication(created.value, journal);
   const gateway = wrapGateway(DesktopUiGateway.create({
     application: created.value,
-    relayHint: () => lanCards().map((card) => `ws://${card.ipv4}:${relayPort}/relay`),
+    relayHint: () => [`ws://${preferred.ipv4}:${relayPort}/relay`],
   }), journal);
   const shell = DesktopShell.create({
     applicationGateway: gateway,

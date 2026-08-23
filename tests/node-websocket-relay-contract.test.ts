@@ -226,4 +226,44 @@ describe("node websocket relay adapter contract", () => {
     await expect(listener.close()).resolves.toBeUndefined();
     expect(server.closeCalls).toBe(1);
   });
+
+  it("生产 WebSocket 服务器只接受 /relay 路径", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../src/adapters/node-websocket-relay/index.ts", import.meta.url), "utf8");
+    expect(source).toContain("path: \"/relay\"");
+  });
+
+  it("paired sockets that miss a pong are closed as peer-closed", async () => {
+    class PingSocket extends Socket {
+      pings = 0;
+      ping(): void { this.pings += 1; }
+    }
+    const timers: Array<() => void> = [];
+    const server = new Server();
+    const transport = NodeWebSocketRelayTransport.create({
+      factory: { openState: 1, create: () => server },
+      pingIntervalMs: 15_000,
+      scheduler: {
+        setInterval: (callback: () => void) => { timers.push(callback); return timers.length; },
+        clearInterval: () => undefined,
+      },
+    });
+    const reasons: string[] = [];
+    const listening = transport.listen({ host: "127.0.0.1", port: 15 }, (connection) => {
+      connection.onClose((reason) => { reasons.push(reason ?? ""); });
+    });
+    server.emit("listening");
+    const listener = await listening;
+    const socket = new PingSocket();
+    server.sockets.push(socket);
+    server.emit("connection", socket);
+    expect(timers).toHaveLength(1);
+    timers[0]!();
+    expect(socket.pings).toBe(1);
+    expect(socket.readyState).toBe(1);
+    timers[0]!();
+    expect(socket.readyState).toBe(3);
+    expect(reasons).toEqual(["peer-closed"]);
+    await listener.close();
+  });
 });

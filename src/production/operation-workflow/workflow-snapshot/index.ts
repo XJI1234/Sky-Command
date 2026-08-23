@@ -15,7 +15,7 @@ const pose = (payload: unknown): Readonly<{ readonly latitude: number | null; re
   return freeze({ latitude: coordinates ? latitude : null, longitude: coordinates ? longitude : null, altitudeMeters });
 };
 
-function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly telemetry: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
+function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly telemetry: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly whipStream?: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
   const streams = read(input.media, "streams");
   const mediaStreams = Array.isArray(streams) ? streams : [];
   const devices = input.devices.map((device) => {
@@ -32,6 +32,7 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
       assignment: device.assignment,
       mission: device.mission,
       stream: device.stream,
+      whipStream: device.whipStream ?? freeze({ deviceId: device.deviceId, phase: "idle", lastOperation: null, failureCode: null, reason: null }),
       video: freeze({ phase: videoPhase, selected: input.selectedVideoDeviceId === device.deviceId }),
       settings: device.settings,
       pendingFlightAction: device.pendingFlightAction

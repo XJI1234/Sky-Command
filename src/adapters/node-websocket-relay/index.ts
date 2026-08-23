@@ -6,6 +6,7 @@ export interface WebSocketLike {
   readonly OPEN: number;
   send(data: Uint8Array, callback?: (error?: Error) => void): void;
   close(): void;
+  ping?(): void;
   on(event: string, listener: (...args: any[]) => void): this;
   off?(event: string, listener: (...args: any[]) => void): this;
 }
@@ -21,11 +22,20 @@ export interface WebSocketServerFactory {
   create(address: ListenAddress): WebSocketServerLike;
 }
 
-export interface NodeWebSocketRelayOptions { readonly factory?: WebSocketServerFactory; }
+export interface RelayPingScheduler {
+  setInterval(callback: () => void, milliseconds: number): unknown;
+  clearInterval(handle: unknown): void;
+}
+
+export interface NodeWebSocketRelayOptions {
+  readonly factory?: WebSocketServerFactory;
+  readonly pingIntervalMs?: number;
+  readonly scheduler?: RelayPingScheduler;
+}
 
 const productionFactory: WebSocketServerFactory = Object.freeze({
   openState: WebSocket.OPEN,
-  create: (address: ListenAddress) => new WebSocketServer({ host: address.host, port: address.port })
+  create: (address: ListenAddress) => new WebSocketServer({ host: address.host, port: address.port, path: "/relay" })
 });
 
 const stableReason = (reason: string): string => reason === "server-closed" || reason === "transport-error" ? reason : "peer-closed";
@@ -35,14 +45,18 @@ const copyBytes = (data: unknown): Uint8Array | null => {
   return null;
 };
 
-function adapt(socket: WebSocketLike, openState: number, onClosed: (connection: RelayConnection) => void): RelayConnection & { shutdown(reason: string): void } {
+function adapt(socket: WebSocketLike, openState: number, onClosed: (connection: RelayConnection) => void, ping: Readonly<{ readonly intervalMs: number; readonly scheduler: RelayPingScheduler }>): RelayConnection & { shutdown(reason: string): void } {
   const messageListeners = new Set<(bytes: Uint8Array) => void>();
   const closeListeners = new Set<(reason?: string) => void>();
   const errorListeners = new Set<() => void>();
   let closed = false;
+  let awaitingPong = false;
+  let pingTimer: unknown = null;
   const notifyClose = (reason: string): void => {
     if (closed) return;
     closed = true;
+    if (pingTimer !== null) ping.scheduler.clearInterval(pingTimer);
+    pingTimer = null;
     onClosed(connection);
     for (const listener of [...closeListeners]) { try { listener(stableReason(reason)); } catch { /* isolate caller */ } }
     messageListeners.clear(); errorListeners.clear();
@@ -74,11 +88,27 @@ function adapt(socket: WebSocketLike, openState: number, onClosed: (connection: 
     connection.shutdown("transport-error");
   });
   socket.on("close", () => notifyClose("peer-closed"));
+  socket.on("pong", () => { awaitingPong = false; });
+  if (ping.intervalMs > 0 && typeof socket.ping === "function") {
+    pingTimer = ping.scheduler.setInterval(() => {
+      if (closed) return;
+      if (awaitingPong) { connection.shutdown("peer-closed"); return; }
+      awaitingPong = true;
+      try { socket.ping!(); } catch { connection.shutdown("transport-error"); }
+    }, ping.intervalMs);
+  }
   return connection;
 }
 
 function create(options: NodeWebSocketRelayOptions = {}): RelayTransport {
   const factory = options.factory ?? productionFactory;
+  const ping = Object.freeze({
+    intervalMs: options.pingIntervalMs ?? 15_000,
+    scheduler: options.scheduler ?? Object.freeze({
+      setInterval: (callback: () => void, milliseconds: number) => setInterval(callback, milliseconds),
+      clearInterval: (handle: unknown) => { if (typeof handle === "object" || typeof handle === "number") clearInterval(handle as NodeJS.Timeout); },
+    }),
+  });
   return Object.freeze({
     listen(address: ListenAddress, onConnection: (connection: RelayConnection) => void): Promise<{ close(): Promise<void> }> {
       return new Promise((resolve, reject) => {
@@ -89,7 +119,7 @@ function create(options: NodeWebSocketRelayOptions = {}): RelayTransport {
         catch { reject(new Error("relay listener could not start")); return; }
         const handleError = (): void => { if (!listening) reject(new Error("relay listener could not start")); };
         const handleConnection = (socket: WebSocketLike): void => {
-          const connection = adapt(socket, factory.openState, (closed) => connections.delete(closed as RelayConnection & { shutdown(reason: string): void }));
+          const connection = adapt(socket, factory.openState, (closed) => connections.delete(closed as RelayConnection & { shutdown(reason: string): void }), ping);
           connections.add(connection);
           try { onConnection(connection); } catch { connection.shutdown("transport-error"); }
         };

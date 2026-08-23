@@ -83,5 +83,12 @@ describe("WhipStreamControl", () => {
     });
     await expect(rejected.start("phone-1")).resolves.toMatchObject({ ok: false, code: "RELAY_REJECTED", state: { phase: "failed" } });
     expect(rejected.recordDisconnected("phone-1")?.phase).toBe("disconnected");
+
+    const occupied = WhipStreamControl.create({
+      media: media(),
+      relay: { latestTelemetry: () => telemetry(), sendCommand: async () => ({ status: "rejected", detail: "Another video transport is active" }) },
+      capabilityGate: gate(),
+    });
+    await expect(occupied.start("phone-1")).resolves.toMatchObject({ ok: false, code: "RELAY_REJECTED", reason: "ANOTHER_VIDEO_TRANSPORT_ACTIVE", state: { reason: "ANOTHER_VIDEO_TRANSPORT_ACTIVE" } });
   });
 });
