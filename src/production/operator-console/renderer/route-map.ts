@@ -61,6 +61,7 @@ export function resizeRouteMap(): void {
 export function showRoutePreview(routeId: string, preview: RouteMapPreview, fly = true): void {
   const Cesium = cesium();
   if (viewer === undefined || viewer.isDestroyed()) return;
+  const routeViewer = viewer;
   viewer.entities.removeAll();
   drawnRouteId = routeId;
   const positions = preview.polyline.map((point) => positionOf(Cesium, point));
@@ -74,6 +75,13 @@ export function showRoutePreview(routeId: string, preview: RouteMapPreview, fly 
       material: Cesium.Color.fromCssColorString("#d7f16a"),
       clampToGround: false,
     },
+  });
+  preview.polyline.slice(1, -1).forEach((point, index) => {
+    routeViewer.entities.add({
+      name: `航点${index + 2}`,
+      position: positionOf(Cesium, point),
+      point: { pixelSize: 8, color: Cesium.Color.fromCssColorString("#52d6ff"), outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+    });
   });
   viewer.entities.add({
     name: "起点",
