@@ -55,6 +55,7 @@ const options = (relayPort: number, calls: string[], behavior: Readonly<{ readon
   },
   mission: { createMissionId: (deviceId: string, routeId: string) => `mission-${deviceId}-${routeId}` },
   flight: { now: () => 100, confirmation: { ttlMs: 1_000, createConfirmationId: () => "confirmation-1" } },
+  hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: 0 },
   now: () => 100,
 });
 
@@ -76,6 +77,8 @@ describe("DesktopApplication", () => {
       { ...base, media: { ...base.media, startInput: null } },
       { ...base, mission: null },
       { ...base, flight: null },
+      { ...base, hardwareReadiness: null },
+      { ...base, hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: -1 } },
       { ...base, now: null },
       { ...base, mission: { ...base.mission, createMissionId: null } },
       { ...base, flight: { ...base.flight, now: null } },

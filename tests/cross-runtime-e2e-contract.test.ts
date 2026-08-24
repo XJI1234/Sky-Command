@@ -156,7 +156,7 @@ describe("跨运行时桌面测试宿主", () => {
 
       expect(read).toMatchObject({ ok: true, domain: "camera" });
       expect(host.deviceSettings.snapshot(device.deviceId).camera).toMatchObject({ focusMode: "AUTO" });
-      expect(host.operations.devices()).toEqual([{ deviceId: device.deviceId }]);
+      expect(host.operations.devices()).toEqual([expect.objectContaining({ deviceId: device.deviceId, sessionId: expect.any(String) })]);
     } finally {
       await host.close();
     }
@@ -185,7 +185,7 @@ describe("跨运行时桌面测试宿主", () => {
       expect(secondSettings.status).toBe("succeeded");
       expect((await settleDji(host, host.relay.sendCommand(first.deviceId, {
         name: "live-stream.start",
-        fields: { rtmpUrl: text("rtmp://127.0.0.1/live/e2e-isolated-a") },
+        fields: { rtmpUrl: text("rtmp://192.168.50.10:19350/live/e2e-isolated-a") },
       }), first.deviceId)).status).toBe("succeeded");
 
       const [healthy, secondTelemetry] = await Promise.all([
@@ -369,7 +369,7 @@ describe("跨运行时桌面测试宿主", () => {
       expect((await send("pairing.status", {})).status).toBe("succeeded");
       expect((await send("pairing.start", {})).status).toBe("rejected");
       expect((await send("pairing.stop", {})).status).toBe("rejected");
-      expect((await settle("live-stream.start", { rtmpUrl: text("rtmp://127.0.0.1/live/equivalence") })).status).toBe("succeeded");
+      expect((await settle("live-stream.start", { rtmpUrl: text("rtmp://192.168.50.10:19350/live/equivalence") })).status).toBe("succeeded");
       expect((await settle("live-stream.stop", {})).status).toBe("succeeded");
       for (const name of ["flight.takeoff", "flight.land", "flight.return-home"]) {
         expect((await settle(name, { confirm: bool(true) })).status).toBe("succeeded");
@@ -734,7 +734,7 @@ describe("跨运行时桌面测试宿主", () => {
 
       expect((await settleDji(host, host.relay.sendCommand(device.deviceId, {
         name: "live-stream.start",
-        fields: { rtmpUrl: text("rtmp://127.0.0.1/live/e2e-relay-1") },
+        fields: { rtmpUrl: text("rtmp://192.168.50.10:19350/live/e2e-relay-1") },
       }))).status).toBe("succeeded");
       expect((await settleDji(host, host.relay.sendCommand(device.deviceId, {
         name: "live-stream.stop",

@@ -14,6 +14,8 @@ npm run desktop
 
 Relay 监听 `0.0.0.0:8080`。设备页提示与图传 RTMP/WHIP 主机使用同一块首选网卡：`ws://<首选IPv4>:8080/relay`。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。
 
+宿主在构造 `DesktopApplication` 时必须注入 `hardwareReadiness`：已选首选私网 IPv4 表示 `lanAddressAvailable: true`，`usableFfmpeg.length > 0` 表示 `legacyMediaAvailable`，`sessionStableAfterMs` 固定为 15,000。它们只供工作流在旧图传开始和直接飞控请求前做纯预检；不得作为退出条件，不得停止既有图传，不得阻止 WHIP/WHEP 服务、旁路图传或已存在飞控确认的停止/取消动作。
+
 事故日志写在 `%LOCALAPPDATA%\Sky Command\diagnostics\`：`incident.log` 给人读，`incident.ndjson` 给检索。同一目录的 `relay-events.ndjson` 仍是手机上报原件。日志按链路标记 `phone-pc`（配对/连接）、`uplink`（飞控/航线/设置命令）、`downlink`（图传 RTMP/FFmpeg/HLS/WebRTC 画面）、`phone`（手机上报），记录配对、命令结局、图传画面，以及操作台拦住未发出的动作。不记录密钥、路径、RTMP URL 或原始异常。
 
 ## 旧 HLS 图传

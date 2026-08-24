@@ -24,7 +24,17 @@ application.dispose() -> Promise<void>
 
 `workflow()` 仅供下一层桌面 UI 网关调用。Electron 主进程和渲染进程均不得把其返回值直接交给页面。
 
-`create` 只接受：已校验的网络设置、中继监听配置、航线库配置、媒体适配器和启动输入、任务 ID 生成器、飞控确认配置、时钟及可选诊断记录器。低延迟旁路配置可选，形状为：
+`create` 只接受：已校验的网络设置、中继监听配置、航线库配置、媒体适配器和启动输入、任务 ID 生成器、飞控确认配置、时钟、实机预检桌面事实及可选诊断记录器。实机预检事实形状为：
+
+```text
+hardwareReadiness: {
+  lanAddressAvailable: boolean
+  legacyMediaAvailable: boolean
+  sessionStableAfterMs: number
+}
+```
+
+生产装配必须提供实际 LAN 与可执行 FFmpeg 探测结果，且 `sessionStableAfterMs` 为 15,000。它们只交给 `operation-workflow` 的开始操作预检，不改变中继、媒体或低延迟旁路的启动和生命周期。低延迟旁路配置可选，形状为：
 
 ```text
 lowLatency?: {

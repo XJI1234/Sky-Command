@@ -3,12 +3,14 @@ import { WorkflowSnapshot } from "./workflow-snapshot/index.js";
 import { WorkflowSubscriptions } from "./workflow-subscriptions/index.js";
 import { WorkflowActions } from "./workflow-actions/index.js";
 import { CapabilityGate } from "../../modules/device-console/index.js";
+import { HardwareReadiness, type HardwareReadinessResult, type HardwareReadinessTarget } from "../../modules/hardware-readiness/index.js";
 
 type RecordValue = Record<string, unknown>;
 interface Dependencies {
   readonly relayOperations: RecordValue; readonly routeLibrary: RecordValue; readonly missionControl: RecordValue;
   readonly liveStreamControl: RecordValue; readonly mediaPipeline: RecordValue; readonly flightControl: RecordValue;
   readonly deviceSettings: RecordValue; readonly whipStreamControl?: RecordValue; readonly now: () => number;
+  readonly hardwareReadiness: RecordValue;
 }
 type WorkflowResult = Readonly<{ readonly ok: true; readonly value?: unknown }> | Readonly<{ readonly ok: false; readonly code: string; readonly value?: unknown }>;
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
@@ -16,7 +18,7 @@ const validId = (value: unknown): value is string => typeof value === "string" &
 const record = (value: unknown): RecordValue | null => value !== null && typeof value === "object" ? value as RecordValue : null;
 const read = (value: unknown, key: string): unknown => { try { return record(value)?.[key]; } catch { return undefined; } };
 const success = (value?: unknown): WorkflowResult => freeze({ ok: true as const, ...(value === undefined ? {} : { value }) });
-const failure = (code: string): WorkflowResult => freeze({ ok: false as const, code });
+const failure = (code: string, value?: unknown): WorkflowResult => freeze({ ok: false as const, code, ...(value === undefined ? {} : { value }) });
 const invoke = async (target: unknown, method: string, ...args: unknown[]): Promise<WorkflowResult> => {
   const operation = read(target, method);
   if (typeof operation !== "function") return failure("DEPENDENCY_FAILURE");
@@ -47,8 +49,17 @@ function create(dependencies: Dependencies) {
   };
   const onlineIds = (): readonly string[] => freeze(deviceRecords().map((item) => item.deviceId));
   const sessionMap = (): Map<string, string | undefined> => new Map(deviceRecords().map((item) => [item.deviceId, item.sessionId]));
+  const clock = (): number | null => {
+    try {
+      const value = dependencies.now();
+      return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+    } catch { return null; }
+  };
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
+  const connectedSince = new Map<string, number>();
+  const initialConnectionTime = clock();
+  if (initialConnectionTime !== null) for (const deviceId of previousOnline) connectedSince.set(deviceId, initialConnectionTime);
   const online = (deviceId: string): boolean => onlineIds().includes(deviceId);
   const route = (routeId: string): RecordValue | null => {
     const list = read(dependencies.routeLibrary, "list");
@@ -71,6 +82,7 @@ function create(dependencies: Dependencies) {
   const onDisconnects = (): void => {
     const current = new Set(onlineIds());
     const sessions = sessionMap();
+    const observedAt = clock();
     for (const deviceId of previousOnline) {
       const gone = !current.has(deviceId);
       const previousSession = previousSessions.get(deviceId);
@@ -78,12 +90,20 @@ function create(dependencies: Dependencies) {
       const replaced = !gone && previousSession !== undefined && nextSession !== undefined && previousSession !== nextSession;
       if (!gone && !replaced) continue;
       if (gone) {
+        connectedSince.delete(deviceId);
         assignments.removeDevice(deviceId);
         const confirmationId = pending.get(deviceId);
         if (confirmationId !== undefined) { pending.delete(deviceId); const cancel = read(dependencies.flightControl, "cancel"); try { if (typeof cancel === "function") void cancel(deviceId, confirmationId); } catch { /* a disconnect still clears local state */ } }
         const clear = read(dependencies.flightControl, "clear"); try { if (typeof clear === "function") clear(deviceId); } catch { /* leftover confirmations must not survive reconnect */ }
       }
       forgetVideo(deviceId);
+    }
+    for (const deviceId of current) {
+      const replaced = previousOnline.has(deviceId) && previousSessions.get(deviceId) !== undefined && sessions.get(deviceId) !== undefined && previousSessions.get(deviceId) !== sessions.get(deviceId);
+      if (!previousOnline.has(deviceId) || replaced) {
+        if (observedAt === null) connectedSince.delete(deviceId);
+        else connectedSince.set(deviceId, observedAt);
+      }
     }
     previousOnline = current;
     previousSessions = sessions;
@@ -102,6 +122,36 @@ function create(dependencies: Dependencies) {
     const capabilities = read(value, "capabilities");
     const decision = CapabilityGate.evaluate({ operation, relayConnected: value !== null, sdkRegistered: read(payload, "sdkRegistered"), remoteControllerConnected: read(payload, "remoteControllerConnected"), flightControllerConnected: read(payload, "flightControllerConnected"), aircraftConnected: read(payload, "connected"), capabilities });
     return decision.ok === true && decision.value.enabled === true;
+  };
+  const readiness = (deviceId: string, target: HardwareReadinessTarget): HardwareReadinessResult => {
+    const configuration = record(dependencies.hardwareReadiness);
+    const configuredDelay = read(configuration, "sessionStableAfterMs");
+    const observedAt = clock();
+    const connectedAt = connectedSince.get(deviceId);
+    const relayStable = observedAt !== null && connectedAt !== undefined && typeof configuredDelay === "number" && Number.isFinite(configuredDelay) && configuredDelay >= 0 && observedAt - connectedAt >= configuredDelay;
+    const payload = record(read(telemetry(deviceId), "payload")) ?? freeze({});
+    const payloadFacts: Record<string, boolean> = {};
+    for (const key of ["sdkRegistered", "remoteControllerConnected", "flightControllerConnected", "connected"]) {
+      const value = read(payload, key);
+      if (typeof value === "boolean") payloadFacts[key] = value;
+    }
+    return HardwareReadiness.evaluate({
+      desktop: {
+        lanAddressAvailable: read(configuration, "lanAddressAvailable") as boolean,
+        legacyMediaAvailable: read(configuration, "legacyMediaAvailable") as boolean,
+      },
+      relayConnected: online(deviceId),
+      relayStable,
+      payload: payloadFacts,
+    }, target);
+  };
+  const readinessSummary = (deviceId: string): Readonly<{ readonly ok: boolean; readonly legacyVideo: HardwareReadinessResult; readonly flightControl: HardwareReadinessResult; readonly blockers: readonly unknown[] }> => {
+    const legacyVideo = readiness(deviceId, "legacy-video");
+    const flightControl = readiness(deviceId, "flight-control");
+    const seen = new Set<string>();
+    const blockers: unknown[] = [];
+    for (const result of [legacyVideo, flightControl]) for (const blocker of result.blockers) if (!seen.has(blocker.code)) { seen.add(blocker.code); blockers.push(blocker); }
+    return freeze({ ok: legacyVideo.ok && flightControl.ok, legacyVideo, flightControl, blockers: freeze(blockers) });
   };
   const actions = WorkflowActions.create({
     online,
@@ -153,8 +203,17 @@ function create(dependencies: Dependencies) {
     assignRoute: (deviceId: string, routeId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId) || !validId(routeId)) return failure("INVALID_INPUT"); if (!online(deviceId)) return failure("DEVICE_OFFLINE"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); if (read(route(routeId), "classification") !== "upload-candidate") return failure("ROUTE_NOT_UPLOADABLE"); assignments.assign(deviceId, routeId); publish(); return success(); },
     clearAssignment: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); assignments.clear(deviceId); publish(); return success(); },
     stage: (deviceId: string) => mission("stage", deviceId), upload: (deviceId: string) => mission("upload", deviceId), start: (deviceId: string) => mission("start", deviceId), pause: (deviceId: string) => mission("pause", deviceId), resume: (deviceId: string) => mission("resume", deviceId), stop: (deviceId: string) => mission("stop", deviceId),
-    startStream: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.startStream(deviceId)),
+    startStream: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
+      if (!validId(deviceId) || !online(deviceId)) return actions.startStream(deviceId);
+      const decision = readiness(deviceId, "legacy-video");
+      return decision.ok ? actions.startStream(deviceId) : failure("HARDWARE_NOT_READY", decision);
+    }),
     stopStream: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.stopStream(deviceId)),
+    checkHardwareReadiness: (deviceId: string): WorkflowResult => {
+      if (disposed) return failure("DISPOSED");
+      if (!validId(deviceId)) return failure("INVALID_INPUT");
+      return success(readinessSummary(deviceId));
+    },
     selectVideo: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!online(deviceId)) return failure("DEVICE_OFFLINE"); const streams = read(media(), "streams"); const selected = Array.isArray(streams) && streams.some((entry) => read(entry, "deviceId") === deviceId && read(entry, "phase") === "ready"); if (!selected) return failure("VIDEO_NOT_READY"); const player = read(dependencies.mediaPipeline, "selectPlayer"); if (typeof player !== "function") return failure("DEPENDENCY_FAILURE"); try { const outcome = player(deviceId); selectedVideoDeviceId = deviceId; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
     clearVideo: (): WorkflowResult => { if (disposed) return failure("DISPOSED"); const clear = read(dependencies.mediaPipeline, "clearPlayer"); if (typeof clear !== "function") return failure("DEPENDENCY_FAILURE"); try { const outcome = clear(); selectedVideoDeviceId = null; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
     refreshMedia: (): WorkflowResult => {
@@ -182,7 +241,16 @@ function create(dependencies: Dependencies) {
     writeTransmissionSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.writeTransmission(deviceId, patch)),
     readCameraSettings: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.readCamera(deviceId)),
     writeCameraSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.writeCamera(deviceId, patch)),
-    requestFlightAction: (deviceId: string, action: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); const result = actions.requestFlight(deviceId, action); const outcome = read(result, "value"); const confirmationId = read(read(outcome, "confirmation"), "confirmationId"); if (result.ok && read(outcome, "ok") === true && validId(confirmationId)) pending.set(deviceId, confirmationId); publish(); return result; },
+    requestFlightAction: (deviceId: string, action: string): WorkflowResult => {
+      if (disposed) return failure("DISPOSED");
+      const decision = validId(deviceId) && online(deviceId) ? readiness(deviceId, "flight-control") : null;
+      const result = decision !== null && !decision.ok ? failure("HARDWARE_NOT_READY", decision) : actions.requestFlight(deviceId, action);
+      const outcome = read(result, "value");
+      const confirmationId = read(read(outcome, "confirmation"), "confirmationId");
+      if (result.ok && read(outcome, "ok") === true && validId(confirmationId)) pending.set(deviceId, confirmationId);
+      publish();
+      return result;
+    },
     confirmFlightAction: async (deviceId: string, confirmationId: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
       const result = await actions.confirmFlight(deviceId, confirmationId);

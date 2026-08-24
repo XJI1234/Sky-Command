@@ -28,6 +28,7 @@ gateway.dispose() -> void
 | 类别 | 方法 |
 | --- | --- |
 | 状态 | `state.snapshot`、`network.hint` |
+| 实机预检 | `hardware.readiness` |
 | 航线 | `route.import`、`route.preview`、`route.select`、`route.remove` |
 | 分配 | `assignment.assign`、`assignment.clear` |
 | 任务 | `mission.stage`、`mission.upload`、`mission.start`、`mission.pause`、`mission.resume`、`mission.stop` |
@@ -43,7 +44,9 @@ gateway.dispose() -> void
 
 `route.import` 仅接收 `{ fileName, bytes }`，其中 `bytes` 为 `Uint8Array`；渲染层不能提供路径。
 
-每个设备操作均要求 `{ deviceId }`；航线操作要求 `{ routeId }`；分配要求 `{ deviceId, routeId }`；设置写入额外要求 `{ patch }`；飞控请求要求 `{ deviceId, action }`，确认/取消额外要求 `{ confirmationId }`。`state.snapshot`、`stream.refresh`、`stream.clear`、`network.hint` 不接受输入。不接受多余字段、控制字符、空标识符、非有限时间值或错误值类型。
+`hardware.readiness` 与每个设备操作均要求唯一 `{ deviceId }`；航线操作要求 `{ routeId }`；分配要求 `{ deviceId, routeId }`；设置写入额外要求 `{ patch }`；飞控请求要求 `{ deviceId, action }`，确认/取消额外要求 `{ confirmationId }`。`state.snapshot`、`stream.refresh`、`stream.clear`、`network.hint` 不接受输入。不接受多余字段、控制字符、空标识符、非有限时间值或错误值类型。
+
+`hardware.readiness` 只委托 `workflow.checkHardwareReadiness(deviceId)`，返回脱敏后的旧图传与直接飞控预检及可显示阻塞项；它不调用 `stream.start`、`flight.request`、`webrtc.*` 或任一媒体服务生命周期方法。
 
 ## 5. 快照和视频资源
 

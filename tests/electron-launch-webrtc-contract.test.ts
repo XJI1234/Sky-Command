@@ -28,6 +28,9 @@ describe("Electron 主进程低延迟装配", () => {
     const text = source();
     expect(text).toContain("legacyMediaRequired: false");
     expect(text).toContain('event: "FFMPEG_NOT_FOUND"');
+    expect(text).toContain("hardwareReadiness:");
+    expect(text).toContain("legacyMediaAvailable: usableFfmpeg.length > 0");
+    expect(text).toContain("sessionStableAfterMs: 15_000");
     expect(text).not.toContain('dialog.showErrorBox("Sky Command", "未找到可用的 FFmpeg');
   });
 });

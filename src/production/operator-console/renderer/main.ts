@@ -48,6 +48,14 @@ const operatorNotice = (value: unknown): string => {
   const reasonOf = (source: unknown): string | null => typeof read(source, "reason") === "string" ? read(source, "reason") as string : null;
   const reason = reasonOf(inner) ?? reasonOf(value);
   const code = codeOf(inner) ?? codeOf(value);
+  if (code === "HARDWARE_NOT_READY") {
+    const blockers = read(inner, "blockers") ?? read(value, "blockers");
+    if (Array.isArray(blockers)) {
+      const messages = blockers.map((item) => read(item, "message")).filter((message): message is string => typeof message === "string" && message.length > 0);
+      if (messages.length > 0) return `实机预检未通过：${messages.join("；")}`;
+    }
+    return "实机预检未通过";
+  }
   if (reason === "ANOTHER_VIDEO_TRANSPORT_ACTIVE") return "另一路图传正在使用，请先停止";
   if (reason === "VIDEO_TRANSPORT_FAILED") return "图传未能完成";
   if (reason === "VIDEO_TRANSPORT_UNAVAILABLE") return "图传当前不可用";
@@ -550,7 +558,7 @@ el("route-remove").addEventListener("click", async () => {
   await render();
 });
 
-document.querySelectorAll("[data-action]").forEach((button) => {
+  document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     const action = (button as HTMLButtonElement).dataset.action ?? "";
     if (action === "webrtc-start" || action === "webrtc-stop") {
@@ -558,6 +566,11 @@ document.querySelectorAll("[data-action]").forEach((button) => {
       return;
     }
     const view = await projectView();
+    if (action === "hardware-readiness") {
+      if (view.missionDeviceId === null) { show("请先选择任务飞机"); return; }
+      show(operatorNotice(await bridge().invoke("hardware-readiness", { deviceId: view.missionDeviceId })));
+      return;
+    }
     const streamAction = action.startsWith("stream-") || action.startsWith("webrtc-stream-");
     const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
     if (action === "stream-select") {

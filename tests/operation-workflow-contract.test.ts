@@ -3,6 +3,8 @@ import { OperationWorkflow } from "../src/production/operation-workflow/index.js
 import { OperatorConsole } from "../src/production/operator-console/index.js";
 import { RouteLibrary } from "../src/modules/route-library/index.js";
 
+const readyHardware = { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: 0 };
+
 const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkflow.create({
   relayOperations: { devices: () => [{ deviceId: "relay-a" }], telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: {} }), subscribe: () => () => undefined },
   routeLibrary: { list: () => [{ routeId: "route-a", classification: "upload-candidate" }], importFile: async () => ({ status: "cancelled" }), getPreview: () => ({ ok: true }), remove: () => ({ ok: true }), select: () => ({ ok: true }), getMissionPayload: () => ({ ok: false }), getSelected: () => null, clear: () => undefined },
@@ -11,6 +13,7 @@ const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkf
   mediaPipeline: { snapshot: () => ({ streams: [] }), evaluate: () => ({ ok: true }), selectPlayer: () => ({ ok: true }), clearPlayer: () => ({ ok: true }) },
   flightControl: { request: () => ({ ok: true, confirmation: { confirmationId: "confirm-a" } }), confirm: async () => ({ ok: true }), cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined },
   deviceSettings: { snapshot: () => ({}), readTransmission: async () => ({ ok: true }), writeTransmission: async () => ({ ok: true }), readCamera: async () => ({ ok: true }), writeCamera: async () => ({ ok: true }) },
+  hardwareReadiness: readyHardware,
   now: () => 1,
   ...overrides,
 } as never);
@@ -73,7 +76,7 @@ describe("飞行作业工作流模块契约", () => {
       liveStreamControl: { start: async () => ({ ok: false }), stop: async () => ({ ok: false }), get: () => ({ phase: "idle" }), list: () => [], recordDisconnected: () => null, forget: () => false, subscribe: () => () => undefined },
       mediaPipeline: { snapshot: () => ({ phase: "running", streams: [], player: {} }), evaluate: () => ({ ok: true, value: {} }), selectPlayer: () => ({ ok: true, value: {} }), clearPlayer: () => ({ ok: true, value: {} }) },
       flightControl: { request: () => ({ ok: true, code: "CONFIRMATION_REQUIRED", confirmation: { deviceId: "relay-a", action: "takeoff", confirmationId: "confirm-1" } }), confirm: async () => ({ ok: false }), cancel: (deviceId: string, confirmationId: string) => { cancelled.push({ deviceId, confirmationId }); return { ok: true, code: "CANCELLED" }; }, get: () => null, subscribe: () => () => undefined, dispose: () => undefined },
-      deviceSettings: { snapshot: () => ({}), readTransmission: async () => ({}), writeTransmission: async () => ({}), readCamera: async () => ({}), writeCamera: async () => ({}) }, now: () => 1
+      deviceSettings: { snapshot: () => ({}), readTransmission: async () => ({}), writeTransmission: async () => ({}), readCamera: async () => ({}), writeCamera: async () => ({}) }, hardwareReadiness: readyHardware, now: () => 1
     });
 
     expect(workflow.assignRoute("relay-a", "route-ok")).toMatchObject({ ok: true });
@@ -108,7 +111,7 @@ describe("飞行作业工作流模块契约", () => {
       liveStreamControl: { start: async (id: string) => { calls.push(`stream-start:${id}`); return { ok: true }; }, stop: async (id: string) => { calls.push(`stream-stop:${id}`); return { ok: true }; }, get: () => ({ phase: "idle" }), list: () => [], recordDisconnected: () => null, forget: () => false, subscribe: () => () => undefined },
       mediaPipeline: { snapshot: () => ({ streams: [] }), evaluate: (now: number) => { calls.push(`media:${now}`); return { ok: true }; }, selectPlayer: (id: string) => { calls.push(`player:${id}`); return { ok: true }; }, clearPlayer: () => ({ ok: true }) },
       flightControl: { request: () => ({ ok: true, confirmation: { confirmationId: "confirm-1" } }), confirm: async (id: string, confirmation: string) => { calls.push(`confirm:${id}:${confirmation}`); return { ok: true }; }, cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined },
-      deviceSettings: { snapshot: () => ({}), readTransmission: async (id: string) => { calls.push(`read-transmission:${id}`); return { ok: true }; }, writeTransmission: async (id: string, patch: unknown) => { calls.push(`write-transmission:${id}:${JSON.stringify(patch)}`); return { ok: true }; }, readCamera: async (id: string) => { calls.push(`read-camera:${id}`); return { ok: true }; }, writeCamera: async (id: string, patch: unknown) => { calls.push(`write-camera:${id}:${JSON.stringify(patch)}`); return { ok: true }; } }, now: () => 7
+      deviceSettings: { snapshot: () => ({}), readTransmission: async (id: string) => { calls.push(`read-transmission:${id}`); return { ok: true }; }, writeTransmission: async (id: string, patch: unknown) => { calls.push(`write-transmission:${id}:${JSON.stringify(patch)}`); return { ok: true }; }, readCamera: async (id: string) => { calls.push(`read-camera:${id}`); return { ok: true }; }, writeCamera: async (id: string, patch: unknown) => { calls.push(`write-camera:${id}:${JSON.stringify(patch)}`); return { ok: true }; } }, hardwareReadiness: readyHardware, now: () => 7
     });
     await workflow.upload("relay-a");
     await workflow.startStream("relay-a");
@@ -121,6 +124,55 @@ describe("飞行作业工作流模块契约", () => {
     workflow.requestFlightAction("relay-a", "takeoff");
     await workflow.confirmFlightAction("relay-a", "confirm-1");
     expect(calls).toEqual(["upload:relay-a", "stream-start:relay-a", "stream-stop:relay-a", "media:7", "read-transmission:relay-a", "write-transmission:relay-a:{\"bandwidth\":\"BANDWIDTH_20MHZ\"}", "read-camera:relay-a", "write-camera:relay-a:{\"focusMode\":\"AUTO\"}", "confirm:relay-a:confirm-1"]);
+  });
+
+  it("旧图传媒体不可用时在电脑端阻止向手机在线服务发送启动命令", async () => {
+    let starts = 0;
+    const workflow = workflowWith({
+      liveStreamControl: {
+        start: async () => { starts += 1; return { ok: true }; },
+        stop: async () => ({ ok: true }),
+        get: () => ({ phase: "idle" }),
+        list: () => [],
+        recordDisconnected: () => undefined,
+        forget: () => false,
+        subscribe: () => () => undefined,
+      },
+      hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: false, sessionStableAfterMs: 0 },
+    });
+
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({
+      ok: false,
+      code: "HARDWARE_NOT_READY",
+      value: { blockers: [{ code: "LEGACY_MEDIA_UNAVAILABLE" }] },
+    });
+    expect(starts).toBe(0);
+  });
+
+  it("飞控链路未就绪时在电脑端阻止向手机发送直接飞行动作", () => {
+    let requests = 0;
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a" }],
+        telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: false, connected: false } }),
+        subscribe: () => () => undefined,
+      },
+      flightControl: {
+        request: () => { requests += 1; return { ok: true, confirmation: { confirmationId: "confirm-a" } }; },
+        confirm: async () => ({ ok: true }),
+        cancel: () => ({ ok: true }),
+        get: () => null,
+        subscribe: () => () => undefined,
+        dispose: () => undefined,
+      },
+    });
+
+    expect(workflow.requestFlightAction("relay-a", "takeoff")).toMatchObject({
+      ok: false,
+      code: "HARDWARE_NOT_READY",
+      value: { blockers: [{ code: "FLIGHT_CONTROLLER_DISCONNECTED" }, { code: "AIRCRAFT_DISCONNECTED" }] },
+    });
+    expect(requests).toBe(0);
   });
 
   it("导入预览和删除航线时保留航线库语义，并阻止删除已分配航线", async () => {
@@ -151,8 +203,8 @@ describe("飞行作业工作流模块契约", () => {
     expect(workflow.selectVideo("relay-a")).toMatchObject({ ok: false, code: "VIDEO_NOT_READY" });
     expect(workflow.refreshMedia()).toMatchObject({ ok: false, code: "CLOCK_FAILURE" });
     await expect(workflow.readCameraSettings("relay-a")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED" });
-    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-    expect(workflow.requestFlightAction("relay-a", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
+    expect(workflow.requestFlightAction("relay-a", "takeoff")).toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
     workflow.dispose();
     expect(workflow.selectRoute("route-a")).toMatchObject({ ok: false, code: "DISPOSED" });
     await expect(workflow.importRoute({})).resolves.toMatchObject({ ok: false, code: "DISPOSED" });
@@ -161,7 +213,7 @@ describe("飞行作业工作流模块契约", () => {
   it("隔离多设备图传与任务操作，并在取消确认后不允许复用", async () => {
     const calls: string[] = [];
     const workflow = OperationWorkflow.create({
-      relayOperations: { devices: () => [{ deviceId: "a" }, { deviceId: "b" }], telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: {} }), subscribe: () => () => undefined }, routeLibrary: { list: () => [{ routeId: "r", classification: "upload-candidate" }], importFile: async () => ({ status: "cancelled" }), getPreview: () => ({ ok: false }), remove: () => ({ ok: false }), select: () => ({ ok: false }), get: () => ({ ok: false }), getMissionPayload: () => ({ ok: false }), getSelected: () => null, clear: () => undefined }, missionControl: { stage: async (id: string) => { calls.push(`stage:${id}`); return { ok: true }; }, upload: async () => ({ ok: false }), start: async () => ({ ok: false }), pause: async () => ({ ok: false }), resume: async () => ({ ok: false }), stop: async () => ({ ok: false }), get: (deviceId: string) => ({ deviceId, phase: "idle" }), list: () => [], forget: () => false, subscribe: () => () => undefined, dispose: () => undefined }, liveStreamControl: { start: async (id: string) => { calls.push(`stream:${id}`); return { ok: true }; }, stop: async () => ({ ok: false }), get: () => ({ phase: "idle" }), list: () => [], recordDisconnected: () => null, forget: () => false, subscribe: () => () => undefined }, mediaPipeline: { snapshot: () => ({ streams: [] }), evaluate: () => ({ ok: true }), selectPlayer: () => ({ ok: true }), clearPlayer: () => ({ ok: true }) }, flightControl: { request: (id: string) => ({ ok: true, confirmation: { confirmationId: `c-${id}` } }), confirm: async () => ({ ok: false }), cancel: (id: string, confirmation: string) => { calls.push(`cancel:${id}:${confirmation}`); return { ok: true }; }, get: () => null, subscribe: () => () => undefined, dispose: () => undefined }, deviceSettings: { snapshot: () => ({}), readTransmission: async () => ({}), writeTransmission: async () => ({}), readCamera: async () => ({}), writeCamera: async () => ({}) }, now: () => 1
+      relayOperations: { devices: () => [{ deviceId: "a" }, { deviceId: "b" }], telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: {} }), subscribe: () => () => undefined }, routeLibrary: { list: () => [{ routeId: "r", classification: "upload-candidate" }], importFile: async () => ({ status: "cancelled" }), getPreview: () => ({ ok: false }), remove: () => ({ ok: false }), select: () => ({ ok: false }), get: () => ({ ok: false }), getMissionPayload: () => ({ ok: false }), getSelected: () => null, clear: () => undefined }, missionControl: { stage: async (id: string) => { calls.push(`stage:${id}`); return { ok: true }; }, upload: async () => ({ ok: false }), start: async () => ({ ok: false }), pause: async () => ({ ok: false }), resume: async () => ({ ok: false }), stop: async () => ({ ok: false }), get: (deviceId: string) => ({ deviceId, phase: "idle" }), list: () => [], forget: () => false, subscribe: () => () => undefined, dispose: () => undefined }, liveStreamControl: { start: async (id: string) => { calls.push(`stream:${id}`); return { ok: true }; }, stop: async () => ({ ok: false }), get: () => ({ phase: "idle" }), list: () => [], recordDisconnected: () => null, forget: () => false, subscribe: () => () => undefined }, mediaPipeline: { snapshot: () => ({ streams: [] }), evaluate: () => ({ ok: true }), selectPlayer: () => ({ ok: true }), clearPlayer: () => ({ ok: true }) }, flightControl: { request: (id: string) => ({ ok: true, confirmation: { confirmationId: `c-${id}` } }), confirm: async () => ({ ok: false }), cancel: (id: string, confirmation: string) => { calls.push(`cancel:${id}:${confirmation}`); return { ok: true }; }, get: () => null, subscribe: () => () => undefined, dispose: () => undefined }, deviceSettings: { snapshot: () => ({}), readTransmission: async () => ({}), writeTransmission: async () => ({}), readCamera: async () => ({}), writeCamera: async () => ({}) }, hardwareReadiness: readyHardware, now: () => 1
     });
     workflow.assignRoute("a", "r"); workflow.assignRoute("b", "r");
     await workflow.stage("a"); await workflow.startStream("b");
@@ -364,7 +416,7 @@ describe("飞行作业工作流模块契约", () => {
       liveStreamControl: { get: () => ({ phase: "idle" }), subscribe: () => () => undefined },
       mediaPipeline: { snapshot: () => ({ streams: [{ deviceId: "relay-a", phase: "ready" }] }), selectPlayer: () => ({ ok: true }) },
       flightControl: { request: () => ({ ok: true, confirmation: { confirmationId: "confirm-a" } }), get: () => null, subscribe: () => () => undefined },
-      deviceSettings: { snapshot: () => ({}) }, now: () => 1,
+      deviceSettings: { snapshot: () => ({}) }, hardwareReadiness: readyHardware, now: () => 1,
     } as never);
     expect(workflow.assignRoute("relay-a", "route-a")).toMatchObject({ ok: true });
     expect(workflow.requestFlightAction("relay-a", "takeoff")).toMatchObject({ ok: true });
@@ -464,10 +516,10 @@ describe("飞行作业工作流模块契约", () => {
     let online = true;
     let signal!: () => void;
     const cancellationFault = OperationWorkflow.create({
-      relayOperations: { devices: () => online ? [{ deviceId: "relay-a" }] : [], telemetry: () => null, subscribe: (listener: () => void) => { signal = listener; return () => undefined; } },
+      relayOperations: { devices: () => online ? [{ deviceId: "relay-a" }] : [], telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true } }), subscribe: (listener: () => void) => { signal = listener; return () => undefined; } },
       routeLibrary: { list: () => [{ routeId: "route-a", classification: "upload-candidate" }] }, missionControl: { get: (deviceId: string) => ({ deviceId, phase: "idle" }), subscribe: () => () => undefined },
       liveStreamControl: { get: () => ({ phase: "idle" }), subscribe: () => () => undefined }, mediaPipeline: { snapshot: () => ({ streams: null }) },
-      flightControl: { request: () => ({ ok: true, confirmation: { confirmationId: "confirm-a" } }), cancel: () => { throw new Error("cancel"); }, get: () => null, subscribe: () => () => undefined }, deviceSettings: { snapshot: () => ({}) }, now: () => 1,
+      flightControl: { request: () => ({ ok: true, confirmation: { confirmationId: "confirm-a" } }), cancel: () => { throw new Error("cancel"); }, get: () => null, subscribe: () => () => undefined }, deviceSettings: { snapshot: () => ({}) }, hardwareReadiness: readyHardware, now: () => 1,
     } as never);
     expect(cancellationFault.assignRoute("relay-a", "route-a")).toMatchObject({ ok: true });
     expect(cancellationFault.requestFlightAction("relay-a", "takeoff")).toMatchObject({ ok: true });

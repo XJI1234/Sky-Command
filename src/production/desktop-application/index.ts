@@ -38,6 +38,11 @@ export interface DesktopApplicationOptions {
   }>;
   readonly mission: MissionDispatcherOptions;
   readonly flight: FlightControlOptions;
+  readonly hardwareReadiness: Readonly<{
+    readonly lanAddressAvailable: boolean;
+    readonly legacyMediaAvailable: boolean;
+    readonly sessionStableAfterMs: number;
+  }>;
   readonly now: () => number;
 }
 
@@ -112,6 +117,7 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
     const lowLatency = source?.lowLatency;
     const lowLatencySource = lowLatency === undefined ? null : record(lowLatency);
     const lowLatencyMedia = lowLatencySource === null ? null : record(lowLatencySource.media);
+    const hardwareReadiness = record(source?.hardwareReadiness);
     return source !== null
       && record(source.network) !== null
       && record(source.relay) !== null
@@ -123,6 +129,12 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
       && (lowLatency === undefined || (lowLatencySource !== null && lowLatencyMedia !== null && record(lowLatencyMedia.dependencies) !== null && record(lowLatencyMedia.options) !== null))
       && record(source.mission) !== null
       && record(source.flight) !== null
+      && hardwareReadiness !== null
+      && typeof hardwareReadiness.lanAddressAvailable === "boolean"
+      && typeof hardwareReadiness.legacyMediaAvailable === "boolean"
+      && typeof hardwareReadiness.sessionStableAfterMs === "number"
+      && Number.isFinite(hardwareReadiness.sessionStableAfterMs)
+      && hardwareReadiness.sessionStableAfterMs >= 0
       && validFunction(source.now)
       && validFunction(record(source.mission)?.createMissionId)
       && validFunction(record(source.flight)?.now)
@@ -213,6 +225,7 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       mediaPipeline,
       flightControl,
       deviceSettings,
+      hardwareReadiness: options.hardwareReadiness,
       now: options.now,
       ...(whipStreamControl === null ? {} : { whipStreamControl }),
     } as never);

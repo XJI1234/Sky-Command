@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const preload = () => readFileSync(new URL("../src/production/electron-host/preload.cjs", import.meta.url), "utf8");
 const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8");
+const html = () => readFileSync(new URL("../src/production/operator-console/renderer/index.html", import.meta.url), "utf8");
 
 describe("Electron WHEP 播放链路", () => {
   it("preload 只暴露低延迟播放器的固定事件桥", () => {
@@ -28,5 +29,13 @@ describe("Electron WHEP 播放链路", () => {
     expect(source).toContain('read(connection, "sdk") !== "ready"');
     expect(source).not.toContain("value !== \"disconnected\" && read(connection, \"sdk\")");
     expect(source).not.toContain("JSON.stringify(unwrap(");
+  });
+
+  it("操作台可显式运行实机预检，并展示开始操作被预检拦住的原因", () => {
+    expect(html()).toContain('data-action="hardware-readiness"');
+    const source = renderer();
+    expect(source).toContain('"hardware-readiness"');
+    expect(source).toContain("HARDWARE_NOT_READY");
+    expect(source).toContain("实机预检未通过");
   });
 });

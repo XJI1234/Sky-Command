@@ -129,6 +129,10 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
         if (typeof options.relayHint !== "function") return success(freeze({ hints: [] }));
         try { return success(freeze({ hints: relayHints(options.relayHint()) })); } catch { return failure("DEPENDENCY_FAILURE"); }
       }
+      if (method === "hardware.readiness") {
+        const deviceId = one(input, "deviceId");
+        return deviceId === null ? failure("INVALID_INPUT") : call("checkHardwareReadiness", [deviceId]);
+      }
       if (method === "route.import") {
         const source = exact(input, ["fileName", "bytes"]);
         const fileName = source === null ? null : read(source, "fileName");
