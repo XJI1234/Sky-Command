@@ -46,6 +46,40 @@ describe("node websocket relay adapter contract", () => {
     await listener.close(); expect(server.closed).toBe(true);
   });
 
+  it("retains the actual local IPv4 address of an incoming relay connection", async () => {
+    const { server, transport } = create();
+    const accepted: Array<{ readonly localAddress?: string }> = [];
+    const listening = transport.listen({ host: "0.0.0.0", port: 8080 }, (connection) => accepted.push(connection));
+    server.emit("listening");
+    const listener = await listening;
+    const socket = new Socket();
+    server.sockets.push(socket);
+
+    server.emit("connection", socket, { socket: { localAddress: "172.20.10.12" } });
+
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0]?.localAddress).toBe("172.20.10.12");
+    await listener.close();
+  });
+
+  it("drops invalid or unreadable local addresses without rejecting the relay connection", async () => {
+    const { server, transport } = create();
+    const accepted: Array<{ readonly localAddress?: string }> = [];
+    const listening = transport.listen({ host: "0.0.0.0", port: 8080 }, (connection) => accepted.push(connection));
+    server.emit("listening");
+    const listener = await listening;
+    const loopbackSocket = new Socket();
+    const unreadableSocket = new Socket();
+    server.sockets.push(loopbackSocket, unreadableSocket);
+
+    server.emit("connection", loopbackSocket, { socket: { localAddress: "127.0.0.1" } });
+    server.emit("connection", unreadableSocket, { get socket(): never { throw new Error("socket unavailable"); } });
+
+    expect(accepted).toHaveLength(2);
+    expect(accepted.map((connection) => connection.localAddress)).toEqual([undefined, undefined]);
+    await listener.close();
+  });
+
   it("sends copied binary data, rejects text input, and contains listener failures", async () => {
     const { server, transport } = create(); const accepted: WebSocketLike[] = []; const listening = transport.listen({ host: "127.0.0.1", port: 9000 }, (connection) => accepted.push(connection)); server.emit("listening"); const listener = await listening; const socket = server.connect();
     const connection = accepted[0]!; const bytes = new Uint8Array([4, 5]); await connection.send(bytes); bytes[0] = 9;

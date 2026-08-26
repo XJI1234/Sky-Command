@@ -27,10 +27,11 @@ instance.devices() -> readonly RelayDeviceSnapshot[]
 instance.sendCommand(deviceId, request) -> Promise<CommandOutcome>
 instance.sendMission(deviceId, payload) -> Promise<MissionOutcome>
 instance.latestTelemetry(deviceId) -> TelemetrySnapshot | null
+instance.ingressAddress(deviceId) -> string | null
 instance.subscribe(listener) -> unsubscribe
 ```
 
-调用方只提供已配对 `deviceId`，从不操作 Socket/连接 ID。根模块创建并拥有所有子模块，调用方不能直接修改其状态或订阅传输事件。选项只接收可替换传输、计时器、已校验监听地址、生命周期限制和不透明 ID 工厂，禁止直接传入 WebSocket、Android、Electron、文件路径、DJI、UI 回调或可变子模块。
+调用方只提供已配对 `deviceId`，从不操作 Socket/连接 ID。`ingressAddress` 仅供同进程受控媒体命令选择回传地址；它不出现在设备、遥测或订阅快照，UI 不得调用它。根模块创建并拥有所有子模块，调用方不能直接修改其状态或订阅传输事件。选项只接收可替换传输、计时器、已校验监听地址、生命周期限制和不透明 ID 工厂，禁止直接传入 WebSocket、Android、Electron、文件路径、DJI、UI 回调或可变子模块。
 
 ## 状态、路由与结果
 

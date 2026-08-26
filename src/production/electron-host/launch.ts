@@ -100,6 +100,7 @@ async function launch(): Promise<void> {
         httpFlv: mediaPorts.httpFlv,
         player: { setSource: () => undefined, clear: () => undefined },
         clock: () => Date.now(),
+        resolveEndpointHost: () => lanCards()[0]?.ipv4 ?? null,
       },
       options: { rtmpPort: 19_500, httpFlvPort: 18_080, health: { ingestTimeoutMs: 20_000, playbackTimeoutMs: 45_000 } },
       startInput: {
@@ -126,7 +127,7 @@ async function launch(): Promise<void> {
   watchApplication(created.value, journal);
   const gateway = wrapGateway(DesktopUiGateway.create({
     application: created.value,
-    relayHint: () => [`ws://${preferred.ipv4}:${relayPort}/relay`],
+    relayHint: () => lanCards().map((card) => `ws://${card.ipv4}:${relayPort}/relay`),
   }), journal);
   const shell = DesktopShell.create({
     applicationGateway: gateway,

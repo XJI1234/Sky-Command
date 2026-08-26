@@ -46,7 +46,7 @@ describe("事故日志", () => {
     });
   });
 
-  it("命令超时记为上行 WARN，刷新图传不写日志", async () => {
+  it("命令超时记为上行 WARN，渲染器高频图传轮询不写日志", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
     const journal = IncidentJournal.create(directory);
@@ -59,11 +59,14 @@ describe("事故日志", () => {
       dispose: () => undefined,
     }, journal);
     await gateway.invoke("mission.start", { deviceId: "phone-1" });
-    await gateway.invoke("stream.refresh", undefined);
+    await gateway.invoke("stream-refresh", undefined);
+    await gateway.invoke("video-playback", { deviceId: "phone-1" });
+    await gateway.invoke("video.playback", { deviceId: "phone-1" });
     const log = readFileSync(journal.logPath, "utf8");
     expect(log).toContain("MISSION_START_TIMED_OUT");
     expect(log).toContain("uplink");
     expect(log).not.toContain("STREAM_REFRESH");
+    expect(log).not.toContain("VIDEO_PLAYBACK");
   });
 
   it("把低延迟控制记为下行，并忽略低延迟周期刷新", async () => {

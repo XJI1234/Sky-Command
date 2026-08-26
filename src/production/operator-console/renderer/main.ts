@@ -89,8 +89,8 @@ let lastSeenCurrentTime = 0;
 let whepPeer: RTCPeerConnection | null = null;
 let whepGeneration = 0;
 
-const NO_FRAME_MS = 5_000;
-const STALL_MS = 4_000;
+const NO_FRAME_MS = 8_000;
+const STALL_MS = 12_000;
 
 const clearFlvRecoverTimer = (): void => {
   if (flvRecoverTimer === null) return;
@@ -132,18 +132,29 @@ const playVideo = (video: HTMLVideoElement): void => {
 };
 
 const softReloadFlv = (video: HTMLVideoElement): boolean => {
-  if (flvPlayer === null) return false;
+  const url = attachedUrl;
+  if (url === null) return false;
+  // unload/load 容易叠两条 HTTP；整段销毁再挂可保证单连接。
   try {
-    flvPlayer.unload();
-    flvPlayer.load();
+    detachVideo();
+    attachVideo(url);
     playVideo(video);
-    attachedAtMs = Date.now();
-    lastPaintAtMs = 0;
-    lastSeenCurrentTime = 0;
-    return true;
+    return flvPlayer !== null;
   } catch {
     return false;
   }
+};
+
+const chaseLiveEdge = (video: HTMLVideoElement): void => {
+  if (flvPlayer === null || attachedUrl === null || !isPainting(video)) return;
+  try {
+    if (video.buffered.length === 0) return;
+    const end = video.buffered.end(video.buffered.length - 1);
+    if (!Number.isFinite(end)) return;
+    const lag = end - video.currentTime;
+    // 直播积压超过约 1.2s 就追到前沿，避免「一顿一顿往前赶」。
+    if (lag > 1.2) video.currentTime = Math.max(0, end - 0.25);
+  } catch { /* ignore */ }
 };
 
 const scheduleFlvReattach = (retryUrl: string): void => {
@@ -181,6 +192,7 @@ const watchPlaybackStall = (video: HTMLVideoElement): void => {
   if (attachedUrl === null || flvPlayer === null || flvRecoverTimer !== null) return;
   const now = Date.now();
   notePaintProgress(video);
+  chaseLiveEdge(video);
   if (isPainting(video)) {
     if (lastPaintAtMs > 0 && now - lastPaintAtMs > STALL_MS) {
       recoverStuckFlv(video, attachedUrl, "画面停住");
@@ -207,7 +219,6 @@ const reportPlaybackHealth = (video: HTMLVideoElement): void => {
 };
 
 const attachVideo = (url: string): void => {
-  closeWhep();
   const video = el("video") as HTMLVideoElement;
   if (attachedUrl === url && flvPlayer !== null) {
     if (isPainting(video)) {
@@ -221,6 +232,7 @@ const attachVideo = (url: string): void => {
     reportPlaybackHealth(video);
     return;
   }
+  closeWhep();
   clearFlvRecoverTimer();
   detachVideo();
   attachedUrl = url;
@@ -237,6 +249,7 @@ const attachVideo = (url: string): void => {
   }
   flvPlayer = flvjs.createPlayer(
     { type: "flv", isLive: true, hasAudio: false, url },
+    // 小 stash 缓毛刺/网络抖动；过大则延迟明显。背压策略已在 HTTP-FLV 侧按关键frame 续写。
     { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true },
   );
   flvPlayer.on(flvjs.Events.ERROR, () => {
@@ -571,7 +584,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
       : `${view.streamLabel}。要结束请点「停止图传」`;
     streamReady.classList.add("ok");
   } else if (view.streamCanStart) {
-    streamReady.textContent = "图传可启动：遥控器已连接，点下方「启动图传」";
+    streamReady.textContent = "图传可启动：遥控器与飞机已连接，点下方「启动图传」";
     streamReady.classList.add("ok");
   } else {
     streamReady.textContent = view.streamLabel.startsWith("图传未就绪")

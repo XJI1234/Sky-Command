@@ -1,6 +1,6 @@
 # Electron 宿主
 
-状态：窗口装配已接线；RTMP 19500 收流后由本机过滤 HTTP-FLV（18080）供飞行页 flv.js 播放。Relay 提示地址与图传 RTMP 主机使用同一块网卡 IPv4。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。手机 DJI 操作超时为 30s，超时会回 `command-result`，操作台应在约 30s 看到失败；120s 只覆盖手机无应答或排队中的遗留 DJI 调用。图传收流等待 20s，推流开始后即可标记播放就绪。
+状态：窗口装配已接线；RTMP 19500 收流后由本机过滤 HTTP-FLV（18080）供飞行页 flv.js 播放。每次图传启动优先使用该手机 WebSocket 实际接入的桌面 IPv4；缺失时才取当前首选网卡，绝不复用启动时已失效的网卡地址。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。手机 DJI 操作超时为 30s，超时会回 `command-result`，操作台应在约 30s 看到失败；120s 只覆盖手机无应答或排队中的遗留 DJI 调用。图传收流等待 20s，推流开始后即可标记播放就绪。
 
 启动方式与 `MSDK-upgraded` 对齐：
 
@@ -12,7 +12,7 @@ npm run desktop
 
 `npm run build` 把主进程打进 `electron/main.mjs`，把操作台渲染器打进 `dist/renderer/`。桌面快捷方式运行构建后的 Electron，不再用 `tsx` 直接执行源码。
 
-Relay 监听 `0.0.0.0:8080`。设备页提示与图传 RTMP 主机使用同一块首选网卡：`ws://<首选IPv4>:8080/relay`。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。
+Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡，展示当前可填写的 `ws://<IPv4>:8080/relay`；手机已连接后，图传 RTMP 主机以该连接的实际本端 IPv4 为准。网卡切换只影响后续命令，不重启 `19500`、`18080` 或已发布流。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。
 
 宿主在构造 `DesktopApplication` 时必须注入 `hardwareReadiness`：已选首选私网 IPv4 表示 `lanAddressAvailable: true`；生产装配将 `legacyMediaAvailable` 固定为 `true`（经典图传走 node-media-server + HTTP-FLV，不再依赖本机 FFmpeg 可执行文件）；`sessionStableAfterMs` 固定为 15,000。它们只供工作流在旧图传开始和直接飞控请求前做纯预检；不得作为退出条件，不得停止既有图传，不得阻止已存在飞控确认的停止/取消动作。
 
@@ -20,7 +20,7 @@ Relay 监听 `0.0.0.0:8080`。设备页提示与图传 RTMP 主机使用同一�
 
 ## 旧 RTMP 图传
 
-旧图传由 `node-media-server` 收手机 RTMP（`19500`，`gop_cache: true`），本机再拉回该流并过滤掉无图像的 SEI-only 包，在 HTTP 口（`18080`）提供干净 HTTP-FLV：`http://127.0.0.1:18080/live/{deviceId}.flv`。HTTP 写出必须尊重 `drain` 背压，避免 MSE 跟不上时无界堆积。不得再切 HLS，也不得默认拉起 `ffplay`。操作台飞行页用 `flv.js`（`isLive`、关闭 stash buffer）播到本页 `<video>`。推流开始后即可标记播放就绪并附着画面；已附着但长时间未出画，或出画后 `currentTime` 停住，必须软恢复或重挂。停止推流时结束播放附着。
+旧图传由 `node-media-server` 收手机 RTMP（`19500`，`gop_cache: true`），HTTP 口（`18080`）用官方 `NodeFlvSession` **直连发布会话播放器槽位**输出 HTTP-FLV：`http://127.0.0.1:18080/live/{deviceId}.flv`。禁止再对本机 `19500` 做 RTMP 回环拉流。写出路径只过滤无图像的 SEI-only AVC 包，不得因 TCP 背压丢弃普通视频帧。同一 `deviceId` 新附着须停止旧 `NodeFlvSession`。不得再切 HLS，也不得默认拉起 `ffplay`。操作台飞行页用 `flv.js`（`isLive`、关闭 stash buffer，并追直播前沿）播到本页 `<video>`。推流开始后即可标记播放就绪并附着画面；已附着但长时间未出画，或出画后 `currentTime` 停住，必须软恢复或重挂。停止推流时结束播放附着。
 
 宿主必须在 `app.whenReady` 之前设置 `autoplay-policy=no-user-gesture-required`，避免本页 `<video>` 静音自动播放被 Chromium 策略挡住。
 

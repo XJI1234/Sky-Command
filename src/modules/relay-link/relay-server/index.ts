@@ -3,6 +3,8 @@ import { ProtocolLimits, RelayFrameCodec, type DecodeResult, type ProtocolError,
 export interface ListenAddress { readonly host: string; readonly port: number; }
 
 export interface RelayConnection {
+  /** 本端接收该连接时使用的 IPv4；只供内部下游选择返回链路。 */
+  readonly localAddress?: string;
   send(bytes: Uint8Array): Promise<void>;
   close(): Promise<void>;
   onMessage(listener: (bytes: Uint8Array) => void): () => void;
@@ -35,6 +37,7 @@ export interface ConnectionSnapshot {
   readonly phase: ConnectionPhase;
   readonly deviceId: string | null;
   readonly sessionId: string | null;
+  readonly localAddress?: string;
 }
 export type RelayServerState = "stopped" | "starting" | "listening" | "stopping";
 export interface RelayServerSnapshot {
@@ -90,7 +93,11 @@ function create(options: RelayServerOptions): RelayServerInstance {
     unsubscribe: readonly (() => void)[];
   }
 
-  const snapshotConnection = (entry: InternalConnection): ConnectionSnapshot => Object.freeze({ connectionId: entry.id, phase: entry.phase, deviceId: entry.deviceId, sessionId: entry.sessionId });
+  const snapshotConnection = (entry: InternalConnection): ConnectionSnapshot => {
+    let localAddress: string | undefined;
+    try { localAddress = typeof entry.transport.localAddress === "string" ? entry.transport.localAddress : undefined; } catch { localAddress = undefined; }
+    return Object.freeze({ connectionId: entry.id, phase: entry.phase, deviceId: entry.deviceId, sessionId: entry.sessionId, ...(localAddress === undefined ? {} : { localAddress }) });
+  };
   const snapshot = (): RelayServerSnapshot => Object.freeze({ state, endpoint, connections: Object.freeze([...connections.values()].map(snapshotConnection)) });
   const publish = (event: RelayServerEvent): void => {
     for (const subscriber of [...subscribers]) {

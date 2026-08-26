@@ -29,7 +29,7 @@
 - `starting` 显示为「启动中（等待航线阶段回报）」；只有 `running` 才是「正在执行航线」。
 - 图传只有 `video.phase === ready` 才是可播放；手机接受推流不是实时图传。生产只保留经典 RTMP/HTTP-FLV；低延迟 WHIP 已封存，`evaluate("webrtc-*")` 必须拒绝并引导使用「启动图传」。空闲时 `streamLabel` 必须写明是否可启动及阻塞原因（如遥控器未连接），不得笼统写成「空闲」。
 - 旧图传由飞行页 `flv.js` 播放本机 HTTP-FLV。`ready` 时提示「图传播放中」。播放抖动时优先 `unload/load` 软恢复，连续失败才退避重挂；已附着但长时间未出画或画面停住必须看门狗恢复。面向操作员的状态栏不得展示 `readyState`、错误码或英文动作名。
-- `evaluate("stream-start")` 只要求已选图传机、遥控器已连接；不因飞控/飞机遥测未连而拒绝。`streamCanStart` 与该门槛对齐。`evaluate("flight-land"|"flight-return-home")` 必须先确认飞行状态为在空中，不得对未知或已在地面状态弹出确认。飞行页不展示低延迟按钮。
+- `evaluate("stream-start")` 要求已选图传机、遥控器已连接、飞机已连接。飞控未连不单独拦图传，但飞机未连必须拒绝：手机常回报「推流已启动」却不真正推 RTMP，否则操作员会看到空白画面。`streamCanStart` 与该门槛对齐。`streamPhase` 已是 starting/streaming 但 `video.phase` 尚非 ready 时，文案须写成「电脑还没收到画面」，不得暗示已有实时图传。`evaluate("flight-land"|"flight-return-home")` 必须先确认飞行状态为在空中，不得对未知或已在地面状态弹出确认。飞行页不展示低延迟按钮。
 - 对频由手机完成。`evaluate("pairing-start")` / `evaluate("pairing-stop")` 必须说明该事实，不得假装桌面已经发出对频命令。
 - `mission-stage` 只要求已选可执行航线和在线手机；KMZ 传到手机不依赖飞机已连接。`mission-upload` 仅在阶段为 `staged` 时允许，与调度器一致。
 - `mission-pause` 仅 `running`，`mission-resume` 仅 `paused`，`mission-stop` 仅 `starting`、`running` 或 `paused`。上传完成未开始执行时不得发 `wayline.stop`。`mission-start` 还要求手机就绪、遥控器已连接、飞机已连接且已对频，飞行状态已确认为在地面；未知或在空中都不得启动航线。对频未完成须提示到手机上对频。

@@ -42,6 +42,7 @@ export interface RelayOperationsSnapshot {
 }
 export interface StreamRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
+  readonly ingressAddress?: (deviceId: string) => string | null;
   readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string }>>;
 }
 export interface WhipStreamRelayGateway {
@@ -73,6 +74,7 @@ export interface RelayOperationsAdapterInstance {
 interface RelaySource {
   readonly devices?: () => unknown;
   readonly latestTelemetry?: (deviceId: string) => unknown;
+  readonly ingressAddress?: (deviceId: string) => unknown;
   readonly sendMission?: (deviceId: string, payload: RelayMissionPayload) => Promise<unknown>;
   readonly sendCommand?: (deviceId: string, request: Readonly<{ readonly name: string; readonly fields: Readonly<Record<string, JsonValue>> }>) => Promise<unknown>;
   readonly subscribe?: (listener: (snapshot: unknown) => void) => () => void;
@@ -84,6 +86,13 @@ const text = (value: string): JsonValue => freeze({ kind: "string" as const, val
 const bool = (value: boolean): JsonValue => freeze({ kind: "boolean" as const, value });
 const object = (fields: Record<string, JsonValue>): Readonly<Record<string, JsonValue>> => freeze({ ...fields });
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
+const privateIpv4 = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/u.test(value)) return false;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [first, second] = parts as [number, number, number, number];
+  return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
+};
 const validMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && value.toLowerCase().endsWith(".kmz") && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value);
 const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const nonNegativeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -185,6 +194,15 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
       return freeze([...unique].sort(([left], [right]) => left.localeCompare(right)).map(([deviceId, sessionId]) => freeze(sessionId === undefined ? { deviceId } : { deviceId, sessionId })));
     } catch { return freeze([]); }
   };
+  const ingressAddress = (deviceId: string): string | null => {
+    if (disposed || !validId(deviceId) || typeof relay.ingressAddress !== "function" || !devices().some((device) => device.deviceId === deviceId)) return null;
+    try {
+      const value = relay.ingressAddress(deviceId);
+      return privateIpv4(value) ? value : null;
+    } catch {
+      return null;
+    }
+  };
   const phases = (): RelayOperationsSnapshot["missionPhases"] => {
     const source = read(rawSnapshot, "missionPhases");
     if (!Array.isArray(source)) return freeze([]);
@@ -234,6 +252,7 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
   });
   const streamGateway: StreamRelayGateway = freeze({
     latestTelemetry: telemetry,
+    ingressAddress,
     sendCommand: async (deviceId, request) => {
       if (request.name === "live-stream.stop" && Object.keys(request.fields).length === 0) return sendVideo(deviceId, request.name, {});
       if (request.name !== "live-stream.start" || Object.keys(request.fields).length !== 1 || typeof request.fields.rtmpUrl !== "string" || request.fields.rtmpUrl.trim().length === 0) return commandFailure();

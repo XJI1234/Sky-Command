@@ -77,7 +77,7 @@ type AdapterSettingsCommand = Parameters<AdapterRelaySettingsGateway["sendComman
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" ? value as Record<string, unknown> : null;
 const validFunction = (value: unknown): value is () => unknown => typeof value === "function";
-const hiddenSnapshotKeys = new Set(["endpoint", "playbackUrl", "diagnostic", "path", "filePath", "token", "credential", "password"]);
+const hiddenSnapshotKeys = new Set(["endpoint", "playbackUrl", "diagnostic", "path", "filePath", "localAddress", "token", "credential", "password"]);
 const copy = (value: unknown): unknown => {
   try { return structuredClone(value); }
   /* c8 ignore next -- 内部快照契约只含可结构化克隆值；异常仍需安全降级。 */

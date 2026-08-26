@@ -4,7 +4,7 @@
 
 ## 唯一职责
 
-`live-stream-control` 是桌面端直播的控制侧：它根据已经运行的 `media-pipeline` 接收端点，为指定手机设备构造 RTMP 推流地址，并可靠地下发 `live-stream.start`、`live-stream.stop`。
+`live-stream-control` 是桌面端直播的控制侧：它根据已经运行的 `media-pipeline` 接收端点，并优先结合指定手机实际接入桌面的 IPv4，为该设备构造 RTMP 推流地址，并可靠地下发 `live-stream.start`、`live-stream.stop`。
 
 它不接收 RTMP、不启动或停止 FFmpeg/HLS/RTMP 服务、不播放视频、不保存视频、不读取 DJI SDK、不创建 WebSocket，也不把手机端接受命令错误地显示成“画面已经就绪”。视频接收、转码、健康和播放仅属于 `media-pipeline`。
 
@@ -42,7 +42,7 @@ instance.subscribe(listener) -> unsubscribe
 rtmp://{电脑局域网接收主机}:{RTMP端口}/live/{encodeURIComponent(deviceId)}
 ```
 
-地址中的主机与端口来自已经运行的 `media-pipeline` 公开接收端点。媒体服务未运行、端点不完整、设备标识非法或地址不能通过 RTMP 规则时，开始请求必须在桌面端被拒绝，绝不发送命令。停止不需要媒体服务端点，但仍需要设备可连接并且不允许与同设备的其他直播命令并发。
+端口来自已经运行的 `media-pipeline` 公开接收端点。若中继为该设备提供了合法私网入站本端 IPv4，主机必须使用该地址；否则使用媒体管线当前端点。该入站地址不进入设备或 UI 快照，且地址选择不得重启媒体服务或改变已发布流。媒体服务未运行、端点不完整、设备标识非法或地址不能通过 RTMP 规则时，开始请求必须在桌面端被拒绝，绝不发送命令。停止不需要媒体服务端点，但仍需要设备可连接并且不允许与同设备的其他直播命令并发。
 
 手机端遥测能力字段 `capabilities.liveVideo` 是唯一能力来源。开始和停止前均通过 `CapabilityGate.evaluate({ operation: "live-stream", ... })`；未连接、SDK/遥控器/飞机链路未就绪、能力未知或不支持必须返回稳定可显示原因。能力允许只表示“可以提交”，不表示 DJI 直播或本地画面一定成功。
 

@@ -15,9 +15,11 @@ class Connection implements RelayConnection {
   readonly sent: Uint8Array[] = [];
   readonly closed = { value: false };
   failSends = false;
+  readonly localAddress?: string;
   private messages = new Set<(bytes: Uint8Array) => void>();
   private closes = new Set<(reason?: string) => void>();
   private errors = new Set<() => void>();
+  constructor(localAddress?: string) { this.localAddress = localAddress; }
   async send(bytes: Uint8Array): Promise<void> { if (this.failSends) throw new Error("send failed"); this.sent.push(bytes.slice()); }
   async close(): Promise<void> { this.closed.value = true; }
   onMessage(listener: (bytes: Uint8Array) => void): () => void { this.messages.add(listener); return () => this.messages.delete(listener); }
@@ -37,7 +39,7 @@ class Transport implements RelayTransport {
     this.accept = accept;
     return { close: async () => undefined };
   }
-  connect(): Connection { const connection = new Connection(); this.connections.push(connection); this.accept?.(connection); return connection; }
+  connect(localAddress?: string): Connection { const connection = new Connection(localAddress); this.connections.push(connection); this.accept?.(connection); return connection; }
 }
 
 const object = (fields: Record<string, unknown>) => ({ kind: "object" as const, fields });
@@ -65,6 +67,21 @@ describe("relay-link root contract", () => {
     expect(link.latestTelemetry("phone-1")).toMatchObject({ deviceId: "phone-1", payload: { fields: { battery: { value: "98" } } } });
     expect(snapshots.length).toBeGreaterThan(1);
     expect(Object.isFrozen(link.devices())).toBe(true);
+  });
+
+  it("keeps each paired device's relay ingress address private to the command path", async () => {
+    const fixture = options();
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect("172.20.10.12");
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    expect(link.ingressAddress("phone-1")).toBe("172.20.10.12");
+    expect(JSON.stringify(link.devices())).not.toContain("172.20.10.12");
+    phone.emitClose("lost");
+    await flush();
+    expect(link.ingressAddress("phone-1")).toBeNull();
   });
 
   it("routes command and mission results and never treats transfer completion as success", async () => {

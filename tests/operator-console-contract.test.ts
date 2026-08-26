@@ -273,7 +273,10 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("stream-start", noFc)).toEqual({ ok: true });
 
     const noAircraft = flight({ connection: { ...device().connection, aircraft: "disconnected", flightController: "disconnected" } });
-    expect(OperatorConsole.evaluate("stream-start", noAircraft)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("stream-start", noAircraft)).toEqual({
+      ok: false,
+      reason: "飞机未连接，无法启动图传",
+    });
     expect(OperatorConsole.evaluate("mission-start", noAircraft)).toEqual({
       ok: false,
       reason: "飞机飞控未连接，请确认飞机已开机",
@@ -282,6 +285,10 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("mission-start", aircraftOnlyGone)).toEqual({
       ok: false,
       reason: "飞机尚未连接",
+    });
+    expect(OperatorConsole.evaluate("stream-start", aircraftOnlyGone)).toEqual({
+      ok: false,
+      reason: "飞机未连接，无法启动图传",
     });
   });
 
@@ -295,6 +302,15 @@ describe("操作台工作区", () => {
     expect(waiting.streamLabel).toBe("正在准备画面");
     expect(waiting.streamCanStart).toBe(false);
     expect(waiting.streamCanStop).toBe(true);
+
+    const commandOnly = OperatorConsole.project({
+      snapshot: snapshot([device({ stream: { phase: "streaming" }, video: { phase: "unavailable", selected: false } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(commandOnly.playbackReady).toBe(false);
+    expect(commandOnly.streamLabel).toBe("手机已接命令，电脑还没收到画面");
+    expect(commandOnly.streamCanStop).toBe(true);
 
     const ready = OperatorConsole.project({
       snapshot: snapshot([device({ stream: { phase: "streaming" }, video: { phase: "ready", selected: true } })], { selectedVideoDeviceId: "phone-1" }),
@@ -324,6 +340,14 @@ describe("操作台工作区", () => {
     });
     expect(noRc.streamLabel).toBe("图传未就绪：遥控器未连接");
     expect(noRc.streamCanStart).toBe(false);
+
+    const noAircraft = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, aircraft: "disconnected" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(noAircraft.streamLabel).toBe("图传未就绪：飞机未连接");
+    expect(noAircraft.streamCanStart).toBe(false);
   });
 
   it("封存低延迟图传：标签不优先 WHIP，且拒绝 webrtc 操作", () => {

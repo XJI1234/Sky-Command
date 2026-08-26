@@ -11,6 +11,10 @@ export interface WebSocketLike {
   off?(event: string, listener: (...args: any[]) => void): this;
 }
 
+interface UpgradeRequestLike {
+  readonly socket?: Readonly<{ readonly localAddress?: unknown }>;
+}
+
 export interface WebSocketServerLike {
   on(event: string, listener: (...args: any[]) => void): this;
   off?(event: string, listener: (...args: any[]) => void): this;
@@ -45,7 +49,22 @@ const copyBytes = (data: unknown): Uint8Array | null => {
   return null;
 };
 
-function adapt(socket: WebSocketLike, openState: number, onClosed: (connection: RelayConnection) => void, ping: Readonly<{ readonly intervalMs: number; readonly scheduler: RelayPingScheduler }>): RelayConnection & { shutdown(reason: string): void } {
+const ipv4Address = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/u.test(value)) return false;
+  const parts = value.split(".").map(Number);
+  return parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    && parts[0] !== 0 && parts[0] !== 127 && parts[0]! < 224;
+};
+const ingressAddress = (request: UpgradeRequestLike | undefined): string | undefined => {
+  try {
+    const value = request?.socket?.localAddress;
+    return ipv4Address(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+function adapt(socket: WebSocketLike, openState: number, localAddress: string | undefined, onClosed: (connection: RelayConnection) => void, ping: Readonly<{ readonly intervalMs: number; readonly scheduler: RelayPingScheduler }>): RelayConnection & { shutdown(reason: string): void } {
   const messageListeners = new Set<(bytes: Uint8Array) => void>();
   const closeListeners = new Set<(reason?: string) => void>();
   const errorListeners = new Set<() => void>();
@@ -62,6 +81,7 @@ function adapt(socket: WebSocketLike, openState: number, onClosed: (connection: 
     messageListeners.clear(); errorListeners.clear();
   };
   const connection: RelayConnection & { shutdown(reason: string): void } = {
+    ...(localAddress === undefined ? {} : { localAddress }),
     send: async (bytes) => {
       if (closed || socket.readyState !== openState || !(bytes instanceof Uint8Array)) throw new Error("transport unavailable");
       const copy = bytes.slice();
@@ -118,8 +138,8 @@ function create(options: NodeWebSocketRelayOptions = {}): RelayTransport {
         try { server = factory.create({ ...address }); }
         catch { reject(new Error("relay listener could not start")); return; }
         const handleError = (): void => { if (!listening) reject(new Error("relay listener could not start")); };
-        const handleConnection = (socket: WebSocketLike): void => {
-          const connection = adapt(socket, factory.openState, (closed) => connections.delete(closed as RelayConnection & { shutdown(reason: string): void }), ping);
+        const handleConnection = (socket: WebSocketLike, request?: UpgradeRequestLike): void => {
+          const connection = adapt(socket, factory.openState, ingressAddress(request), (closed) => connections.delete(closed as RelayConnection & { shutdown(reason: string): void }), ping);
           connections.add(connection);
           try { onConnection(connection); } catch { connection.shutdown("transport-error"); }
         };

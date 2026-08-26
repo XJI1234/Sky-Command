@@ -15,6 +15,8 @@ const object = (fields: Readonly<Record<string, JsonValue>>): JsonValue => Objec
 
 function relayFixture() {
   const sent: unknown[] = [];
+  let ingress: unknown = null;
+  let ingressThrows = false;
   let current = Object.freeze({
     state: "listening" as const,
     endpoint: Object.freeze({ host: "0.0.0.0", port: 9000 }),
@@ -44,6 +46,7 @@ function relayFixture() {
   const relay = {
     devices: () => current.devices,
     latestTelemetry: (deviceId: string) => current.telemetry.find((item) => item.deviceId === deviceId) ?? null,
+    ingressAddress: () => { if (ingressThrows) throw new Error("socket metadata unavailable"); return ingress; },
     sendMission: async (_deviceId: string, payload: unknown) => Object.freeze({ deviceId: "relay-1", missionId: (payload as { missionId: string }).missionId, status: "succeeded" as const, detail: "accepted" }),
     sendCommand: async (deviceId: string, request: unknown) => {
       sent.push(Object.freeze({ deviceId, request }));
@@ -57,7 +60,8 @@ function relayFixture() {
     replaceTelemetry: (payload: JsonValue, capabilities: JsonValue) => {
       current = Object.freeze({ ...current, telemetry: Object.freeze([Object.freeze({ deviceId: "relay-1", payload, capabilities })]) });
       for (const listener of [...listeners]) listener(current);
-    }
+    },
+    setIngress: (value: unknown, throws = false) => { ingress = value; ingressThrows = throws; },
   };
 }
 
@@ -84,6 +88,21 @@ describe("RelayOperationsAdapter", () => {
       }
     });
     expect(adapter.devices()).toEqual([{ deviceId: "relay-1", sessionId: "session-1" }]);
+  });
+
+  it("only exposes a valid private relay ingress address to the stream command gateway", () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+    fixture.setIngress("172.20.10.12");
+    expect(adapter.streamGateway().ingressAddress?.("relay-1")).toBe("172.20.10.12");
+    expect(adapter.streamGateway().ingressAddress?.("missing")).toBeNull();
+
+    for (const value of ["8.8.8.8", "999.20.10.12", null]) {
+      fixture.setIngress(value);
+      expect(adapter.streamGateway().ingressAddress?.("relay-1")).toBeNull();
+    }
+    fixture.setIngress(null, true);
+    expect(adapter.streamGateway().ingressAddress?.("relay-1")).toBeNull();
   });
 
   it("透传经校验的位姿和配对状态，且高度不受 0..100 电池解析器限制", () => {

@@ -60,6 +60,8 @@ export interface RelayLinkInstance {
   sendCommand(deviceId: string, request: CommandRequest): Promise<CommandOutcome>;
   sendMission(deviceId: string, payload: MissionPayload): Promise<MissionOutcome>;
   latestTelemetry(deviceId: string): RelayTelemetrySnapshot | null;
+  /** 仅供同进程控制面选择该设备回传媒体地址，不进入公开设备快照。 */
+  ingressAddress(deviceId: string): string | null;
   subscribe(listener: (snapshot: RelayLinkSnapshot) => void): () => void;
 }
 
@@ -81,6 +83,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
   const missionPhases = MissionPhaseIntake.create();
   const missions = MissionSender.create({ scheduler: options.scheduler, timeoutMs: options.missionTimeoutMs });
   const listeners = new Set<(snapshot: RelayLinkSnapshot) => void>();
+  const ingressByConnection = new Map<string, string>();
   const commandWaiters = new Map<string, { readonly deviceId: string; readonly resolve: (outcome: CommandOutcome) => void }>();
   const persistedDiagnosticKeys = new Map<string, null>();
   const diagnosticKey = (deviceId: string, runId: string, sequence: number): string => `${deviceId}\u0000${runId}\u0000${sequence}`;
@@ -132,9 +135,12 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
   const handleServerEvent = (event: RelayServerEvent): void => {
     if (event.kind === "state-changed") { publish(); return; }
     if (event.kind === "connection-paired") {
+      if (typeof event.connection.localAddress === "string") ingressByConnection.set(event.connection.connectionId, event.connection.localAddress);
+      else ingressByConnection.delete(event.connection.connectionId);
       registry.register({ connectionId: event.connection.connectionId, deviceId: event.connection.deviceId!, sessionId: event.connection.sessionId! }); publish(); return;
     }
     if (event.kind === "connection-closed") {
+      ingressByConnection.delete(event.connectionId);
       registry.removeByConnection(event.connectionId); intake.removeConnection(event.connectionId); missionPhases.remove(event.connectionId);
       tracker.cancelConnection(event.connectionId, event.reason);
       missions.cancelConnection(event.connectionId, event.reason);
@@ -207,6 +213,11 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       if (!validId(deviceId)) return null;
       const device = registry.getByDevice(deviceId); if (!device) return null;
       const value = intake.get(device.connectionId); return value ? frozen({ deviceId, payload: value.payload, capabilities: value.capabilities }) : null;
+    },
+    ingressAddress: (deviceId: string): string | null => {
+      if (!validId(deviceId)) return null;
+      const device = registry.getByDevice(deviceId);
+      return device === null ? null : ingressByConnection.get(device.connectionId) ?? null;
     },
     subscribe: (listener: (value: RelayLinkSnapshot) => void): (() => void) => { listeners.add(listener); let active = true; return () => { if (active) { active = false; listeners.delete(listener); } }; }
   });

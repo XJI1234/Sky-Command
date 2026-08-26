@@ -12,16 +12,21 @@ function fixture(overrides: Partial<{
   readonly gate: (input: unknown) => unknown;
   readonly target: (input: unknown) => unknown;
   readonly send: (deviceId: string, request: unknown) => Promise<unknown>;
+  readonly ingressAddress: (deviceId: string) => unknown;
 }> = {}) {
   const sent: unknown[] = [];
   const dispatcher = StreamDispatcher.create({
     media: { snapshot: overrides.media ?? (() => ({ phase: "running", endpoint: { host: "192.168.1.20", port: 1935 } })) },
     relay: {
       latestTelemetry: overrides.telemetry ?? telemetry,
+      ingressAddress: overrides.ingressAddress ?? (() => null),
       sendCommand: overrides.send ?? (async (deviceId, request) => { sent.push({ deviceId, request }); return { status: "succeeded" }; })
     },
     capabilityGate: { evaluate: overrides.gate ?? (() => ({ ok: true, value: { enabled: true, reason: null } })) },
-    targetConfig: { createRtmpTarget: overrides.target ?? ((input) => ({ ok: true, value: { protocol: "rtmp", rtmpUrl: `rtmp://192.168.1.20:1935/live/${encodeURIComponent((input as { deviceId: string }).deviceId)}` } })) }
+    targetConfig: { createRtmpTarget: overrides.target ?? ((input) => {
+      const value = input as { deviceId: string; endpoint: { host: string; port: number } };
+      return { ok: true, value: { protocol: "rtmp", rtmpUrl: `rtmp://${value.endpoint.host}:${value.endpoint.port}/live/${encodeURIComponent(value.deviceId)}` } };
+    }) }
   });
   return { dispatcher, sent };
 }
@@ -32,6 +37,37 @@ describe("StreamDispatcher", () => {
     await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start", state: { phase: "streaming" } });
     expect(value.sent).toEqual([{ deviceId: "phone-1", request: { name: "live-stream.start", fields: { rtmpUrl: "rtmp://192.168.1.20:1935/live/phone-1" } } }]);
     expect(value.dispatcher.get("phone-1")).toMatchObject({ phase: "streaming" });
+  });
+
+  it("uses the device's live relay ingress address after the desktop network changes", async () => {
+    const value = fixture({
+      media: () => ({ phase: "running", endpoint: { host: "10.208.164.188", port: 19500 } }),
+      ingressAddress: () => "172.20.10.12",
+    });
+
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start" });
+    expect(value.sent).toEqual([{
+      deviceId: "phone-1",
+      request: { name: "live-stream.start", fields: { rtmpUrl: "rtmp://172.20.10.12:19500/live/phone-1" } },
+    }]);
+  });
+
+  it("falls back to the current media endpoint when an ingress address is not private IPv4 or throws", async () => {
+    for (const ingressAddress of [
+      () => "8.8.8.8",
+      () => "999.20.10.12",
+      () => { throw new Error("socket metadata unavailable"); },
+    ]) {
+      const value = fixture({
+        media: () => ({ phase: "running", endpoint: { host: "172.20.10.12", port: 19500 } }),
+        ingressAddress,
+      });
+      await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start" });
+      expect(value.sent).toEqual([{
+        deviceId: "phone-1",
+        request: { name: "live-stream.start", fields: { rtmpUrl: "rtmp://172.20.10.12:19500/live/phone-1" } },
+      }]);
+    }
   });
 
   it("stops without asking the media service for an endpoint", async () => {

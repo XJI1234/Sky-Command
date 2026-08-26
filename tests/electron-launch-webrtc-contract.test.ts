@@ -27,6 +27,6 @@ describe("Electron 主进程图传装配（HTTP-FLV 单路径）", () => {
     expect(text).toContain("missionTimeoutMs: 600_000");
     expect(text).toContain('ipv4.startsWith("172.20.10.")');
     expect(text).toContain('app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required")');
-    expect(text).toContain("relayHint: () => [`ws://${preferred.ipv4}:${relayPort}/relay`]");
+    expect(text).toContain("relayHint: () => lanCards().map((card) => `ws://${card.ipv4}:${relayPort}/relay`)");
   });
 });

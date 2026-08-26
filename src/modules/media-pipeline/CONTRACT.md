@@ -16,7 +16,7 @@ instance.clearPlayer() -> PipelineResult<MediaSnapshot>
 instance.snapshot() -> MediaSnapshot
 ```
 
-`start` 的输入只包含局域网网卡事实、可选手工 IPv4，以及 HTTP 分发根目录（历史字段名 `httpFlvRootDirectory`）。`ffmpegCandidates` 可选且生产路径忽略。RTMP 与 HTTP-FLV 监听端口、健康超时和适配器均在 `create` 时注入。`fileFacts` / `processFactory` 为兼容旧装配的可选字段，生产组合根不定位 FFmpeg、不启动转码进程。
+`start` 的输入只包含局域网网卡事实、可选手工 IPv4，以及 HTTP 分发根目录（历史字段名 `httpFlvRootDirectory`）。`ffmpegCandidates` 可选且生产路径忽略。RTMP 与 HTTP-FLV 监听端口、健康超时和适配器均在 `create` 时注入。可选 `resolveEndpointHost` 仅为后续控制命令提供当前合法私网 IPv4；它不得重新监听端口、停止接收或移除既有流。`fileFacts` / `processFactory` 为兼容旧装配的可选字段，生产组合根不定位 FFmpeg、不启动转码进程。
 
 组合根状态为 `idle`、`starting`、`running`、`stopping`、`failed`、`disposed`。`snapshot` 只公开接收端点的 host/port/source、每台设备的 deviceId/streamId/健康阶段/播放地址/安全诊断，以及播放器快照。
 

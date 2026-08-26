@@ -12,6 +12,7 @@ function fixture(options: {
   readonly rtmpStart?: (port: number, events: { readonly onPublished: (path: string) => void; readonly onUnpublished: (path: string) => void }) => void;
   readonly httpFlvStop?: () => void;
   readonly rtmpStop?: () => void;
+  readonly endpointHost?: () => unknown;
   readonly player?: { readonly setSource?: (input: Readonly<{ readonly deviceId: string; readonly url: string }>, onFatal: (error: unknown) => void) => void; readonly clear?: () => void };
 } = {}) {
   let clock = 100;
@@ -21,6 +22,7 @@ function fixture(options: {
     httpFlv: { listen: () => options.httpFlvStart?.(), close: () => options.httpFlvStop?.() },
     player: { setSource: (value, onFatal) => options.player?.setSource?.(value, onFatal), clear: () => options.player?.clear?.() },
     clock: () => clock,
+    ...(options.endpointHost === undefined ? {} : { resolveEndpointHost: options.endpointHost }),
   }, { rtmpPort: 19500, httpFlvPort: 18080, health: { ingestTimeoutMs: 1_000, playbackTimeoutMs: 1_000 } });
   return { pipeline, events: () => rtmpEvents!, setClock: (value: number) => { clock = value; } };
 }
@@ -57,6 +59,37 @@ describe("media-pipeline 一级组合根契约", () => {
       }),
     ]);
     expect(pipeline.selectPlayer("phone-a")).toMatchObject({ ok: true, value: { player: { phase: "playing", deviceId: "phone-a" } } });
+  });
+
+  it("network switch refreshes only the next RTMP endpoint and preserves an active ingest", () => {
+    let currentHost = "10.208.164.188";
+    const calls: string[] = [];
+    const { pipeline, events } = fixture({
+      endpointHost: () => currentHost,
+      httpFlvStart: () => calls.push("http-flv"),
+      rtmpStart: () => calls.push("rtmp"),
+    });
+    pipeline.start({ ...input, manualHost: "10.208.164.188" });
+    events().onPublished("/live/phone-1");
+    currentHost = "172.20.10.12";
+
+    expect(pipeline.snapshot()).toMatchObject({
+      endpoint: { host: "172.20.10.12", port: 19500 },
+      streams: [expect.objectContaining({ deviceId: "phone-1", phase: "ready" })],
+    });
+    expect(calls).toEqual(["http-flv", "rtmp"]);
+  });
+
+  it("ignores invalid or failed dynamic endpoint probes and keeps the resolved endpoint", () => {
+    for (const endpointHost of [
+      () => "8.8.8.8",
+      () => "999.20.10.12",
+      () => { throw new Error("network unavailable"); },
+    ]) {
+      const { pipeline } = fixture({ endpointHost });
+      pipeline.start({ ...input, manualHost: "172.20.10.12" });
+      expect(pipeline.snapshot().endpoint).toEqual({ host: "172.20.10.12", port: 19500, source: "manual" });
+    }
   });
 
   it("只清理结束的设备流，且停止时按反向顺序尝试所有服务", () => {

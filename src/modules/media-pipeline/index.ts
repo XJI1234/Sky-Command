@@ -14,6 +14,8 @@ export interface MediaPipelineDependencies {
   readonly fileFacts?: FileFacts;
   /** 保留字段以兼容旧装配；生产路径在 RTMP publish 时直接标记可播放，不再启动转码进程。 */
   readonly processFactory?: () => TranscoderProcessPort;
+  /** 可选的当前 LAN 主机探测。只影响后续 RTMP 目标，绝不重启正在监听或发布的媒体服务。 */
+  readonly resolveEndpointHost?: () => unknown;
   readonly player: VideoPlayerPort;
   readonly clock?: () => number;
 }
@@ -70,6 +72,13 @@ const DIAGNOSTIC = "媒体流水线启动失败。请检查桌面端服务配置
 function freeze<T extends object>(value: T): Readonly<T> { return Object.freeze(value); }
 function success<T>(value: T): PipelineResult<T> { return freeze({ ok: true as const, value }); }
 function failure(code: Extract<PipelineResult<never>, { ok: false }>['code'], value: MediaSnapshot): PipelineResult<never> { return freeze({ ok: false as const, code, value }); }
+function privateIpv4(value: unknown): value is string {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/u.test(value)) return false;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [first, second] = parts as [number, number, number, number];
+  return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
+}
 function validInput(value: unknown): value is StartInput {
   if (value === null) return false;
   const raw = value as StartInput;
@@ -96,7 +105,15 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
     record.health.observe(record.streamId, "playback-ready", clock());
     record.playbackUrl = flvUrl(deviceId);
   };
-  const current = (): MediaSnapshot => freeze({ phase, revision, endpoint: endpoint === null ? null : freeze({ ...endpoint }), streams: freeze([...streams].map(([deviceId, record]) => {
+  const currentEndpoint = (): MediaSnapshot["endpoint"] => {
+    if (endpoint === null) return null;
+    let host: unknown = null;
+    try { host = dependencies.resolveEndpointHost?.() ?? null; } catch { host = null; }
+    return privateIpv4(host)
+      ? freeze({ host, port: endpoint.port, source: "automatic" as const })
+      : freeze({ ...endpoint });
+  };
+  const current = (): MediaSnapshot => freeze({ phase, revision, endpoint: currentEndpoint(), streams: freeze([...streams].map(([deviceId, record]) => {
     const state = record.health.snapshot(record.streamId)!;
     return freeze({ deviceId, streamId: record.streamId, phase: state.state, playbackUrl: record.playbackUrl, diagnostic: state.diagnostic });
   }).sort((a, b) => a.deviceId.localeCompare(b.deviceId))), player: player.snapshot(), diagnostic });

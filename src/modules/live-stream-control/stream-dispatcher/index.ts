@@ -5,7 +5,7 @@ export type StreamDispatchCheck = Readonly<{ readonly ok: true }> | Readonly<{ r
 export type StreamDispatchResult = Readonly<{ readonly ok: true; readonly operation: StreamOperation; readonly state: StreamDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: StreamOperation; readonly code: StreamDispatchCode; readonly state: StreamDispatchSnapshot | null; readonly reason?: string }>;
 export interface StreamDispatcherDependencies {
   readonly media: { readonly snapshot: () => unknown };
-  readonly relay: { readonly latestTelemetry: (deviceId: string) => unknown; readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<unknown>; };
+  readonly relay: { readonly latestTelemetry: (deviceId: string) => unknown; readonly ingressAddress?: (deviceId: string) => unknown; readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<unknown>; };
   readonly capabilityGate: { readonly evaluate: (input: unknown) => unknown };
   readonly targetConfig: { readonly createRtmpTarget: (input: unknown) => unknown };
 }
@@ -16,6 +16,13 @@ type Lane = { phase: StreamDispatchSnapshot["phase"]; busy: boolean; lastOperati
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；输入边界由公开契约覆盖。
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
+const privateIpv4 = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/u.test(value)) return false;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [first, second] = parts as [number, number, number, number];
+  return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
+};
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；畸形依赖边界由公开契约覆盖。
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
 const attempt = <T>(action: () => T): Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false }> => {
@@ -95,7 +102,14 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
       if (!media.ok) return result(deviceId, lane, "start", false, "MEDIA_PIPELINE_UNAVAILABLE");
       const mediaSnapshot = media.value;
       if (!record(mediaSnapshot) || mediaSnapshot.phase !== "running" || !record(mediaSnapshot.endpoint)) return result(deviceId, lane, "start", false, "MEDIA_PIPELINE_UNAVAILABLE");
-      const target = attempt(() => dependencies.targetConfig.createRtmpTarget({ deviceId, endpoint: mediaSnapshot.endpoint }));
+      const ingress = attempt(() => {
+        const resolve = dependencies.relay.ingressAddress;
+        return typeof resolve === "function" ? resolve(deviceId) : null;
+      });
+      const endpoint = ingress.ok && privateIpv4(ingress.value)
+        ? freeze({ ...mediaSnapshot.endpoint, host: ingress.value })
+        : mediaSnapshot.endpoint;
+      const target = attempt(() => dependencies.targetConfig.createRtmpTarget({ deviceId, endpoint }));
       if (!target.ok || !record(target.value) || target.value.ok !== true || !record(target.value.value) || typeof target.value.value.rtmpUrl !== "string") return result(deviceId, lane, "start", false, "CONFIGURATION_INVALID");
       return send(deviceId, lane, "start", freeze({ name: "live-stream.start" as const, fields: freeze({ rtmpUrl: target.value.value.rtmpUrl }) }));
     },

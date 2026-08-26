@@ -176,13 +176,18 @@ const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (videoPhase === "awaiting-ingest") return "手机已接受推流，等待接收";
   if (videoPhase === "failed") return "图传失败";
   const streamPhase = text(read(read(device, "stream"), "phase"));
-  if (streamPhase === "starting" || streamPhase === "streaming") return "手机已接受推流命令";
+  const connection = read(device, "connection");
+  // 手机常回报 START_OK 但不真正推 RTMP；无画面时不得写成「已经有图传」。
+  if (streamPhase === "starting" || streamPhase === "streaming") {
+    if (read(connection, "aircraft") === "disconnected") return "飞机未连接，画面推不过来";
+    return "手机已接命令，电脑还没收到画面";
+  }
   if (streamPhase === "stopping") return "正在停止图传";
   if (streamPhase === "failed") return "图传失败";
   if (streamPhase === "disconnected") return "图传已中断，可重新启动";
-  const connection = read(device, "connection");
   if (read(connection, "sdk") !== "ready") return "图传未就绪：等待手机就绪";
   if (read(connection, "remoteController") !== "connected") return "图传未就绪：遥控器未连接";
+  if (read(connection, "aircraft") !== "connected") return "图传未就绪：飞机未连接";
   if (read(read(device, "capabilities"), "liveVideo") === "unsupported") return "图传未就绪：当前机不支持图传";
   if (transportBusy(read(device, "whipStream"))) return "图传未就绪：另一路图传占用中";
   return "图传可启动";
@@ -195,6 +200,7 @@ const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean 
   const connection = read(device, "connection");
   return read(connection, "sdk") === "ready"
     && read(connection, "remoteController") === "connected"
+    && read(connection, "aircraft") === "connected"
     && read(read(device, "capabilities"), "liveVideo") !== "unsupported";
 };
 const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean => {
@@ -283,6 +289,7 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
     if (name.startsWith("webrtc-")) return reject("请使用页面上的「启动图传」");
     if (name === "stream-start") {
       if (read(read(device, "connection"), "remoteController") !== "connected") return reject("遥控器未连接，无法启动图传");
+      if (read(read(device, "connection"), "aircraft") !== "connected") return reject("飞机未连接，无法启动图传");
     }
     if ((name === "stream-start" || name === "stream-stop") && transportBusy(read(device, "whipStream"))) {
       return reject("另一路图传正在使用，请先停止");

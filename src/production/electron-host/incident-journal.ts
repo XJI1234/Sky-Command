@@ -22,7 +22,16 @@ export interface IncidentJournal {
 }
 
 const MAX_DETAIL = 512;
-const quietMethods = new Set(["state.snapshot", "network.hint", "stream.refresh", "webrtc.refresh", "diagnostics.record"]);
+const quietMethods = new Set([
+  "state.snapshot",
+  "network.hint",
+  "stream.refresh",
+  "stream-refresh",
+  "video.playback",
+  "video-playback",
+  "webrtc.refresh",
+  "diagnostics.record",
+]);
 
 function defaultDirectory(): string {
   const localAppData = process.env.LOCALAPPDATA;
