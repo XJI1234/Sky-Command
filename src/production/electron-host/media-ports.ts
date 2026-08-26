@@ -1,31 +1,25 @@
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { extname, join, normalize, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { FfmpegCandidate, FileFacts } from "../../modules/media-pipeline/ffmpeg-locator/index.js";
 import type { HlsServerPort } from "../../modules/media-pipeline/hls-server/index.js";
 import type { RtmpIngressPort } from "../../modules/media-pipeline/rtmp-ingest/index.js";
-import type { ProcessExit, TranscodeJob, TranscoderProcessPort } from "../../modules/media-pipeline/transcode-runner/index.js";
+import type { ProcessExit, TranscoderProcessPort } from "../../modules/media-pipeline/transcode-runner/index.js";
 
 const require = createRequire(import.meta.url);
 type PublishListener = (id: string, streamPath: string) => void;
 type NodeEvent = { on: (name: string, listener: PublishListener) => void; removeListener: (name: string, listener: PublishListener) => void };
 type RtmpServer = { run: () => void; stop: () => void };
+type RtmpPullClient = {
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  startPull: () => void;
+  stop: () => void;
+};
 const NodeRtmpServer = require("node-media-server/src/node_rtmp_server.js") as new (config: { rtmp: { port: number; chunk_size: number; gop_cache: boolean; ping: number; ping_timeout: number } }) => RtmpServer;
+const NodeRtmpClient = require("node-media-server/src/node_rtmp_client.js") as new (url: string) => RtmpPullClient;
 const mediaContext = require("node-media-server/src/node_core_ctx.js") as { nodeEvent: NodeEvent };
-
-const mime: Record<string, string> = {
-  ".m3u8": "application/vnd.apple.mpegurl",
-  ".ts": "video/MP2T",
-  ".m4s": "video/iso.segment",
-};
-
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-};
 
 export interface MediaPortLogEvent {
   readonly kind: string;
@@ -120,13 +114,66 @@ export function discoverFfmpegCandidates(projectRoot: string): readonly FfmpegCa
   return candidates;
 }
 
-function createRtmpPort(log?: (event: MediaPortLogEvent) => void): RtmpIngressPort {
+function keepAvcVideoTag(payload: Buffer): boolean {
+  if (payload.length < 5) return false;
+  if ((payload[0] & 0x0f) !== 7) return true;
+  const packetType = payload[1];
+  if (packetType === 0) return true;
+  if (packetType !== 1) return false;
+  let offset = 5;
+  while (offset + 4 <= payload.length) {
+    const nalSize = payload.readUInt32BE(offset);
+    offset += 4;
+    if (nalSize <= 0 || offset + nalSize > payload.length) break;
+    const nalType = payload[offset]! & 0x1f;
+    if (nalType === 1 || nalType === 5) return true;
+    offset += nalSize;
+  }
+  return false;
+}
+
+function writeFlvHeader(res: ServerResponse): void {
+  const header = Buffer.alloc(13);
+  header.write("FLV");
+  header[3] = 1;
+  header[4] = 1;
+  header.writeUInt32BE(9, 5);
+  header.writeUInt32BE(0, 9);
+  res.write(header);
+}
+
+function writeFlvTag(res: ServerResponse, type: number, timestamp: number, payload: Buffer): void {
+  const size = payload.length;
+  const header = Buffer.alloc(11);
+  header[0] = type;
+  header.writeUIntBE(size, 1, 3);
+  header.writeUIntBE(timestamp & 0xffffff, 4, 3);
+  header[7] = (timestamp / 0x1000000) & 0xff;
+  header.writeUIntBE(0, 8, 3);
+  const previous = Buffer.alloc(4);
+  previous.writeUInt32BE(11 + size, 0);
+  res.write(Buffer.concat([header, payload, previous]));
+}
+
+function deviceIdFromFlvPath(pathname: string): string | null {
+  const match = /^\/live\/([^/]+)\.flv$/i.exec(pathname);
+  if (match === null) return null;
+  try {
+    const decoded = decodeURIComponent(match[1] ?? "");
+    return encodeURIComponent(decoded) === match[1] ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function createRtmpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLogEvent) => void): RtmpIngressPort {
   let server: RtmpServer | null = null;
   let published: PublishListener | null = null;
   let unpublished: PublishListener | null = null;
   return {
     listen: (port, events) => {
       if (server !== null) throw new Error("rtmp already listening");
+      shared.rtmpPort = port;
       published = (_id, streamPath) => {
         const path = publishPath(String(streamPath));
         const deviceId = deviceIdFromPublishPath(path) ?? undefined;
@@ -155,127 +202,113 @@ function createRtmpPort(log?: (event: MediaPortLogEvent) => void): RtmpIngressPo
   };
 }
 
-function send(response: ServerResponse, status: number, headers: Record<string, string>, body?: Buffer | string): void {
-  response.writeHead(status, headers);
-  response.end(body);
-}
-
-function createHlsPort(): HlsServerPort {
+function createFlvHttpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLogEvent) => void): HlsServerPort {
   let server: Server | null = null;
+  const clients = new Set<RtmpPullClient>();
   return {
     listen: (input) => {
-      if (server !== null) throw new Error("hls already listening");
-      const root = resolve(input.rootDirectory);
-      server = createServer((request: IncomingMessage, response: ServerResponse) => {
-        if (request.method === "OPTIONS") {
-          send(response, 204, cors);
+      if (server !== null) throw new Error("http-flv already listening");
+      mkdirSync(input.rootDirectory, { recursive: true });
+      server = createServer((req, res) => {
+        if (req.method === "OPTIONS") {
+          res.writeHead(204, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type,Range",
+          });
+          res.end();
           return;
         }
-        const url = new URL(request.url ?? "/", `http://127.0.0.1:${input.port}`);
-        const match = /^\/hls\/([^/]+)\/([^/]+)$/.exec(url.pathname);
-        if (match === null) {
-          send(response, 404, { ...cors, "Content-Type": "text/plain; charset=utf-8" }, "not found");
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          res.writeHead(405, { "Access-Control-Allow-Origin": "*" });
+          res.end();
           return;
         }
-        const streamId = decodeURIComponent(match[1] ?? "");
-        const fileName = decodeURIComponent(match[2] ?? "");
-        const target = resolve(join(root, streamId, fileName));
-        const relativePath = relative(root, target);
-        if (relativePath.startsWith("..") || relativePath.includes(`..${sep}`) || normalize(relativePath).startsWith("..")) {
-          send(response, 404, { ...cors, "Content-Type": "text/plain; charset=utf-8" }, "not found");
+        let pathname = "/";
+        try { pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname; } catch { /* keep / */ }
+        const deviceId = deviceIdFromFlvPath(pathname);
+        if (deviceId === null) {
+          res.writeHead(404, { "Access-Control-Allow-Origin": "*" });
+          res.end();
           return;
         }
-        if (!existsSync(target) || !statSync(target).isFile()) {
-          send(response, 404, { ...cors, "Content-Type": "text/plain; charset=utf-8" }, "not found");
+        res.writeHead(200, {
+          "Content-Type": "video/x-flv",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-cache, no-store",
+          Connection: "close",
+        });
+        if (req.method === "HEAD") {
+          res.end();
           return;
         }
-        const type = mime[extname(target).toLowerCase()] ?? "application/octet-stream";
-        send(response, 200, { ...cors, "Content-Type": type, "Cache-Control": "no-store" }, readFileSync(target));
+        writeFlvHeader(res);
+        const pull = new NodeRtmpClient(`rtmp://127.0.0.1:${shared.rtmpPort}/live/${encodeURIComponent(deviceId)}`);
+        clients.add(pull);
+        const onVideo = (payload: unknown, timestamp: unknown): void => {
+          if (!Buffer.isBuffer(payload) || typeof timestamp !== "number" || !keepAvcVideoTag(payload) || res.writableEnded) return;
+          try { writeFlvTag(res, 9, timestamp >>> 0, payload); } catch { /* client gone */ }
+        };
+        const onClose = (): void => {
+          clients.delete(pull);
+          if (!res.writableEnded) try { res.end(); } catch { /* ignore */ }
+        };
+        pull.on("video", onVideo);
+        pull.on("close", onClose);
+        req.on("close", () => {
+          clients.delete(pull);
+          try { pull.stop(); } catch { /* ignore */ }
+        });
+        try { pull.startPull(); } catch {
+          clients.delete(pull);
+          if (!res.writableEnded) res.end();
+        }
       });
       server.listen(input.port, input.host);
+      log?.({ kind: "http-flv-listening", detail: `filtered HTTP-FLV listening on ${input.port}` });
     },
     close: () => {
+      for (const client of clients) {
+        try { client.stop(); } catch { /* ignore */ }
+      }
+      clients.clear();
       server?.close();
       server = null;
     },
   };
 }
 
-function ffmpegArgs(job: TranscodeJob, playlist: string): readonly string[] {
-  return [
-    "-hide_banner",
-    "-loglevel", "error",
-    "-fflags", "nobuffer+discardcorrupt",
-    "-probesize", "32768",
-    "-analyzeduration", "0",
-    "-i", job.inputUrl,
-    "-c:v", "copy",
-    "-an",
-    "-f", "hls",
-    "-hls_time", "1",
-    "-hls_list_size", "3",
-    "-hls_flags", "delete_segments+append_list+independent_segments",
-    "-flush_packets", "1",
-    "-hls_segment_filename", join(job.outputDirectory, "seg-%03d.ts"),
-    playlist,
-  ];
-}
-
 function createProcessFactory(onPlaylistReady: (deviceId: string) => void, log?: (event: MediaPortLogEvent) => void): () => TranscoderProcessPort {
   return () => ({
     launch: (job, onExit) => {
-      mkdirSync(job.outputDirectory, { recursive: true });
-      const playlist = join(job.outputDirectory, "index.m3u8");
       const deviceId = deviceIdFromInputUrl(job.inputUrl) ?? undefined;
-      let child: ChildProcess;
-      try {
-        child = spawn(job.executablePath, ffmpegArgs(job, playlist), { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
-      } catch {
-        log?.({ kind: "ffmpeg-spawn-failed", ...(deviceId === undefined ? {} : { deviceId }), detail: "FFmpeg process could not start" });
-        onExit({ kind: "failed" } satisfies ProcessExit);
-        return { terminate: () => undefined };
-      }
-      child.stderr?.on("data", (chunk: unknown) => {
-        const text = String(chunk).trim();
-        if (text.length === 0) return;
-        log?.({ kind: "ffmpeg-stderr", ...(deviceId === undefined ? {} : { deviceId }), detail: text });
-      });
       let finished = false;
-      let notified = false;
       const finish = (kind: ProcessExit["kind"]): void => {
         if (finished) return;
         finished = true;
-        clearInterval(timer);
-        log?.({ kind: kind === "exited" ? "ffmpeg-exited" : "ffmpeg-failed", ...(deviceId === undefined ? {} : { deviceId }), detail: kind === "exited" ? "FFmpeg exited" : "FFmpeg failed" });
         onExit({ kind });
       };
-      const timer = setInterval(() => {
-        if (notified || finished) return;
-        try {
-          if (!existsSync(playlist) || statSync(playlist).size <= 0) return;
-          notified = true;
-          if (deviceId !== undefined) {
-            log?.({ kind: "playlist-ready", deviceId, detail: "HLS playlist is ready" });
-            onPlaylistReady(deviceId);
-          }
-        } catch { /* 播放列表尚未可读取 */ }
-      }, 250);
-      child.on("exit", (code) => finish(code === 0 ? "exited" : "failed"));
-      child.on("error", () => finish("failed"));
+      if (deviceId === undefined) {
+        finish("failed");
+        return { terminate: () => undefined };
+      }
+      log?.({ kind: "http-flv-ready", deviceId, detail: "HTTP-FLV playback URL is ready" });
+      setImmediate(() => {
+        if (finished) return;
+        onPlaylistReady(deviceId);
+      });
       return {
-        terminate: () => {
-          clearInterval(timer);
-          if (!child.killed) child.kill();
-        },
+        terminate: () => finish("exited"),
       };
     },
   });
 }
 
 export function createMediaPorts(onPlaylistReady: (deviceId: string) => void, log?: (event: MediaPortLogEvent) => void): MediaPorts {
+  const shared = { rtmpPort: 19_500 };
   return {
-    rtmp: createRtmpPort(log),
-    hls: createHlsPort(),
+    rtmp: createRtmpPort(shared, log),
+    hls: createFlvHttpPort(shared, log),
     fileFacts: {
       isExecutableFile: (path) => {
         try { return existsSync(path) && statSync(path).isFile(); } catch { return false; }

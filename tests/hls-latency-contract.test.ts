@@ -3,41 +3,37 @@ import { describe, expect, it } from "vitest";
 
 const mediaPorts = () => readFileSync(new URL("../src/production/electron-host/media-ports.ts", import.meta.url), "utf8");
 const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8");
+const html = () => readFileSync(new URL("../src/production/operator-console/renderer/index.html", import.meta.url), "utf8");
+const pipeline = () => readFileSync(new URL("../src/modules/media-pipeline/index.ts", import.meta.url), "utf8");
 
-describe("旧 HLS 延迟契约", () => {
-  it("保留可解码 GOP，并以无转码、无音频的短片段输出 HLS", () => {
+describe("旧图传本机 HTTP-FLV 播放契约", () => {
+  it("手机 RTMP 推流后由本机过滤 HTTP-FLV 播放，不再切 HLS 也不再开 ffplay", () => {
     const source = mediaPorts();
-
     expect(source).toContain("gop_cache: true");
-    expect(source).toContain('"-fflags", "nobuffer+discardcorrupt"');
-    expect(source).toContain('"-probesize", "32768"');
-    expect(source).toContain('"-analyzeduration", "0"');
-    expect(source).toContain('"-c:v", "copy"');
-    expect(source).toContain('"-an"');
-    expect(source).toContain('"-hls_time", "1"');
-    expect(source).toContain('"-hls_list_size", "3"');
-    expect(source).toContain('"-flush_packets", "1"');
-    expect(source).toContain("delete_segments+append_list+independent_segments");
-    expect(source).not.toContain('"-c:a", "aac"');
-    expect(source).not.toContain("split_by_time");
-    expect(source).not.toContain('"-flags", "low_delay"');
+    expect(source).toContain("NodeRtmpClient");
+    expect(source).toContain("keepAvcVideoTag");
+    expect(source).toContain("startPull");
+    expect(source).toContain("http-flv-ready");
+    expect(source).toContain("onPlaylistReady(deviceId)");
+    expect(source).not.toContain("ffplay.exe");
+    expect(source).not.toContain("NodeHttpServer");
+    expect(source).not.toContain("dump_extra");
+    expect(source).not.toContain("-hls_segment_type");
+    expect(pipeline()).toContain(".flv");
+    expect(pipeline()).toContain("/live/");
   });
 
-  it("以一段同步距离播放经典 HLS，并保留 hls.js 追帧能力", () => {
+  it("飞行页用 flv.js 在本页播放，不再提示独立窗口", () => {
     const source = renderer();
-
-    expect(source).toContain("lowLatencyMode: true");
-    expect(source).toContain("liveSyncDurationCount: 1");
-    expect(source).toContain("liveMaxLatencyDurationCount: 4");
-    expect(source).toContain("maxLiveSyncPlaybackRate: 1.2");
-    expect(source).toContain("maxBufferLength: 4");
-    expect(source).toContain("maxMaxBufferLength: 8");
-    expect(source).toContain("backBufferLength: 0");
-    expect(source).toContain("Hls.Events.ERROR");
-    expect(source).toContain("data?.fatal");
-    expect(source).toContain("经典图传画面中断，请停止后重试");
-    expect(source).toContain("hlsBlocked");
-    expect(source).toContain("if (hlsBlocked) return");
-    expect(source).toContain("if (!view.playbackReady) hlsBlocked = false");
+    const page = html();
+    expect(source).toContain("flvjs");
+    expect(source).toContain("enableStashBuffer: false");
+    expect(source).toContain("playbackUrl(");
+    expect(source).toContain("attachVideo(url)");
+    expect(source).toContain("video-playback");
+    expect(source).not.toContain("图传已在独立窗口播放");
+    expect(page).toContain("左侧会显示实时画面");
+    expect(page).toContain("#workspace-flight video");
+    expect(page.slice(page.indexOf('id="workspace-flight"'))).toContain('<video id="video"');
   });
 });

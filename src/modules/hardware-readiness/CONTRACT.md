@@ -35,7 +35,7 @@ interface HardwareReadinessInput {
 }
 ```
 
-旧图传检查桌面局域网与 FFmpeg 事实；飞控检查不要求这两项。两种检查都要求手机当前在线、会话已稳定、SDK、遥控器、飞控和飞行器均已连接。缺失、非布尔或畸形安全事实一律阻塞，不得推定为安全。
+旧图传检查桌面局域网与 FFmpeg 事实；飞控检查不要求这两项。两种检查都要求手机当前在线、会话已稳定、SDK 与遥控器已连接。飞控动作额外要求飞控和飞行器已连接；旧图传不把飞机/飞控遥测当作推流门闩（真实能否出画由 DJI 启动与 RTMP 收流判定）。缺失、非布尔或畸形安全事实一律阻塞，不得推定为安全。
 
 ## 阻塞项和顺序
 
@@ -48,8 +48,8 @@ interface HardwareReadinessInput {
 5. `PHONE_SESSION_UNSTABLE`
 6. `SDK_NOT_READY`
 7. `REMOTE_CONTROLLER_DISCONNECTED`
-8. `FLIGHT_CONTROLLER_DISCONNECTED`
-9. `AIRCRAFT_DISCONNECTED`
+8. `FLIGHT_CONTROLLER_DISCONNECTED`（仅飞控）
+9. `AIRCRAFT_DISCONNECTED`（仅飞控）
 
 畸形输入仅返回 `INVALID_INPUT`。其余合法输入必须收集全部独立阻塞项，不得因为前一项失败而短路。
 

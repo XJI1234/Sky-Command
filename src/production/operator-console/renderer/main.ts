@@ -1,3 +1,4 @@
+import flvjs from "flv.js";
 import Hls from "hls.js";
 import { OperatorConsole } from "../index.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
@@ -73,8 +74,11 @@ const operatorNotice = (value: unknown): string => {
 };
 
 let hlsPlayer: Hls | null = null;
+let flvPlayer: ReturnType<typeof flvjs.createPlayer> | null = null;
 let attachedUrl: string | null = null;
 let hlsBlocked = false;
+let hlsFatalStreak = 0;
+let lastPlaybackHealthAt = 0;
 let whepPeer: RTCPeerConnection | null = null;
 let whepGeneration = 0;
 
@@ -82,25 +86,77 @@ const detachVideo = (): void => {
   const video = el("video") as HTMLVideoElement;
   hlsPlayer?.destroy();
   hlsPlayer = null;
+  if (flvPlayer !== null) {
+    try { flvPlayer.pause(); } catch { /* ignore */ }
+    try { flvPlayer.unload(); } catch { /* ignore */ }
+    try { flvPlayer.detachMediaElement(); } catch { /* ignore */ }
+    try { flvPlayer.destroy(); } catch { /* ignore */ }
+    flvPlayer = null;
+  }
   attachedUrl = null;
   video.removeAttribute("src");
   video.srcObject = null;
   video.load();
 };
 
+const playVideo = (video: HTMLVideoElement): void => {
+  video.muted = true;
+  video.defaultMuted = true;
+  video.volume = 0;
+  video.setAttribute("playsinline", "");
+  void video.play().catch((error: unknown) => {
+    const name = error instanceof Error ? error.name : "";
+    show(name === "NotAllowedError" ? "自动播放被拦截，请点一下上方画面" : "图传已就绪但未出画，请点上方播放");
+  });
+};
+
+const reportPlaybackHealth = (video: HTMLVideoElement): void => {
+  const now = Date.now();
+  if (now - lastPlaybackHealthAt < 2_000) return;
+  lastPlaybackHealthAt = now;
+  if (video.videoWidth > 0 && !video.paused && video.currentTime > 0) {
+    hlsFatalStreak = 0;
+    show(`图传播放中 ${video.videoWidth}×${video.videoHeight}`);
+    return;
+  }
+  if (attachedUrl !== null && (flvPlayer !== null || hlsPlayer !== null)) {
+    show(`图传已附着未出画 readyState=${video.readyState} size=${video.videoWidth}x${video.videoHeight}`);
+  }
+};
+
 const attachVideo = (url: string): void => {
   closeWhep();
   const video = el("video") as HTMLVideoElement;
-  if (attachedUrl === url && hlsPlayer !== null) {
-    void video.play().catch(() => undefined);
+  if (attachedUrl === url && (flvPlayer !== null || hlsPlayer !== null)) {
+    if (video.paused || video.currentTime === 0 || video.videoWidth === 0) playVideo(video);
+    reportPlaybackHealth(video);
     return;
   }
   detachVideo();
   attachedUrl = url;
-  const play = (): void => { void video.play().catch(() => undefined); };
+  const play = (): void => {
+    playVideo(video);
+    reportPlaybackHealth(video);
+  };
+  if (url.includes(".flv") && flvjs.isSupported()) {
+    flvPlayer = flvjs.createPlayer(
+      { type: "flv", isLive: true, hasAudio: false, url },
+      { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true },
+    );
+    flvPlayer.on(flvjs.Events.ERROR, (errorType, errorDetail) => {
+      show(`图传中断（${String(errorType)}/${String(errorDetail)}），正在重试`);
+      const retryUrl = attachedUrl;
+      detachVideo();
+      if (retryUrl !== null) window.setTimeout(() => attachVideo(retryUrl), 800);
+    });
+    flvPlayer.attachMediaElement(video);
+    flvPlayer.load();
+    play();
+    return;
+  }
   if (Hls.isSupported()) {
     hlsPlayer = new Hls({
-      enableWorker: true,
+      enableWorker: typeof location === "undefined" || location.protocol !== "file:",
       lowLatencyMode: true,
       liveSyncDurationCount: 1,
       liveMaxLatencyDurationCount: 4,
@@ -111,11 +167,32 @@ const attachVideo = (url: string): void => {
       backBufferLength: 0,
     });
     hlsPlayer.on(Hls.Events.MANIFEST_PARSED, play);
+    hlsPlayer.on(Hls.Events.FRAG_CHANGED, () => { reportPlaybackHealth(video); });
     hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
-      if (data?.fatal !== true) return;
-      hlsBlocked = true;
-      show("经典图传画面中断，请停止后重试");
+      if (data?.fatal !== true || hlsPlayer === null) return;
+      hlsFatalStreak += 1;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && hlsFatalStreak <= 3) {
+        show("图传网络抖动，正在重连播放列表");
+        hlsPlayer.startLoad();
+        return;
+      }
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && hlsFatalStreak <= 3) {
+        show("图传解码异常，正在恢复播放器");
+        hlsPlayer.recoverMediaError();
+        playVideo(video);
+        return;
+      }
+      const retryUrl = attachedUrl;
+      show("经典图传画面中断，正在重新附着");
       detachVideo();
+      hlsBlocked = hlsFatalStreak >= 6;
+      if (!hlsBlocked && retryUrl !== null) {
+        window.setTimeout(() => {
+          if (!hlsBlocked) attachVideo(retryUrl);
+        }, 800);
+      } else {
+        show("经典图传画面中断，请停止后重试");
+      }
     });
     hlsPlayer.loadSource(url);
     hlsPlayer.attachMedia(video);
@@ -200,6 +277,9 @@ const connectWhep = async (input: unknown): Promise<void> => {
       const video = el("video") as HTMLVideoElement;
       const stream = event.streams[0] ?? new MediaStream([event.track]);
       video.srcObject = stream;
+      video.muted = true;
+      video.defaultMuted = true;
+      video.volume = 0;
       const ready = (): void => {
         if (whepPeer !== peer || token !== whepGeneration) return;
         try { bridge().whepReady?.(token); } catch { /* renderer-to-host IPC is isolated */ }
@@ -236,20 +316,31 @@ const clearWhep = (input: unknown): void => {
 const accepted = (value: unknown): boolean => value !== null && typeof value === "object" && (value as { ok?: unknown }).ok === true;
 
 const playbackUrl = (value: unknown): string | null => {
-  const url = read(read(value, "value"), "url") ?? read(value, "url");
-  return typeof url === "string" && url.length > 0 ? url : null;
+  let current: unknown = value;
+  for (let step = 0; step < 8; step += 1) {
+    if (current !== null && typeof current === "object" && read(current, "ok") === false) return null;
+    const url = read(current, "url");
+    if (typeof url === "string" && url.trim().length > 0) return url;
+    const next = unwrap(current);
+    if (next === current) break;
+    current = next;
+  }
+  return null;
 };
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
   if (whepPeer !== null) return;
-  if (!view.playbackReady) hlsBlocked = false;
+  if (!view.playbackReady) {
+    hlsBlocked = false;
+    hlsFatalStreak = 0;
+    if (attachedUrl !== null) detachVideo();
+    return;
+  }
   if (hlsBlocked) return;
-  if (!view.playbackReady) return;
-  const deviceId = view.playingVideoDeviceId ?? view.streamDeviceId;
-  if (deviceId === null) return;
-  const playback = unwrap(await bridge().invoke("video-playback", { deviceId }));
-  const url = playbackUrl(playback);
-  if (url !== null) attachVideo(url);
+  if (view.streamDeviceId === null) return;
+  const url = playbackUrl(await bridge().invoke("video-playback", { deviceId: view.streamDeviceId }));
+  if (url === null) return;
+  attachVideo(url);
 }
 
 const connectionLabel = (connection: unknown, key: string, ok: string, wait: string): string => {
@@ -575,10 +666,7 @@ el("route-remove").addEventListener("click", async () => {
     const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
     if (action === "stream-select") {
       await run(action, "stream-select", { deviceId });
-      const playback = unwrap(await bridge().invoke("video-playback", { deviceId }));
-      const url = playbackUrl(playback);
-      if (url !== null) attachVideo(url);
-      else show(view.streamLabel);
+      show("图传已选中，等待本页出画");
       return;
     }
     if (action === "webrtc-stream-clear") {

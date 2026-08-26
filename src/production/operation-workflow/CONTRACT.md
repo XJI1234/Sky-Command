@@ -116,7 +116,7 @@ instance.dispose() -> void
 
 它还接收唯一的运行时选项 `now(): number`，用于调用既有 `mediaPipeline.evaluate(now)` 和记录手机会话的稳定时间。该函数必须返回非负有限毫秒数；不可用时 `refreshMedia()` 返回稳定失败，且不执行其他操作。模块不创建计时器，未来 Electron/IPC 装配或页面按固定频率调用 `refreshMedia()`。
 
-`hardwareReadiness` 是装配根确认过的桌面事实。`sessionStableAfterMs` 必须是非负有限毫秒数；生产值为 15 秒。工作流只在中继设备首次出现或同设备会话更换时开始计时，设备消失时删除该计时。它不向手机发送探测命令，也不把一次 Relay 连接或 DJI 回调伪造成链路可用。
+`hardwareReadiness` 是装配根确认过的桌面事实。`sessionStableAfterMs` 必须是非负有限毫秒数；生产值为 15 秒。工作流只在中继设备首次出现或同设备会话更换时开始计时，设备消失时删除该计时。若当前遥测已同时确认 SDK、遥控器、飞控和飞机均为连接，则旧图传与飞控预检视会话已稳定，不再等待该计时。它不向手机发送探测命令，也不把一次 Relay 连接或 DJI 回调伪造成链路可用。
 
 `desktop-runtime` 负责启动、停止中继与媒体服务；`operation-workflow` 不得替代其生命周期职责。最外层生产装配根负责按下列顺序构造：
 
@@ -142,6 +142,13 @@ interface OperationWorkflowSnapshot {
   readonly devices: readonly WorkflowDevice[];
   readonly selectedVideoDeviceId: string | null;
   readonly revision: number;
+  readonly media: {
+    readonly streams: readonly {
+      readonly deviceId: string;
+      readonly phase: string;
+      readonly playbackUrl: string | null;
+    }[];
+  };
 }
 ```
 

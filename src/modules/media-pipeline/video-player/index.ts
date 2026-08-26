@@ -38,12 +38,8 @@ function validDeviceId(value: unknown): value is string {
 function validUrl(value: unknown): value is string {
   if (typeof value !== "string" || !URL.canParse(value)) return false;
   const url = new URL(value);
-  return (url.protocol === "http:" || url.protocol === "https:")
-    && url.username.length === 0
-    && url.password.length === 0
-    && url.search.length === 0
-    && url.hash.length === 0
-    && url.pathname.endsWith("/index.m3u8");
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username.length > 0 || url.password.length > 0 || url.search.length > 0 || url.hash.length > 0) return false;
+  return url.pathname.endsWith("/index.m3u8") || url.pathname.endsWith(".flv");
 }
 
 function sourceInput(value: unknown): SourceInput | null {

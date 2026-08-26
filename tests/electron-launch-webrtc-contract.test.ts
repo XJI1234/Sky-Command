@@ -22,6 +22,7 @@ describe("Electron 主进程低延迟装配", () => {
     expect(text).toContain("return -10");
     expect(text).toContain("commandTimeoutMs: 120_000");
     expect(text).toContain("missionTimeoutMs: 600_000");
+    expect(text).toContain('app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required")');
   });
 
   it("旧 FFmpeg 缺失只记录旧链路故障，不阻断 WebRTC 应用启动", () => {

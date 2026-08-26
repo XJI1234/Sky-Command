@@ -42,10 +42,10 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
 ## 判定规则
 
 - 中继离线时全部拒绝 `RELAY_OFFLINE`。
-- SDK 不是 `true` 时全部拒绝 `SDK_NOT_READY`；遥控器不是 `true` 时全部拒绝 `REMOTE_CONTROLLER_OFFLINE`。
-- `pairing` 仅在 SDK/遥控器就绪且飞行器未连接时允许；飞行器已连接时拒绝 `PAIRING_NOT_NEEDED`。飞控已连接但飞行器未连接时仍允许对频。
-- 其余操作均要求飞控和飞行器均为 true，否则拒绝 `AIRCRAFT_NOT_CONNECTED`。
-- `live-stream` 还要求 `capabilities.liveVideo === true`。能力对象缺失或字段缺失为 `CAPABILITY_UNKNOWN`，显式 false 为 `LIVE_VIDEO_UNSUPPORTED`。
+- SDK 不是 `true` 时全部拒绝 `SDK_NOT_READY`。
+- `pairing` 仅在 SDK 就绪且飞行器未连接时允许；飞行器已连接时拒绝 `PAIRING_NOT_NEEDED`。飞控已连接但飞行器未连接时仍允许对频。对频不要求遥控器。
+- `live-stream` 要求遥控器已连接，并要求 `capabilities.liveVideo === true`。能力对象缺失或字段缺失为 `CAPABILITY_UNKNOWN`，显式 false 为 `LIVE_VIDEO_UNSUPPORTED`。`live-stream` 不因飞控/飞机遥测未连而拒绝（由 DJI 启动结果判定）。
+- 其余操作要求遥控器、飞控和飞行器均为 true，否则拒绝 `REMOTE_CONTROLLER_OFFLINE` 或 `AIRCRAFT_NOT_CONNECTED`。
 - `waypoint-mission` 还要求 `waypointMission === true` 且 `waypointMissionSupport === "supported"`。字段缺失为 `CAPABILITY_UNKNOWN`，其他情况为 `WAYPOINT_UNSUPPORTED`。
 - `transmission-settings` 与 `camera-settings` 不拥有额外能力字段；在飞机链路就绪时允许。
 

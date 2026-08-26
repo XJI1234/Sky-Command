@@ -128,13 +128,18 @@ function create(dependencies: Dependencies) {
     const configuredDelay = read(configuration, "sessionStableAfterMs");
     const observedAt = clock();
     const connectedAt = connectedSince.get(deviceId);
-    const relayStable = observedAt !== null && connectedAt !== undefined && typeof configuredDelay === "number" && Number.isFinite(configuredDelay) && configuredDelay >= 0 && observedAt - connectedAt >= configuredDelay;
+    const waited = observedAt !== null && connectedAt !== undefined && typeof configuredDelay === "number" && Number.isFinite(configuredDelay) && configuredDelay >= 0 && observedAt - connectedAt >= configuredDelay;
     const payload = record(read(telemetry(deviceId), "payload")) ?? freeze({});
     const payloadFacts: Record<string, boolean> = {};
     for (const key of ["sdkRegistered", "remoteControllerConnected", "flightControllerConnected", "connected"]) {
       const value = read(payload, key);
       if (typeof value === "boolean") payloadFacts[key] = value;
     }
+    const factsComplete = payloadFacts.sdkRegistered === true
+      && payloadFacts.remoteControllerConnected === true
+      && payloadFacts.flightControllerConnected === true
+      && payloadFacts.connected === true;
+    const relayStable = factsComplete || waited;
     return HardwareReadiness.evaluate({
       desktop: {
         lanAddressAvailable: read(configuration, "lanAddressAvailable") as boolean,

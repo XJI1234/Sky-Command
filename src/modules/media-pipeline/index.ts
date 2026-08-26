@@ -49,7 +49,15 @@ export interface MediaPipelineInstance {
 }
 
 interface StartInput { readonly interfaces: readonly InterfaceFact[]; readonly manualHost: string | null; readonly hlsRootDirectory: string; readonly ffmpegCandidates: readonly FfmpegCandidate[]; }
-interface StreamRecord { readonly streamId: string; readonly runner: TranscodeRunnerInstance; readonly health: StreamHealthInstance; readonly playbackUrl: string | null; }
+interface StreamRecord {
+  readonly streamId: string;
+  readonly deviceId: string;
+  readonly job: Readonly<{ readonly streamId: string; readonly executablePath: string; readonly inputUrl: string; readonly outputDirectory: string }>;
+  readonly runner: TranscodeRunnerInstance;
+  readonly health: StreamHealthInstance;
+  playbackUrl: string | null;
+  restartAttempts: number;
+}
 
 const DIAGNOSTIC = "媒体流水线启动失败。请检查桌面端服务配置。";
 
@@ -95,12 +103,33 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
         const streamHealth = StreamHealth.create(options.health);
         streamHealth.begin(streamId, clock());
         streamHealth.observe(streamId, "ingest-started", clock());
+        const job = freeze({
+          streamId,
+          executablePath,
+          inputUrl: `rtmp://127.0.0.1:${activeEndpoint.port}/live/${encodeURIComponent(stream.deviceId)}`,
+          outputDirectory: `${rootDirectory}/${streamId}`,
+        });
         const processPort = dependencies.processFactory();
-        const runner = TranscodeRunner.create({ launch: (job, onExit) => processPort.launch(job, (event) => { onExit(event); streamHealth.observe(streamId, "transcoder-exited", clock()); }) });
-        const started = runner.start({ streamId, executablePath, inputUrl: `rtmp://${activeEndpoint.host}:${activeEndpoint.port}/live/${encodeURIComponent(stream.deviceId)}`, outputDirectory: `${rootDirectory}/${streamId}` });
+        const runner = TranscodeRunner.create({
+          launch: (launchJob, onExit) => processPort.launch(launchJob, (event) => {
+            onExit(event);
+            const record = streams.get(stream.deviceId);
+            if (record === undefined) return;
+            const stillPublishing = rtmpIngest.snapshot().streams.some((entry) => entry.deviceId === stream.deviceId && entry.phase === "active");
+            const healthState = record.health.snapshot(record.streamId)?.state;
+            // Only revive remux after HLS was already ready; early probe deaths still fail the lane.
+            if (stillPublishing && healthState === "ready" && record.restartAttempts < 8) {
+              record.restartAttempts += 1;
+              const restarted = record.runner.start(record.job);
+              if (restarted.ok && restarted.value.phase === "running") return;
+            }
+            record.health.observe(record.streamId, "transcoder-exited", clock());
+          }),
+        });
+        const started = runner.start(job);
         if (started.ok) streamHealth.observe(streamId, "transcoder-started", clock());
         else streamHealth.observe(streamId, "transcoder-exited", clock());
-        streams.set(stream.deviceId, { streamId, runner, health: streamHealth, playbackUrl: null });
+        streams.set(stream.deviceId, { streamId, deviceId: stream.deviceId, job, runner, health: streamHealth, playbackUrl: null, restartAttempts: 0 });
       }
       if (stream.phase === "ended" && streams.has(stream.deviceId)) {
         const record = streams.get(stream.deviceId)!;
@@ -176,8 +205,8 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
       const record = streams.get(deviceId as string);
       if (record === undefined) return failure("UNKNOWN_DEVICE", current());
       record.health.observe(record.streamId, "playlist-ready", clock());
-      const playback = hls.playback(record.streamId) as Extract<ReturnType<typeof hls.playback>, { readonly ok: true }>;
-      streams.set(deviceId as string, { ...record, playbackUrl: playback.value.url });
+      record.playbackUrl = `http://127.0.0.1:${options.hlsPort}/live/${encodeURIComponent(deviceId as string)}.flv`;
+      record.restartAttempts = 0;
       return success(current());
     },
     selectPlayer: (deviceId) => {

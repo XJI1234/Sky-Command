@@ -270,9 +270,13 @@ describe("操作台工作区", () => {
       ok: false,
       reason: "飞机尚未连接",
     });
-    expect(OperatorConsole.evaluate("stream-start", noFc)).toEqual({
+    expect(OperatorConsole.evaluate("stream-start", noFc)).toEqual({ ok: true });
+
+    const noAircraft = flight({ connection: { ...device().connection, aircraft: "disconnected", flightController: "disconnected" } });
+    expect(OperatorConsole.evaluate("stream-start", noAircraft)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("mission-start", noAircraft)).toEqual({
       ok: false,
-      reason: "飞机尚未连接，无法启动图传",
+      reason: "飞机尚未连接",
     });
   });
 
@@ -283,7 +287,7 @@ describe("操作台工作区", () => {
       workspace: "flight",
     });
     expect(waiting.playbackReady).toBe(false);
-    expect(waiting.streamLabel).toBe("桌面等待 HLS 播放列表");
+    expect(waiting.streamLabel).toBe("正在准备画面");
 
     const ready = OperatorConsole.project({
       snapshot: snapshot([device({ stream: { phase: "streaming" }, video: { phase: "ready", selected: true } })], { selectedVideoDeviceId: "phone-1" }),
@@ -291,7 +295,7 @@ describe("操作台工作区", () => {
       workspace: "flight",
     });
     expect(ready.playbackReady).toBe(true);
-    expect(ready.streamLabel).toBe("已获取 HLS，可附着播放器");
+    expect(ready.streamLabel).toBe("图传播放中");
   });
 
   it("低延迟图传阶段优先于 HLS 标签，并允许飞行页启动低延迟图传", () => {

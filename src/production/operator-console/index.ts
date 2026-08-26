@@ -170,8 +170,8 @@ const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (whipPhase === "failed") return "低延迟图传失败";
   if (whipPhase === "disconnected") return "低延迟图传已中断";
   const videoPhase = text(read(read(device, "video"), "phase"));
-  if (videoPhase === "ready") return "已获取 HLS，可附着播放器";
-  if (videoPhase === "awaiting-playlist") return "桌面等待 HLS 播放列表";
+  if (videoPhase === "ready") return "图传播放中";
+  if (videoPhase === "awaiting-playlist") return "正在准备画面";
   if (videoPhase === "awaiting-ingest") return "手机已接受推流，等待接收";
   if (videoPhase === "failed") return "图传失败";
   const streamPhase = text(read(read(device, "stream"), "phase"));
@@ -197,7 +197,7 @@ const flightDevice = (view: OperatorView, action: string): OperatorActionResult 
   if (deviceId === null) return reject(streamAction ? "请选择用于图传的飞机" : "请选择用于执行任务的飞机");
   const device = deviceById(view, deviceId);
   if (device === undefined) return reject("所选手机已离线");
-  if (action !== "mission-stage" && !aircraftConnected(device)) return reject("飞机尚未连接");
+  if (action !== "mission-stage" && !action.startsWith("stream-") && !action.startsWith("webrtc-stream-") && !aircraftConnected(device)) return reject("飞机尚未连接");
   return device;
 };
 const rejected = (value: OperatorActionResult | Record<string, unknown>): value is OperatorActionResult => "ok" in value;
@@ -253,7 +253,6 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   if (name === "stream-start" || name === "stream-stop" || name === "stream-select" || name === "webrtc-stream-start" || name === "webrtc-stream-stop" || name === "webrtc-stream-select") {
     if (name === "stream-start" || name === "webrtc-stream-start") {
       if (read(read(device, "connection"), "remoteController") !== "connected") return reject("遥控器未连接，无法启动图传");
-      if (read(read(device, "connection"), "flightController") !== "connected") return reject("飞机尚未连接，无法启动图传");
     }
     const otherLane = name.startsWith("webrtc-") ? read(device, "stream") : read(device, "whipStream");
     if ((name === "stream-start" || name === "stream-stop" || name === "webrtc-stream-start" || name === "webrtc-stream-stop") && transportBusy(otherLane)) {

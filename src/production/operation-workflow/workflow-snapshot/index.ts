@@ -38,7 +38,20 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
       pendingFlightAction: device.pendingFlightAction
     });
   }).sort((left, right) => left.deviceId.localeCompare(right.deviceId));
-  return freeze({ phase: input.disposed ? "disposed" as const : "ready" as const, selectedRouteId: input.selectedRouteId, routes: freeze([...input.routes]), devices: freeze(devices), selectedVideoDeviceId: input.selectedVideoDeviceId, revision: input.revision });
+  const media = freeze({
+    streams: freeze(mediaStreams.flatMap((item) => {
+      const deviceId = read(item, "deviceId");
+      const phase = read(item, "phase");
+      if (typeof deviceId !== "string" || typeof phase !== "string") return [];
+      const playbackUrl = read(item, "playbackUrl");
+      return [freeze({
+        deviceId,
+        phase,
+        playbackUrl: typeof playbackUrl === "string" ? playbackUrl : null,
+      })];
+    })),
+  });
+  return freeze({ phase: input.disposed ? "disposed" as const : "ready" as const, selectedRouteId: input.selectedRouteId, routes: freeze([...input.routes]), devices: freeze(devices), selectedVideoDeviceId: input.selectedVideoDeviceId, revision: input.revision, media });
 }
 
 export const WorkflowSnapshot = freeze({ create });

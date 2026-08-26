@@ -14,12 +14,16 @@ const ready = (): HardwareReadinessInput => ({
 });
 
 describe("hardware readiness contract", () => {
-  it("allows legacy video only when the complete desktop-phone-aircraft chain is ready", () => {
+  it("allows legacy video when phone/SDK/remote are ready even if aircraft telemetry is down", () => {
     const result = HardwareReadiness.evaluate(ready(), "legacy-video");
 
     expect(result).toEqual({ ok: true, blockers: [] });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.blockers)).toBe(true);
+    expect(HardwareReadiness.evaluate({
+      ...ready(),
+      payload: { ...ready().payload, flightControllerConnected: false, connected: false },
+    }, "legacy-video")).toEqual({ ok: true, blockers: [] });
   });
 
   it("reports every independent legacy-video risk in its stable priority order", () => {
@@ -43,10 +47,19 @@ describe("hardware readiness contract", () => {
       "PHONE_SESSION_UNSTABLE",
       "SDK_NOT_READY",
       "REMOTE_CONTROLLER_DISCONNECTED",
+    ]);
+    expect(result.blockers.every((blocker) => blocker.message.length > 0 && Object.isFrozen(blocker))).toBe(true);
+  });
+
+  it("still requires aircraft facts for flight-control readiness", () => {
+    const result = HardwareReadiness.evaluate({
+      ...ready(),
+      payload: { ...ready().payload, flightControllerConnected: false, connected: false },
+    }, "flight-control");
+    expect(result.blockers.map((blocker) => blocker.code)).toEqual([
       "FLIGHT_CONTROLLER_DISCONNECTED",
       "AIRCRAFT_DISCONNECTED",
     ]);
-    expect(result.blockers.every((blocker) => blocker.message.length > 0 && Object.isFrozen(blocker))).toBe(true);
   });
 
   it("keeps desktop legacy-media requirements out of flight-control readiness", () => {

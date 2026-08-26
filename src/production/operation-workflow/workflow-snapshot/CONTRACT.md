@@ -12,7 +12,7 @@
 WorkflowSnapshot.create(input) -> OperationWorkflowSnapshot
 ```
 
-未知遥测必须投影为 `unknown` 或 `null`。连接快照必须包含：
+未知遥测必须投影为 `unknown` 或 `null`。快照必须包含 `media.streams` 的冻结副本，每项只保留 `deviceId`、`phase` 和 `playbackUrl`（非字符串则为 `null`），供 `video.playback` 读取本机地址；不得保留输入对象引用，也不得带出 `diagnostic` 或其他媒体内部字段。连接快照必须包含：
 
 - `pairingState`：仅保留 `UNKNOWN`、`IDLE`、`PAIRING`、`PAIRED`、`STOPPING`、`FAILED`，其余为 `unknown`
 - `pose`：`{ latitude, longitude, altitudeMeters } | null`

@@ -31,6 +31,28 @@ describe("Electron WHEP 播放链路", () => {
     expect(source).not.toContain("JSON.stringify(unwrap(");
   });
 
+  it("飞行页只暴露旧 RTMP 图传按钮，图传状态写在飞行页内", () => {
+    const page = html();
+    expect(page).not.toContain("video-dock");
+    expect(renderer()).not.toContain("video-dock");
+    const flight = page.slice(page.indexOf('<main id="workspace-flight"'));
+    expect(flight).toContain('id="stream-label"');
+    expect(page.indexOf('id="stream-label"')).toBeGreaterThan(page.indexOf('id="workspace-flight"'));
+    expect(page).toContain('<video id="video"');
+    expect(page).toContain('data-action="stream-start"');
+    expect(page).toContain('data-action="stream-stop"');
+    expect(page).toContain('data-action="flight-takeoff"');
+    expect(page).not.toContain('data-action="stream-select"');
+    expect(page).not.toContain("附着播放器");
+    expect(page).not.toContain("启动低延迟");
+    expect(page).not.toContain("webrtc-stream-start");
+    expect(page).not.toContain("图传监看");
+    expect(page).toContain("左侧会显示实时画面");
+    expect(renderer()).toContain("playVideo");
+    expect(renderer()).toContain("flvjs");
+    expect(renderer()).toContain("自动播放被拦截，请点一下上方画面");
+  });
+
   it("操作台可显式运行实机预检，并展示开始操作被预检拦住的原因", () => {
     expect(html()).toContain('data-action="hardware-readiness"');
     const source = renderer();

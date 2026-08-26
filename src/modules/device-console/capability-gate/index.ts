@@ -49,10 +49,14 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
   if (capabilities === "invalid-value" || capabilities === "unreadable") return failure("capabilities.liveVideo", capabilities);
   if (input.relayConnected !== true) return decision(operation, false, "RELAY_OFFLINE");
   if (input.sdkRegistered !== true) return decision(operation, false, "SDK_NOT_READY");
-  if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
   if (operation === "pairing") return input.aircraftConnected === true ? decision(operation, false, "PAIRING_NOT_NEEDED") : decision(operation, true, null);
+  // 旧 RTMP 图传只要求 SDK 与 liveVideo 能力；飞机/飞控未连时由 DJI 启动失败回报，不得在桌面误拦推流命令。
+  if (operation === "live-stream") {
+    if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
+    return capabilities === null || capabilities.liveVideo === undefined ? decision(operation, false, "CAPABILITY_UNKNOWN") : capabilities.liveVideo ? decision(operation, true, null) : decision(operation, false, "LIVE_VIDEO_UNSUPPORTED");
+  }
+  if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
   if (input.flightControllerConnected !== true || input.aircraftConnected !== true) return decision(operation, false, "AIRCRAFT_NOT_CONNECTED");
-  if (operation === "live-stream") return capabilities === null || capabilities.liveVideo === undefined ? decision(operation, false, "CAPABILITY_UNKNOWN") : capabilities.liveVideo ? decision(operation, true, null) : decision(operation, false, "LIVE_VIDEO_UNSUPPORTED");
   if (operation === "waypoint-mission") {
     if (capabilities === null || capabilities.waypointMission === undefined || capabilities.waypointMissionSupport === undefined) return decision(operation, false, "CAPABILITY_UNKNOWN");
     return capabilities.waypointMission === true && capabilities.waypointMissionSupport === "supported" ? decision(operation, true, null) : decision(operation, false, "WAYPOINT_UNSUPPORTED");

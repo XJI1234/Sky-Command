@@ -149,6 +149,67 @@ describe("飞行作业工作流模块契约", () => {
     expect(starts).toBe(0);
   });
 
+  it("工作流快照保留本机播放地址，供 video.playback 读取", () => {
+    const workflow = workflowWith({
+      mediaPipeline: {
+        snapshot: () => ({
+          streams: [{ deviceId: "relay-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/hls/stream-1/index.m3u8", diagnostic: "private" }],
+        }),
+        evaluate: () => ({ ok: true }),
+        selectPlayer: () => ({ ok: true }),
+        clearPlayer: () => ({ ok: true }),
+      },
+    });
+    const snapshot = workflow.snapshot() as { media?: { streams?: readonly unknown[] } };
+    expect(snapshot.media).toEqual({
+      streams: [{ deviceId: "relay-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/hls/stream-1/index.m3u8" }],
+    });
+    expect(Object.isFrozen(snapshot.media)).toBe(true);
+  });
+
+  it("飞机链路已齐时不等待会话稳定计时即可启动图传", async () => {
+    const started: string[] = [];
+    const workflow = workflowWith({
+      hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: 15_000 },
+      now: () => 1,
+      liveStreamControl: {
+        start: async (id: string) => { started.push(id); return { ok: true }; },
+        stop: async () => ({ ok: true }),
+        get: () => ({ phase: "idle" }),
+        list: () => [],
+        recordDisconnected: () => undefined,
+        forget: () => false,
+        subscribe: () => () => undefined,
+      },
+    });
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: true });
+    expect(started).toEqual(["relay-a"]);
+  });
+
+  it("会话未满稳定窗口且飞机事实未齐时拒绝图传", async () => {
+    let starts = 0;
+    const workflow = workflowWith({
+      hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: 15_000 },
+      now: () => 1,
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a" }],
+        telemetry: () => ({ payload: {}, capabilities: {} }),
+        subscribe: () => () => undefined,
+      },
+      liveStreamControl: {
+        start: async () => { starts += 1; return { ok: true }; },
+        stop: async () => ({ ok: true }),
+        get: () => ({ phase: "idle" }),
+        list: () => [],
+        recordDisconnected: () => undefined,
+        forget: () => false,
+        subscribe: () => () => undefined,
+      },
+    });
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
+    expect(starts).toBe(0);
+  });
+
   it("飞控链路未就绪时在电脑端阻止向手机发送直接飞行动作", () => {
     let requests = 0;
     const workflow = workflowWith({

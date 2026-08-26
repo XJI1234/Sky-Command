@@ -23,6 +23,8 @@ const webrtcHttpPort = 8_890;
 const webrtcUdpPort = 8_189;
 const webrtcApiPort = 9_997;
 
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
 const log = (message: string): void => {
   try {
     mkdirSync(dirname(logPath), { recursive: true });
@@ -157,7 +159,7 @@ async function launch(): Promise<void> {
   const startedApp = await created.value.start();
   if (!startedApp.ok) {
     const detail = startedApp.code === "MEDIA_START_FAILED"
-      ? "图传服务未能启动。请确认 FFmpeg 可用，且 19500（RTMP）与 18080（本机 HLS）未被占用。"
+      ? "图传服务未能启动。请确认 19500（RTMP）与 18080（HTTP-FLV）未被占用，且 FFmpeg 探测可用。"
       : `桌面应用启动失败: ${startedApp.code}`;
     journal.record({ link: "uplink", level: "ERROR", event: "DESKTOP_START_FAILED", detail: startedApp.code });
     dialog.showErrorBox("Sky Command", detail);

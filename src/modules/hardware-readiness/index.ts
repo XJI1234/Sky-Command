@@ -97,8 +97,11 @@ export const HardwareReadiness = freeze({
     if (normalized.relayStable !== true) codes.push("PHONE_SESSION_UNSTABLE");
     if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
     if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-    if (normalized.flightControllerConnected !== true) codes.push("FLIGHT_CONTROLLER_DISCONNECTED");
-    if (normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+    // 旧图传推流不依赖飞控/飞机遥测门闩；飞控动作仍要求完整链路。
+    if (target === "flight-control") {
+      if (normalized.flightControllerConnected !== true) codes.push("FLIGHT_CONTROLLER_DISCONNECTED");
+      if (normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+    }
     return result(codes);
   },
 });

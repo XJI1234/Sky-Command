@@ -208,7 +208,7 @@ describe("media-pipeline 一级组合根契约", () => {
     const { pipeline, events, jobs } = fixture();
     pipeline.start(input);
     events().onPublished("/live/phone%2Fone");
-    expect(jobs[0]).toMatchObject({ streamId: "stream-1", outputDirectory: "C:/private/hls/stream-1", inputUrl: "rtmp://192.168.1.8:19500/live/phone%2Fone" });
+    expect(jobs[0]).toMatchObject({ streamId: "stream-1", outputDirectory: "C:/private/hls/stream-1", inputUrl: "rtmp://127.0.0.1:19500/live/phone%2Fone" });
     expect(pipeline.snapshot().streams).toEqual([expect.objectContaining({ deviceId: "phone/one", streamId: "stream-1" })]);
   });
 
@@ -300,8 +300,8 @@ describe("media-pipeline 一级组合根契约", () => {
     expect(pipeline.selectPlayer("phone-a")).toMatchObject({ ok: false, code: "NOT_STARTED" });
   });
 
-  it("健康评估只停止产生请求的流，已就绪的其他流保持运行", () => {
-    const { pipeline, events, setClock, exits, terminateCount } = fixture();
+  it("健康评估只停止产生请求的流，已就绪的其他流在推流仍在时会重启转码", () => {
+    const { pipeline, events, setClock, exits, terminateCount, jobs } = fixture();
     pipeline.start(input);
     events().onPublished("/live/phone-a");
     events().onPublished("/live/phone-b");
@@ -310,8 +310,10 @@ describe("media-pipeline 一级组合根契约", () => {
     pipeline.evaluate(1_101);
     expect(pipeline.snapshot().streams).toEqual(expect.arrayContaining([expect.objectContaining({ deviceId: "phone-a", phase: "failed" }), expect.objectContaining({ deviceId: "phone-b", phase: "ready" })]));
     expect(terminateCount()).toBe(1);
+    const launchesBefore = jobs.length;
     exits[1]!({ kind: "exited" });
-    expect(pipeline.snapshot().streams).toEqual(expect.arrayContaining([expect.objectContaining({ deviceId: "phone-b", phase: "failed" })]));
+    expect(jobs.length).toBeGreaterThan(launchesBefore);
+    expect(pipeline.snapshot().streams).toEqual(expect.arrayContaining([expect.objectContaining({ deviceId: "phone-b", phase: "ready" })]));
   });
 
   it("释放运行实例时停止所有已拥有资源，并且快照修订号变化一次", () => {
