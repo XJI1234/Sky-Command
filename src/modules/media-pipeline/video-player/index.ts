@@ -25,9 +25,9 @@ export interface VideoPlayerInstance {
 
 interface SourceInput { readonly deviceId: string; readonly url: string; }
 
-const SOURCE_FAILED = "播放器无法加载视频源。请检查图传流与本地 HLS 服务。";
+const SOURCE_FAILED = "播放器无法加载视频源。请检查图传流与本地图传服务。";
 const CLEAR_FAILED = "播放器无法清理当前视频源。请检查播放器状态。";
-const FATAL = "播放器报告了致命错误。请检查图传流与本地 HLS 服务。";
+const FATAL = "播放器报告了致命错误。请检查图传流与本地图传服务。";
 
 function freeze<T extends object>(value: T): Readonly<T> { return Object.freeze(value); }
 

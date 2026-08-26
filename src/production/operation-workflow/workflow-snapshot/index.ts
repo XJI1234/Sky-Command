@@ -24,7 +24,7 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
     const capabilities = read(telemetry, "capabilities");
     const stream = mediaStreams.find((item) => read(item, "deviceId") === device.deviceId);
     const mediaPhase = read(stream, "phase");
-    const videoPhase = mediaPhase === "awaiting-ingest" || mediaPhase === "awaiting-playlist" || mediaPhase === "ready" || mediaPhase === "failed" ? mediaPhase : "unavailable";
+    const videoPhase = mediaPhase === "awaiting-ingest" || mediaPhase === "awaiting-playback" || mediaPhase === "ready" || mediaPhase === "failed" ? mediaPhase : "unavailable";
     return freeze({
       deviceId: device.deviceId,
       connection: freeze({ relay: "online" as const, sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"), remoteController: state(read(payload, "remoteControllerConnected"), "connected", "disconnected"), flightController: state(read(payload, "flightControllerConnected"), "connected", "disconnected"), aircraft: state(read(payload, "connected"), "connected", "disconnected"), batteryPercent: typeof read(payload, "batteryPercent") === "number" ? read(payload, "batteryPercent") as number : null, flightState: state(read(payload, "isFlying"), "flying", "grounded"), pairingState: pairingState(read(payload, "pairingState")), pose: pose(payload) }),

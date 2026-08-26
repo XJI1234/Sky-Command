@@ -1,27 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { HlsServer } from "../src/modules/media-pipeline/hls-server/index.js";
+import { HttpFlvServer } from "../src/modules/media-pipeline/http-flv-server/index.js";
 
-const input = { port: 18600, rootDirectory: "C:/private/hls" };
+const input = { port: 18600, rootDirectory: "C:/private/http-flv" };
 
 function fixture(options: { readonly listen?: (value: { readonly host: "127.0.0.1"; readonly port: number; readonly rootDirectory: string }) => void; readonly close?: () => void } = {}) {
   const bindings: Array<{ readonly host: "127.0.0.1"; readonly port: number; readonly rootDirectory: string }> = [];
   let closes = 0;
-  const server = HlsServer.create({
+  const server = HttpFlvServer.create({
     listen: (value) => { bindings.push(value); options.listen?.(value); },
     close: () => { closes += 1; options.close?.(); }
   });
   return { server, bindings, closes: () => closes };
 }
 
-describe("媒体管线 hls-server 契约", () => {
+describe("媒体管线 http-flv-server 契约", () => {
   it("仅在回环地址监听，并为合法流生成编码后的本地播放地址", () => {
     const { server, bindings } = fixture();
     expect(server.snapshot()).toEqual({ phase: "idle", revision: 0, port: null, diagnostic: null });
     expect(server.start(input)).toEqual({ ok: true, value: { phase: "listening", revision: 1, port: 18600, diagnostic: null } });
-    expect(bindings).toEqual([{ host: "127.0.0.1", port: 18600, rootDirectory: "C:/private/hls" }]);
+    expect(bindings).toEqual([{ host: "127.0.0.1", port: 18600, rootDirectory: "C:/private/http-flv" }]);
 
     const playback = server.playback("phone/1?preview #1%");
-    expect(playback).toEqual({ ok: true, value: { streamId: "phone/1?preview #1%", url: "http://127.0.0.1:18600/hls/phone%2F1%3Fpreview%20%231%25/index.m3u8" } });
+    expect(playback).toEqual({ ok: true, value: { streamId: "phone/1?preview #1%", url: "http://127.0.0.1:18600/live/phone%2F1%3Fpreview%20%231%25.flv" } });
     expect(Object.isFrozen(playback)).toBe(true);
     if (playback.ok) expect(Object.isFrozen(playback.value)).toBe(true);
     expect(JSON.stringify(server.snapshot())).not.toContain("C:/private");
@@ -50,7 +50,7 @@ describe("媒体管线 hls-server 契约", () => {
     let fail = true;
     const { server, bindings } = fixture({ listen: () => { if (fail) throw new Error(`permission ${input.rootDirectory}`); } });
     const failed = server.start(input);
-    expect(failed).toEqual({ ok: false, code: "LISTEN_FAILED", value: { phase: "failed", revision: 1, port: null, diagnostic: "无法启动本地 HLS 服务。请检查端口与桌面端权限。" } });
+    expect(failed).toEqual({ ok: false, code: "LISTEN_FAILED", value: { phase: "failed", revision: 1, port: null, diagnostic: "无法启动本地 HTTP-FLV 服务。请检查端口与桌面端权限。" } });
     expect(JSON.stringify(failed)).not.toContain(input.rootDirectory);
     fail = false;
     expect(server.start(input)).toMatchObject({ ok: true, value: { phase: "listening", revision: 2, port: 18600, diagnostic: null } });
@@ -73,7 +73,7 @@ describe("媒体管线 hls-server 契约", () => {
     const { server, closes } = fixture({ close: () => { if (fail) throw new Error(`cannot close ${input.rootDirectory}`); } });
     server.start(input);
     const failed = server.stop();
-    expect(failed).toEqual({ ok: false, code: "CLOSE_FAILED", value: { phase: "listening", revision: 2, port: 18600, diagnostic: "无法停止本地 HLS 服务。请检查桌面端权限。" } });
+    expect(failed).toEqual({ ok: false, code: "CLOSE_FAILED", value: { phase: "listening", revision: 2, port: 18600, diagnostic: "无法停止本地 HTTP-FLV 服务。请检查桌面端权限。" } });
     expect(JSON.stringify(failed)).not.toContain(input.rootDirectory);
     fail = false;
     expect(server.stop()).toMatchObject({ ok: true, value: { phase: "idle", revision: 3, port: null, diagnostic: null } });
@@ -82,7 +82,7 @@ describe("媒体管线 hls-server 契约", () => {
 
   it("在创建阶段拒绝不完整的 HTTP 服务适配器", () => {
     for (const port of [null, {}, { listen: () => undefined }, { close: () => undefined }, { listen: 7, close: 8 }]) {
-      expect(() => HlsServer.create(port as never)).toThrow("Invalid HLS server port");
+      expect(() => HttpFlvServer.create(port as never)).toThrow("Invalid HTTP-FLV server port");
     }
   });
 });

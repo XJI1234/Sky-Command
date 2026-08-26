@@ -4,13 +4,13 @@ import { MediaPipeline } from "../src/modules/media-pipeline/index.js";
 const input = {
   interfaces: [{ name: "Wi-Fi", enabled: true, internal: false, kind: "wifi", ipv4: "192.168.1.8" }],
   manualHost: null,
-  hlsRootDirectory: "C:/private/hls",
+  httpFlvRootDirectory: "C:/private/http-flv",
 };
 
 function fixture(options: {
-  readonly hlsStart?: () => void;
+  readonly httpFlvStart?: () => void;
   readonly rtmpStart?: (port: number, events: { readonly onPublished: (path: string) => void; readonly onUnpublished: (path: string) => void }) => void;
-  readonly hlsStop?: () => void;
+  readonly httpFlvStop?: () => void;
   readonly rtmpStop?: () => void;
   readonly player?: { readonly setSource?: (input: Readonly<{ readonly deviceId: string; readonly url: string }>, onFatal: (error: unknown) => void) => void; readonly clear?: () => void };
 } = {}) {
@@ -18,22 +18,22 @@ function fixture(options: {
   let rtmpEvents: { readonly onPublished: (path: string) => void; readonly onUnpublished: (path: string) => void } | null = null;
   const pipeline = MediaPipeline.create({
     rtmp: { listen: (port, events) => { rtmpEvents = events; options.rtmpStart?.(port, events); }, close: () => options.rtmpStop?.() },
-    hls: { listen: () => options.hlsStart?.(), close: () => options.hlsStop?.() },
+    httpFlv: { listen: () => options.httpFlvStart?.(), close: () => options.httpFlvStop?.() },
     player: { setSource: (value, onFatal) => options.player?.setSource?.(value, onFatal), clear: () => options.player?.clear?.() },
     clock: () => clock,
-  }, { rtmpPort: 19500, hlsPort: 18080, health: { ingestTimeoutMs: 1_000, playlistTimeoutMs: 1_000 } });
+  }, { rtmpPort: 19500, httpFlvPort: 18080, health: { ingestTimeoutMs: 1_000, playbackTimeoutMs: 1_000 } });
   return { pipeline, events: () => rtmpEvents!, setClock: (value: number) => { clock = value; } };
 }
 
 describe("media-pipeline 一级组合根契约", () => {
   it("按固定顺序启动并暴露脱敏端点，不依赖 FFmpeg", () => {
     const calls: string[] = [];
-    const { pipeline } = fixture({ hlsStart: () => calls.push("hls"), rtmpStart: () => calls.push("rtmp") });
+    const { pipeline } = fixture({ httpFlvStart: () => calls.push("http-flv"), rtmpStart: () => calls.push("rtmp") });
     expect(pipeline.start(input)).toMatchObject({
       ok: true,
       value: { phase: "running", endpoint: { host: "192.168.1.8", port: 19500, source: "automatic" }, streams: [] },
     });
-    expect(calls).toEqual(["hls", "rtmp"]);
+    expect(calls).toEqual(["http-flv", "rtmp"]);
     expect(JSON.stringify(pipeline.snapshot())).not.toContain("private");
   });
 
@@ -62,7 +62,7 @@ describe("media-pipeline 一级组合根契约", () => {
   it("只清理结束的设备流，且停止时按反向顺序尝试所有服务", () => {
     const calls: string[] = [];
     const { pipeline, events } = fixture({
-      hlsStop: () => calls.push("hls"),
+      httpFlvStop: () => calls.push("http-flv"),
       rtmpStop: () => calls.push("rtmp"),
       player: { clear: () => calls.push("player") },
     });
@@ -74,15 +74,15 @@ describe("media-pipeline 一级组合根契约", () => {
     events().onPublished("/live/phone-c");
     expect(pipeline.snapshot().streams.map((stream) => stream.deviceId)).toEqual(["phone-b", "phone-c"]);
     expect(pipeline.stop()).toMatchObject({ ok: true, value: { phase: "idle", streams: [] } });
-    expect(calls).toEqual(["player", "rtmp", "hls"]);
+    expect(calls).toEqual(["player", "rtmp", "http-flv"]);
   });
 
   it("任一步启动失败都返回稳定错误并清理已启动服务", () => {
     let hlsClosed = 0;
     const { pipeline } = fixture({
-      hlsStart: () => undefined,
+      httpFlvStart: () => undefined,
       rtmpStart: () => { throw new Error("port secret"); },
-      hlsStop: () => { hlsClosed += 1; },
+      httpFlvStop: () => { hlsClosed += 1; },
     });
     expect(pipeline.start(input)).toMatchObject({ ok: false, code: "RTMP_START_FAILED", value: { phase: "failed" } });
     expect(hlsClosed).toBe(1);
@@ -91,10 +91,10 @@ describe("media-pipeline 一级组合根契约", () => {
   it("HTTP 分发启动失败时不启动 RTMP", () => {
     let rtmpStarts = 0;
     const { pipeline } = fixture({
-      hlsStart: () => { throw new Error("private root"); },
+      httpFlvStart: () => { throw new Error("private root"); },
       rtmpStart: () => { rtmpStarts += 1; },
     });
-    expect(pipeline.start(input)).toMatchObject({ ok: false, code: "HLS_START_FAILED", value: { phase: "failed" } });
+    expect(pipeline.start(input)).toMatchObject({ ok: false, code: "HTTP_FLV_START_FAILED", value: { phase: "failed" } });
     expect(rtmpStarts).toBe(0);
   });
 
@@ -116,19 +116,19 @@ describe("media-pipeline 一级组合根契约", () => {
     pipeline.start(input);
     pipeline.dispose();
     expect(pipeline.start(input)).toMatchObject({ ok: false, code: "DISPOSED" });
-    expect(pipeline.notifyPlaylistReady("phone-a")).toMatchObject({ ok: false, code: "DISPOSED" });
+    expect(pipeline.notifyPlaybackReady("phone-a")).toMatchObject({ ok: false, code: "DISPOSED" });
     expect(pipeline.snapshot().phase).toBe("disposed");
   });
 
-  it("未启动时拒绝播放列表通知与选源", () => {
+  it("未启动时拒绝可播放通知与选源", () => {
     const { pipeline } = fixture();
-    expect(pipeline.notifyPlaylistReady("phone-a")).toMatchObject({ ok: false, code: "NOT_STARTED" });
+    expect(pipeline.notifyPlaybackReady("phone-a")).toMatchObject({ ok: false, code: "NOT_STARTED" });
     expect(pipeline.selectPlayer("phone-a")).toMatchObject({ ok: false, code: "NOT_STARTED" });
   });
 
   it("拒绝非法启动输入", () => {
     const { pipeline } = fixture();
     expect(pipeline.start(null)).toMatchObject({ ok: false, code: "INVALID_INPUT" });
-    expect(pipeline.start({ ...input, hlsRootDirectory: " " })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(pipeline.start({ ...input, httpFlvRootDirectory: " " })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
   });
 });

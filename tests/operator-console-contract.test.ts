@@ -287,7 +287,7 @@ describe("操作台工作区", () => {
 
   it("只有画面 ready 才算可播放，手机接受推流不得写成实时图传", () => {
     const waiting = OperatorConsole.project({
-      snapshot: snapshot([device({ stream: { phase: "starting" }, video: { phase: "awaiting-playlist", selected: true } })], { selectedVideoDeviceId: "phone-1" }),
+      snapshot: snapshot([device({ stream: { phase: "starting" }, video: { phase: "awaiting-playback", selected: true } })], { selectedVideoDeviceId: "phone-1" }),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });

@@ -4,7 +4,7 @@
 
 ## 唯一职责
 
-`hardware-readiness` 是桌面端真机操作前的纯决策模块。它根据桌面环境事实、手机 Relay 事实和手机上报的 DJI 连接事实，判断旧 RTMP/HLS 图传或直接飞控是否允许开始。
+`hardware-readiness` 是桌面端真机操作前的纯决策模块。它根据桌面环境事实、手机 Relay 事实和手机上报的 DJI 连接事实，判断旧 RTMP/HTTP-FLV 图传或直接飞控是否允许开始。
 
 它不读取 Electron、文件系统、端口、WebSocket、DJI 或 UI；不发送命令；不改变任何图传、飞控或会话状态。宿主负责探测事实，工作流负责在动作前调用本模块。
 
@@ -61,7 +61,7 @@ type HardwareReadinessResult =
   | { readonly ok: false; readonly blockers: readonly HardwareReadinessBlocker[] };
 ```
 
-只有阻塞列表为空时 `ok` 为真。该结果只表示开始操作前已知条件，不把手机接受图传命令、RTMP 入流或 HLS 首帧伪造成已验证事实；那些事实仍由既有媒体健康状态机负责。
+只有阻塞列表为空时 `ok` 为真。该结果只表示开始操作前已知条件，不把手机接受图传命令、RTMP 入流或 HTTP-FLV 首帧伪造成已验证事实；那些事实仍由既有媒体健康状态机负责。
 
 ## 依赖边界和验证
 

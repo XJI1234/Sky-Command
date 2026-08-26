@@ -22,7 +22,7 @@ instance.subscribe(listener) -> unsubscribe
 
 `services()` 仅供未来的 IPC 白名单适配器使用，返回已构造好的公开一级模块接口；渲染进程、页面或插件不得直接获得该对象。
 
-`options.mediaRequired` 为可选布尔值，默认 `true`。生产应用需要让低延迟旁路独立于旧 RTMP/HLS 时必须传 `false`。
+`options.mediaRequired` 为可选布尔值，默认 `true`。生产应用需要让低延迟旁路独立于旧 RTMP/HTTP-FLV 时必须传 `false`。
 
 ## 生命周期
 
@@ -32,7 +32,7 @@ instance.subscribe(listener) -> unsubscribe
 
 ## 媒体故障隔离
 
-本模块只拥有旧 RTMP/HLS 媒体面；低延迟 WHIP/WHEP 旁路不属于本模块，也不得通过本模块的媒体失败结果启动或停止它。`mediaRequired: false` 只改变旧媒体启动失败的升级范围：旧媒体失败不得回滚中继、不得阻止 WebRTC 组合根启动；WebRTC 进程、发布、播放或停止失败也不得改变本模块的旧媒体状态。停止时旧媒体和中继仍按本契约尽力清理。
+本模块只拥有旧 RTMP/HTTP-FLV 媒体面；低延迟 WHIP/WHEP 旁路不属于本模块，也不得通过本模块的媒体失败结果启动或停止它。`mediaRequired: false` 只改变旧媒体启动失败的升级范围：旧媒体失败不得回滚中继、不得阻止 WebRTC 组合根启动；WebRTC 进程、发布、播放或停止失败也不得改变本模块的旧媒体状态。停止时旧媒体和中继仍按本契约尽力清理。
 
 ## 快照与订阅
 

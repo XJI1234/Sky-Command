@@ -1,8 +1,8 @@
-export type StreamHealthState = "awaiting-ingest" | "awaiting-playlist" | "ready" | "failed";
-export type StreamHealthEvent = "ingest-started" | "transcoder-started" | "playlist-ready" | "transcoder-exited";
+export type StreamHealthState = "awaiting-ingest" | "awaiting-playback" | "ready" | "failed";
+export type StreamHealthEvent = "ingest-started" | "transcoder-started" | "playback-ready" | "transcoder-exited";
 export interface StreamHealthOptions {
   readonly ingestTimeoutMs: number;
-  readonly playlistTimeoutMs: number;
+  readonly playbackTimeoutMs: number;
 }
 export interface StreamHealthSnapshot {
   readonly streamId: string;
@@ -29,8 +29,8 @@ export interface StreamHealthInstance {
 }
 
 const INPUT_TIMEOUT = "未收到手机端 RTMP 推流。请确认手机已开始图传，且电脑地址可从局域网访问。";
-const PLAYLIST_TIMEOUT = "已收到 RTMP 推流，但转码或本地分片未就绪。请检查转码器和磁盘写入。";
-const TRANSCODER_EXITED = "转码进程异常结束。请检查 FFmpeg 与输入流。";
+const PLAYBACK_TIMEOUT = "已收到 RTMP 推流，但画面尚未就绪。请确认手机仍在推流。";
+const TRANSCODER_EXITED = "转码进程异常结束。请检查媒体服务配置。";
 
 interface RecordState {
   streamId: string;
@@ -45,9 +45,9 @@ interface RecordState {
 function freeze<T extends object>(value: T): Readonly<T> { return Object.freeze(value); }
 function validStreamId(value: unknown): value is string { return typeof value === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(value); }
 function validTime(value: unknown): value is number { return Number.isFinite(value); }
-function validEvent(value: unknown): value is StreamHealthEvent { return typeof value === "string" && /^(?:ingest-started|transcoder-started|playlist-ready|transcoder-exited)$/.test(value); }
+function validEvent(value: unknown): value is StreamHealthEvent { return typeof value === "string" && /^(?:ingest-started|transcoder-started|playback-ready|transcoder-exited)$/.test(value); }
 function validOptions(value: StreamHealthOptions): boolean {
-  return validTime(value.ingestTimeoutMs) && validTime(value.playlistTimeoutMs) && value.ingestTimeoutMs >= 1_000 && value.ingestTimeoutMs <= 60_000 && value.playlistTimeoutMs >= 1_000 && value.playlistTimeoutMs <= 60_000;
+  return validTime(value.ingestTimeoutMs) && validTime(value.playbackTimeoutMs) && value.ingestTimeoutMs >= 1_000 && value.ingestTimeoutMs <= 60_000 && value.playbackTimeoutMs >= 1_000 && value.playbackTimeoutMs <= 60_000;
 }
 function snapshot(record: RecordState): StreamHealthSnapshot {
   return freeze({ streamId: record.streamId, revision: record.revision, state: record.state, lastEventAt: record.lastEventAt, diagnostic: record.diagnostic });
@@ -59,8 +59,8 @@ function failure<TCode extends string>(code: TCode): Readonly<{ readonly ok: fal
 function success<T>(value: T): Readonly<{ readonly ok: true; readonly value: T }> { return freeze({ ok: true as const, value }); }
 function accepts(state: StreamHealthState, event: StreamHealthEvent): boolean {
   if (event === "ingest-started") return state === "awaiting-ingest";
-  if (event === "transcoder-exited") return state === "awaiting-playlist" || state === "ready";
-  return state === "awaiting-playlist";
+  if (event === "transcoder-exited") return state === "awaiting-playback" || state === "ready";
+  return state === "awaiting-playback";
 }
 
 function create(options: StreamHealthOptions): StreamHealthInstance {
@@ -101,17 +101,17 @@ function create(options: StreamHealthOptions): StreamHealthInstance {
       const record = records.get(streamId);
       if (!record) return failure("UNKNOWN_STREAM");
       if (!accepts(record.state, event)) return failure("STALE_EVENT");
-      if (event === "ingest-started") return success(advance(record, now, "awaiting-playlist", null, now));
-      if (event === "playlist-ready") return success(advance(record, now, "ready", null));
+      if (event === "ingest-started") return success(advance(record, now, "awaiting-playback", null, now));
+      if (event === "playback-ready") return success(advance(record, now, "ready", null));
       if (event === "transcoder-exited") return success(fail(record, now, TRANSCODER_EXITED, true));
-      return success(advance(record, now, "awaiting-playlist", null));
+      return success(advance(record, now, "awaiting-playback", null));
     },
     evaluate: (now) => {
       if (!canUseTime(now)) return failure("INVALID_INPUT");
       const stopRequests: StopRequest[] = [];
       for (const record of records.values()) {
-        const timeout = record.state === "awaiting-ingest" ? options.ingestTimeoutMs : record.state === "awaiting-playlist" ? options.playlistTimeoutMs : null;
-        if (timeout !== null && now - record.stageStartedAt > timeout) fail(record, now, record.state === "awaiting-ingest" ? INPUT_TIMEOUT : PLAYLIST_TIMEOUT, false);
+        const timeout = record.state === "awaiting-ingest" ? options.ingestTimeoutMs : record.state === "awaiting-playback" ? options.playbackTimeoutMs : null;
+        if (timeout !== null && now - record.stageStartedAt > timeout) fail(record, now, record.state === "awaiting-ingest" ? INPUT_TIMEOUT : PLAYBACK_TIMEOUT, false);
         if (record.stopPending) {
           stopRequests.push(freeze({ streamId: record.streamId, diagnostic: record.diagnostic! }));
           record.stopPending = false;

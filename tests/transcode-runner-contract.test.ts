@@ -5,7 +5,7 @@ const job: TranscodeJob = {
   streamId: "phone-1",
   executablePath: "C:/tools/ffmpeg.exe",
   inputUrl: "rtmp://192.168.1.8:19500/live/phone-1?token=private",
-  outputDirectory: "C:/private/hls/phone-1"
+  outputDirectory: "C:/private/http-flv/phone-1"
 };
 
 function fixture(options: { readonly launch?: (job: TranscodeJob, onExit: (event: ProcessExit) => void) => { readonly terminate: () => void } } = {}) {

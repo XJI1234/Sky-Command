@@ -1,7 +1,7 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
-import type { HlsServerPort } from "../../modules/media-pipeline/hls-server/index.js";
+import type { HttpFlvServerPort } from "../../modules/media-pipeline/http-flv-server/index.js";
 import type { RtmpIngressPort } from "../../modules/media-pipeline/rtmp-ingest/index.js";
 
 const require = createRequire(import.meta.url);
@@ -25,7 +25,7 @@ export interface MediaPortLogEvent {
 
 export interface MediaPorts {
   readonly rtmp: RtmpIngressPort;
-  readonly hls: HlsServerPort;
+  readonly httpFlv: HttpFlvServerPort;
 }
 
 function publishPath(streamPath: string): string {
@@ -131,7 +131,7 @@ function createRtmpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLog
   };
 }
 
-function createFlvHttpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLogEvent) => void): HlsServerPort {
+function createFlvHttpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLogEvent) => void): HttpFlvServerPort {
   let server: Server | null = null;
   const clients = new Set<RtmpPullClient>();
   return {
@@ -220,6 +220,6 @@ export function createMediaPorts(log?: (event: MediaPortLogEvent) => void): Medi
   const shared = { rtmpPort: 19_500 };
   return {
     rtmp: createRtmpPort(shared, log),
-    hls: createFlvHttpPort(shared, log),
+    httpFlv: createFlvHttpPort(shared, log),
   };
 }

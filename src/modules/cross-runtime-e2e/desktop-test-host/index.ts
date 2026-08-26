@@ -211,7 +211,7 @@ const start = async (options: DesktopTestHostOptions): Promise<DesktopTestHostIn
   });
   const mediaPipeline = MediaPipeline.create({
     rtmp: { listen: () => undefined, close: () => undefined },
-    hls: { listen: () => undefined, close: () => undefined },
+    httpFlv: { listen: () => undefined, close: () => undefined },
     fileFacts: { isExecutableFile: () => true },
     processFactory: () => ({
       launch: () => ({ terminate: () => undefined }),
@@ -220,13 +220,13 @@ const start = async (options: DesktopTestHostOptions): Promise<DesktopTestHostIn
     clock: () => Date.now(),
   }, {
     rtmpPort: network.listenPort,
-    hlsPort: 18_080,
-    health: { ingestTimeoutMs: 10_000, playlistTimeoutMs: 10_000 },
+    httpFlvPort: 18_080,
+    health: { ingestTimeoutMs: 10_000, playbackTimeoutMs: 10_000 },
   });
   const mediaStartInput = Object.freeze({
     interfaces: [{ name: "e2e-wifi", enabled: true, internal: false, kind: "wifi", ipv4: "192.168.50.10" }],
     manualHost: network.manualHost,
-    hlsRootDirectory: "D:/controlled-e2e-hls",
+    httpFlvRootDirectory: "D:/controlled-e2e-http-flv",
     ffmpegCandidates: [{ source: "bundled", executablePath: "D:/controlled-e2e-ffmpeg.exe" }],
   });
   const liveStreamControl = LiveStreamControl.create({

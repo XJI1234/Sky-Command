@@ -26,8 +26,8 @@ describe("DesktopUiGateway", () => {
     const workflow = {
       snapshot: () => ({
         media: { streams: [
-          { deviceId: "device-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/stream-a/index.m3u8", diagnostic: "private" },
-          { deviceId: "device-b", phase: "ready", playbackUrl: "https://example.invalid/stream-b/index.m3u8" },
+          { deviceId: "device-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/live/stream-a.flv", diagnostic: "private" },
+          { deviceId: "device-b", phase: "ready", playbackUrl: "https://example.invalid/live/stream-b.flv" },
         ] },
       }),
       checkHardwareReadiness: named("checkHardwareReadiness"),
@@ -60,7 +60,7 @@ describe("DesktopUiGateway", () => {
     for (const command of commands) await expect(gateway.invoke(command.method, command.input)).resolves.toMatchObject({ ok: true, value: { ok: true } });
     await expect(gateway.invoke("state.snapshot", undefined)).resolves.toEqual({ ok: true, value: { phase: "running", workflow: {} } });
     await expect(gateway.invoke("network.hint", undefined)).resolves.toEqual({ ok: true, value: { hints: [] } });
-    await expect(gateway.invoke("video.playback", { deviceId: "device-a" })).resolves.toEqual({ ok: true, value: { deviceId: "device-a", url: "http://127.0.0.1:18080/stream-a/index.m3u8" } });
+    await expect(gateway.invoke("video.playback", { deviceId: "device-a" })).resolves.toEqual({ ok: true, value: { deviceId: "device-a", url: "http://127.0.0.1:18080/live/stream-a.flv" } });
     await expect(gateway.invoke("video.playback", { deviceId: "device-b" })).resolves.toEqual({ ok: true, value: { ok: false, code: "VIDEO_NOT_READY" } });
     expect(calls.map((call) => call.name)).toEqual([
       "checkHardwareReadiness", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",

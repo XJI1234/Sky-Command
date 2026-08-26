@@ -15,7 +15,7 @@ const projectRoot = [here, join(here, ".."), join(here, "..", "..", "..")].find(
 const rendererFile = [join(projectRoot, "dist/renderer/index.html"), join(projectRoot, "src/production/operator-console/renderer/index.html")].find((path) => existsSync(path)) ?? join(projectRoot, "dist/renderer/index.html");
 const rendererEntry = pathToFileURL(rendererFile).href;
 const preloadPath = [join(projectRoot, "electron/preload.cjs"), join(projectRoot, "src/production/electron-host/preload.cjs")].find((path) => existsSync(path)) ?? join(projectRoot, "electron/preload.cjs");
-const hlsRoot = join(projectRoot, "tmp-hls");
+const httpFlvRoot = join(projectRoot, "tmp-http-flv");
 const logPath = join(projectRoot, "tmp", "desktop-launch.log");
 const relayPort = 8_080;
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
@@ -66,7 +66,7 @@ async function launch(): Promise<void> {
   const journal = IncidentJournal.create();
   log(`incident ${journal.logPath}`);
   journal.record({ link: "phone-pc", level: "INFO", event: "DESKTOP_LAUNCH", detail: "Sky Command starting" });
-  mkdirSync(hlsRoot, { recursive: true });
+  mkdirSync(httpFlvRoot, { recursive: true });
   const interfaces = lanCards();
   const preferred = interfaces[0];
   if (preferred === undefined) {
@@ -97,15 +97,15 @@ async function launch(): Promise<void> {
     media: {
       dependencies: {
         rtmp: mediaPorts.rtmp,
-        hls: mediaPorts.hls,
+        httpFlv: mediaPorts.httpFlv,
         player: { setSource: () => undefined, clear: () => undefined },
         clock: () => Date.now(),
       },
-      options: { rtmpPort: 19_500, hlsPort: 18_080, health: { ingestTimeoutMs: 20_000, playlistTimeoutMs: 45_000 } },
+      options: { rtmpPort: 19_500, httpFlvPort: 18_080, health: { ingestTimeoutMs: 20_000, playbackTimeoutMs: 45_000 } },
       startInput: {
         interfaces: mediaInterfaces,
         manualHost: null,
-        hlsRootDirectory: hlsRoot,
+        httpFlvRootDirectory: httpFlvRoot,
       },
     },
     mission: { createMissionId: (deviceId: string, routeId: string) => `mission-${deviceId}-${routeId}` },

@@ -10,17 +10,17 @@ MediaPipeline.create(dependencies, options) -> MediaPipelineInstance
 instance.start(input) -> PipelineResult<MediaSnapshot>
 instance.stop() -> PipelineResult<MediaSnapshot>
 instance.evaluate(now) -> PipelineResult<MediaSnapshot>
-instance.notifyPlaylistReady(deviceId) -> PipelineResult<MediaSnapshot>
+instance.notifyPlaybackReady(deviceId) -> PipelineResult<MediaSnapshot>
 instance.selectPlayer(deviceId) -> PipelineResult<MediaSnapshot>
 instance.clearPlayer() -> PipelineResult<MediaSnapshot>
 instance.snapshot() -> MediaSnapshot
 ```
 
-`start` 的输入只包含局域网网卡事实、可选手工 IPv4，以及 HTTP 分发根目录（历史字段名 `hlsRootDirectory`）。`ffmpegCandidates` 可选且生产路径忽略。RTMP 与 HTTP-FLV 监听端口、健康超时和适配器均在 `create` 时注入。`fileFacts` / `processFactory` 为兼容旧装配的可选字段，生产组合根不定位 FFmpeg、不启动转码进程。
+`start` 的输入只包含局域网网卡事实、可选手工 IPv4，以及 HTTP 分发根目录（历史字段名 `httpFlvRootDirectory`）。`ffmpegCandidates` 可选且生产路径忽略。RTMP 与 HTTP-FLV 监听端口、健康超时和适配器均在 `create` 时注入。`fileFacts` / `processFactory` 为兼容旧装配的可选字段，生产组合根不定位 FFmpeg、不启动转码进程。
 
 组合根状态为 `idle`、`starting`、`running`、`stopping`、`failed`、`disposed`。`snapshot` 只公开接收端点的 host/port/source、每台设备的 deviceId/streamId/健康阶段/播放地址/安全诊断，以及播放器快照。
 
-启动顺序固定为：解析局域网端点、启动 HTTP-FLV 分发、启动 RTMP。任一步失败都停止已经启动的服务并清空流状态。RTMP 发布后立即标记该设备 `ready`，播放地址为 `http://127.0.0.1:{hlsPort}/live/{deviceId}.flv`。`notifyPlaylistReady` 保留为幂等补标入口（例如测试或迟到回调），不得再假装依赖 HLS 播放列表写出。
+启动顺序固定为：解析局域网端点、启动 HTTP-FLV 分发、启动 RTMP。任一步失败都停止已经启动的服务并清空流状态。RTMP 发布后立即标记该设备 `ready`，播放地址为 `http://127.0.0.1:{httpFlvPort}/live/{deviceId}.flv`。`notifyPlaybackReady` 保留为幂等补标入口（例如测试或迟到回调），不得再假装依赖 HLS 播放列表写出。
 
 ## 唯一职责
 
@@ -34,7 +34,7 @@ instance.snapshot() -> MediaSnapshot
 | --- | --- | --- |
 | `network-endpoint` | 枚举安全局域网地址并生成接收端点 | 是 |
 | `rtmp-ingest` | 接收推流并将其分配为稳定 `streamId` | 是 |
-| `hls-server` | 生命周期化本机 HTTP 分发（生产为 HTTP-FLV） | 是 |
+| `http-flv-server` | 生命周期化本机 HTTP 分发（生产为 HTTP-FLV） | 是 |
 | `stream-health` | 判定就绪、超时和停止建议 | 是 |
 | `video-player` | 将可播放地址交给 UI 播放器并分类致命错误 | 可选（生产渲染器用 gateway） |
 | `ffmpeg-locator` | 定位 FFmpeg | 封存，生产不调用 |

@@ -172,7 +172,7 @@ const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (device === undefined) return "图传未就绪：未选择图传机";
   const videoPhase = text(read(read(device, "video"), "phase"));
   if (videoPhase === "ready") return "图传播放中";
-  if (videoPhase === "awaiting-playlist") return "正在准备画面";
+  if (videoPhase === "awaiting-playback") return "正在准备画面";
   if (videoPhase === "awaiting-ingest") return "手机已接受推流，等待接收";
   if (videoPhase === "failed") return "图传失败";
   const streamPhase = text(read(read(device, "stream"), "phase"));
@@ -204,7 +204,7 @@ const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean =
   // failed 也允许停：启动半成功或遥测抖动后控制态可能已 failed，手机仍可能在推。
   if (streamPhase === "starting" || streamPhase === "streaming" || streamPhase === "stopping" || streamPhase === "failed") return true;
   const videoPhase = text(read(read(device, "video"), "phase"));
-  return videoPhase === "ready" || videoPhase === "awaiting-playlist" || videoPhase === "awaiting-ingest";
+  return videoPhase === "ready" || videoPhase === "awaiting-playback" || videoPhase === "awaiting-ingest";
 };
 const reject = (reason: string): OperatorActionResult => freeze({ ok: false, reason });
 const accept = (): OperatorActionResult => freeze({ ok: true });

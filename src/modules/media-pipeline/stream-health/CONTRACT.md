@@ -6,7 +6,7 @@
 
 `stream-health` 是桌面端每条接收视频流的健康判定器。它仅根据上层报告的接收、转码和分片事件，维护该流是否已就绪，判断等待是否超时，并产生不含敏感内容的中文诊断与“应停止转码”的动作建议。
 
-它不监听端口、不接收 RTMP、不启动或停止 FFmpeg、不读取 HLS 文件、不创建定时器、不播放视频，也不调用手机端、中继链路或 `live-stream-control`。上层编排器负责按固定频率调用 `evaluate(now)`，并执行返回的停止建议。
+它不监听端口、不接收 RTMP、不启动或停止 FFmpeg、不读取播放文件、不创建定时器、不播放视频，也不调用手机端、中继链路或 `live-stream-control`。上层编排器负责按固定频率调用 `evaluate(now)`，并执行返回的停止建议。
 
 ## 2. 对外接口
 
@@ -33,17 +33,17 @@ instance.snapshots() -> readonly StreamHealthSnapshot[]
 | 事件 | 含义 | 合法前置状态 |
 | --- | --- | --- |
 | `ingest-started` | 已收到手机推入的 RTMP 字节 | `awaiting-ingest` |
-| `transcoder-started` | 转码进程已启动 | `awaiting-playlist` |
-| `playlist-ready` | 本地 HLS 播放列表和首个片段均已就绪 | `awaiting-playlist` |
-| `transcoder-exited` | 转码进程未按用户停止而退出 | `awaiting-playlist` 或 `ready` |
+| `transcoder-started` | 转码进程已启动（兼容旧事件；生产 HTTP-FLV 可不发） | `awaiting-playback` |
+| `playback-ready` | 本地 HTTP-FLV 已可播放 | `awaiting-playback` |
+| `transcoder-exited` | 转码进程未按用户停止而退出 | `awaiting-playback` 或 `ready` |
 
-快照状态只允许：`awaiting-ingest`、`awaiting-playlist`、`ready`、`failed`。状态与事件的精确关系如下：
+快照状态只允许：`awaiting-ingest`、`awaiting-playback`、`ready`、`failed`。状态与事件的精确关系如下：
 
 1. `begin` 后为 `awaiting-ingest`。
-2. `ingest-started` 后进入 `awaiting-playlist`；是否已报告 `transcoder-started` 不影响等待 HLS 的计时起点。
-3. 只有 `playlist-ready` 才能进入 `ready`。
+2. `ingest-started` 后进入 `awaiting-playback`；是否已报告 `transcoder-started` 不影响等待可播放的计时起点。
+3. 只有 `playback-ready` 才能进入 `ready`。
 4. `transcoder-exited` 立即进入 `failed`，并产生一次停止建议。
-5. 在 `awaiting-ingest` 超过输入超时后，进入 `failed`；在 `awaiting-playlist` 超过播放列表超时后，进入 `failed`。两种超时各只产生一次停止建议。
+5. 在 `awaiting-ingest` 超过输入超时后，进入 `failed`；在 `awaiting-playback` 超过可播放超时后，进入 `failed`。两种超时各只产生一次停止建议。
 6. 已 `ready` 的流不会因等待超时失败；已 `failed` 的流不会被旧事件恢复。
 
 未知流、非法事件、时间倒退、状态不允许的事件和已失败流上的事件，都返回 `ignored`，不改变快照，不产生停止建议，也不抛出异常。
@@ -59,8 +59,8 @@ instance.snapshots() -> readonly StreamHealthSnapshot[]
 | 失败原因 | 诊断文本 |
 | --- | --- |
 | 未在输入超时内收到推流 | `未收到手机端 RTMP 推流。请确认手机已开始图传，且电脑地址可从局域网访问。` |
-| 收到推流后播放列表未就绪 | `已收到 RTMP 推流，但转码或本地分片未就绪。请检查转码器和磁盘写入。` |
-| 转码进程异常退出 | `转码进程异常结束。请检查 FFmpeg 与输入流。` |
+| 收到推流后仍未可播放 | `已收到 RTMP 推流，但画面尚未就绪。请确认手机仍在推流。` |
+| 转码进程异常退出 | `转码进程异常结束。请检查媒体服务配置。` |
 
 每个公开结果、快照、列表与停止建议均为冻结副本。实例必须支持多条流并行，任何一条流的事件或失败都不得改变其他流。
 
@@ -68,4 +68,4 @@ instance.snapshots() -> readonly StreamHealthSnapshot[]
 
 本模块是纯 TypeScript 核心模块，只能依赖语言标准能力；不得导入 Node、Electron、FFmpeg、网络库、文件系统、UI 框架、其他一级模块或 `media-pipeline` 的其他二级实现。
 
-测试必须覆盖：全部合法状态转换、输入超时、播放列表超时、异常退出、重复评估、重复开始/停止、非法值、时间倒退、未知与过期事件、至少两条流的隔离、结果排序、冻结副本和诊断不泄露敏感输入。行、分支、函数与变异测试覆盖率均为 100%。
+测试必须覆盖：全部合法状态转换、输入超时、可播放超时、异常退出、重复评估、重复开始/停止、非法值、时间倒退、未知与过期事件、至少两条流的隔离、结果排序、冻结副本和诊断不泄露敏感输入。行、分支、函数与变异测试覆盖率均为 100%。

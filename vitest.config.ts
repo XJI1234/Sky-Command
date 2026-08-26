@@ -59,7 +59,7 @@ export default defineConfig({
         "src/modules/media-pipeline/network-endpoint/**/*.ts",
         "src/modules/media-pipeline/ffmpeg-locator/**/*.ts",
         "src/modules/media-pipeline/transcode-runner/**/*.ts",
-        "src/modules/media-pipeline/hls-server/**/*.ts",
+        "src/modules/media-pipeline/http-flv-server/**/*.ts",
         "src/modules/media-pipeline/rtmp-ingest/**/*.ts",
         "src/modules/media-pipeline/video-player/**/*.ts",
         "src/modules/media-pipeline/index.ts",

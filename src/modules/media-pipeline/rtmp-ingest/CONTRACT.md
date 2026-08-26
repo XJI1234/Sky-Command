@@ -6,7 +6,7 @@
 
 `rtmp-ingest` 管理 RTMP 接收适配器的生命周期，将来自固定路径 `/live/{deviceId}` 的发布开始与结束事实转换为按 `deviceId` 隔离、可由组合根消费的冻结流快照。
 
-它不实现 RTMP 协议或 Socket、不转码、不读写媒体文件、不启动 HLS、不给播放器地址、不决定视频健康，也不校验手机是否已连接。组合根把 `active` 与 `ended` 事实分别报告给 `stream-health`、`transcode-runner` 和 `hls-server`。
+它不实现 RTMP 协议或 Socket、不转码、不读写媒体文件、不启动 HLS、不给播放器地址、不决定视频健康，也不校验手机是否已连接。组合根把 `active` 与 `ended` 事实分别报告给 `stream-health`、`transcode-runner` 和 `http-flv-server`。
 
 ## 公开接口与适配器
 
@@ -34,7 +34,7 @@ interface RtmpIngestSnapshot {
 }
 ```
 
-端口接口、启动和停止结果沿用 `hls-server` 的同步语义：端口必须为 1024..65535；监听固定接收所有路径，但模块只承认精确格式 `/live/{encodedDeviceId}`。`deviceId` 解码后为 1..128 字符、非空白且不含 NUL；编码必须是 `encodeURIComponent(deviceId)` 的规范结果。非规范路径、未知路径和适配器在停止后的迟到事件都必须静默忽略，不能创建流。
+端口接口、启动和停止结果沿用 `http-flv-server` 的同步语义：端口必须为 1024..65535；监听固定接收所有路径，但模块只承认精确格式 `/live/{encodedDeviceId}`。`deviceId` 解码后为 1..128 字符、非空白且不含 NUL；编码必须是 `encodeURIComponent(deviceId)` 的规范结果。非规范路径、未知路径和适配器在停止后的迟到事件都必须静默忽略，不能创建流。
 
 ## 生命周期和流隔离
 

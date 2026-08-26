@@ -9,7 +9,7 @@ describe("media-pipeline video-player 架构契约", () => {
     const contract = readFileSync(join(root, "CONTRACT.md"), "utf8");
     expect(contract).toContain("唯一职责");
     expect(source).not.toMatch(/from\s+["'](?:node:|electron|vue|react|ws|ffmpeg)/i);
-    expect(source).not.toMatch(/document|window|HTMLVideoElement|createServer|child_process|spawn\(|exec\(|readFile|writeFile|rtmp|hls-server|transcode-runner|stream-health|relay-link/i);
+    expect(source).not.toMatch(/document|window|HTMLVideoElement|createServer|child_process|spawn\(|exec\(|readFile|writeFile|rtmp|http-flv-server|transcode-runner|stream-health|relay-link/i);
     expect(source).toContain("export const VideoPlayer");
   });
 });

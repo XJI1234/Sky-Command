@@ -7,7 +7,7 @@ describe("Electron 主进程图传装配（HTTP-FLV 单路径）", () => {
   it("只装配 RTMP→HTTP-FLV，不挂载 WHIP/WHEP 旁路", () => {
     const text = source();
     expect(text).toContain("createMediaPorts");
-    expect(text).toContain("hlsPort: 18_080");
+    expect(text).toContain("httpFlvPort: 18_080");
     expect(text).toContain("rtmpPort: 19_500");
     expect(text).toContain("legacyMediaRequired: true");
     expect(text).toContain("legacyMediaAvailable: true");

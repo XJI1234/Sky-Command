@@ -10,7 +10,7 @@ describe("媒体管线 rtmp-ingest 架构契约", () => {
 
     expect(contract).toContain("唯一职责");
     expect(source).not.toMatch(/from\s+["'](?:node:|electron|ws|ffmpeg|vue|react)/i);
-    expect(source).not.toMatch(/child_process|spawn\(|(?:^|[^.])exec\(|readFile|writeFile|createServer|rtmp-server|hls-server|transcode-runner|stream-health|relay-link/i);
+    expect(source).not.toMatch(/child_process|spawn\(|(?:^|[^.])exec\(|readFile|writeFile|createServer|rtmp-server|http-flv-server|transcode-runner|stream-health|relay-link/i);
     expect(source).toContain("export const RtmpIngest");
   });
 });

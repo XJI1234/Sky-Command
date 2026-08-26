@@ -1,4 +1,4 @@
-import { HlsServer, type HlsServerPort } from "./hls-server/index.js";
+import { HttpFlvServer, type HttpFlvServerPort } from "./http-flv-server/index.js";
 import { NetworkEndpoint, type InterfaceFact } from "./network-endpoint/index.js";
 import { RtmpIngest, type RtmpIngressPort } from "./rtmp-ingest/index.js";
 import { StreamHealth, type StreamHealthInstance, type StreamHealthOptions } from "./stream-health/index.js";
@@ -9,7 +9,7 @@ import type { FfmpegCandidate } from "./ffmpeg-locator/index.js";
 
 export interface MediaPipelineDependencies {
   readonly rtmp: RtmpIngressPort;
-  readonly hls: HlsServerPort;
+  readonly httpFlv: HttpFlvServerPort;
   /** 保留字段以兼容旧装配；生产 HTTP-FLV 路径不再定位或启动 FFmpeg。 */
   readonly fileFacts?: FileFacts;
   /** 保留字段以兼容旧装配；生产路径在 RTMP publish 时直接标记可播放，不再启动转码进程。 */
@@ -19,14 +19,14 @@ export interface MediaPipelineDependencies {
 }
 export interface MediaPipelineOptions {
   readonly rtmpPort: number;
-  /** HTTP-FLV 分发端口（历史字段名 hlsPort，行为已是 FLV）。 */
-  readonly hlsPort: number;
+  /** HTTP-FLV 分发端口。 */
+  readonly httpFlvPort: number;
   readonly health: StreamHealthOptions;
 }
 export interface MediaStreamSnapshot {
   readonly deviceId: string;
   readonly streamId: string;
-  readonly phase: "awaiting-ingest" | "awaiting-playlist" | "ready" | "failed";
+  readonly phase: "awaiting-ingest" | "awaiting-playback" | "ready" | "failed";
   readonly playbackUrl: string | null;
   readonly diagnostic: string | null;
 }
@@ -40,12 +40,12 @@ export interface MediaSnapshot {
 }
 export type PipelineResult<T> =
   | Readonly<{ readonly ok: true; readonly value: T }>
-  | Readonly<{ readonly ok: false; readonly code: "INVALID_INPUT" | "ALREADY_RUNNING" | "NOT_STARTED" | "DISPOSED" | "FFMPEG_NOT_FOUND" | "FFMPEG_INSPECTION_FAILED" | "HLS_START_FAILED" | "RTMP_START_FAILED" | "HLS_STOP_FAILED" | "RTMP_STOP_FAILED" | "PLAYER_FAILED" | "UNKNOWN_DEVICE"; readonly value: MediaSnapshot }>;
+  | Readonly<{ readonly ok: false; readonly code: "INVALID_INPUT" | "ALREADY_RUNNING" | "NOT_STARTED" | "DISPOSED" | "FFMPEG_NOT_FOUND" | "FFMPEG_INSPECTION_FAILED" | "HTTP_FLV_START_FAILED" | "RTMP_START_FAILED" | "HTTP_FLV_STOP_FAILED" | "RTMP_STOP_FAILED" | "PLAYER_FAILED" | "UNKNOWN_DEVICE"; readonly value: MediaSnapshot }>;
 export interface MediaPipelineInstance {
   readonly start: (input: unknown) => PipelineResult<MediaSnapshot>;
   readonly stop: () => PipelineResult<MediaSnapshot>;
   readonly evaluate: (now: unknown) => PipelineResult<MediaSnapshot>;
-  readonly notifyPlaylistReady: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
+  readonly notifyPlaybackReady: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
   readonly selectPlayer: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
   readonly clearPlayer: () => PipelineResult<MediaSnapshot>;
   readonly snapshot: () => MediaSnapshot;
@@ -55,7 +55,7 @@ export interface MediaPipelineInstance {
 interface StartInput {
   readonly interfaces: readonly InterfaceFact[];
   readonly manualHost: string | null;
-  readonly hlsRootDirectory: string;
+  readonly httpFlvRootDirectory: string;
   readonly ffmpegCandidates?: readonly FfmpegCandidate[];
 }
 interface StreamRecord {
@@ -75,25 +75,25 @@ function validInput(value: unknown): value is StartInput {
   const raw = value as StartInput;
   if (!Array.isArray(raw.interfaces)) return false;
   if (raw.ffmpegCandidates !== undefined && !Array.isArray(raw.ffmpegCandidates)) return false;
-  if (typeof raw.hlsRootDirectory !== "string") return false;
-  return raw.hlsRootDirectory.trim().length > 0;
+  if (typeof raw.httpFlvRootDirectory !== "string") return false;
+  return raw.httpFlvRootDirectory.trim().length > 0;
 }
 function create(dependencies: MediaPipelineDependencies, options: MediaPipelineOptions): MediaPipelineInstance {
   const endpointApi = NetworkEndpoint.create(options.rtmpPort);
-  const hls = HlsServer.create(dependencies.hls);
+  const httpFlv = HttpFlvServer.create(dependencies.httpFlv);
   const player = VideoPlayer.create(dependencies.player);
   let phase: MediaSnapshot["phase"] = "idle";
   let revision = 0;
   let endpoint: MediaSnapshot["endpoint"] = null;
   let diagnostic: string | null = null;
   let nextStreamNumber = 1;
-  let hlsListening = false;
+  let httpFlvListening = false;
   let rtmpListening = false;
   const streams = new Map<string, StreamRecord>();
   const clock = dependencies.clock ?? (() => Date.now());
-  const flvUrl = (deviceId: string): string => `http://127.0.0.1:${options.hlsPort}/live/${encodeURIComponent(deviceId)}.flv`;
+  const flvUrl = (deviceId: string): string => `http://127.0.0.1:${options.httpFlvPort}/live/${encodeURIComponent(deviceId)}.flv`;
   const markReady = (record: StreamRecord, deviceId: string): void => {
-    record.health.observe(record.streamId, "playlist-ready", clock());
+    record.health.observe(record.streamId, "playback-ready", clock());
     record.playbackUrl = flvUrl(deviceId);
   };
   const current = (): MediaSnapshot => freeze({ phase, revision, endpoint: endpoint === null ? null : freeze({ ...endpoint }), streams: freeze([...streams].map(([deviceId, record]) => {
@@ -129,21 +129,21 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
     snapshot: current,
     start: (raw) => {
       if (phase === "disposed") return failure("DISPOSED", current());
-      if (hlsListening || rtmpListening) return failure("ALREADY_RUNNING", current());
+      if (httpFlvListening || rtmpListening) return failure("ALREADY_RUNNING", current());
       if (!validInput(raw)) return failure("INVALID_INPUT", current());
       phase = "starting"; revision += 1;
       const resolved = endpointApi.resolve(raw.interfaces, raw.manualHost);
       if (!resolved.ok) return failure("INVALID_INPUT", transition("failed", DIAGNOSTIC));
       endpoint = freeze({ host: resolved.value.host, port: resolved.value.port, source: resolved.value.source });
-      const hlsStarted = hls.start({ port: options.hlsPort, rootDirectory: raw.hlsRootDirectory });
-      if (!hlsStarted.ok) return failure("HLS_START_FAILED", transition("failed", DIAGNOSTIC));
-      hlsListening = true;
+      const httpFlvStarted = httpFlv.start({ port: options.httpFlvPort, rootDirectory: raw.httpFlvRootDirectory });
+      if (!httpFlvStarted.ok) return failure("HTTP_FLV_START_FAILED", transition("failed", DIAGNOSTIC));
+      httpFlvListening = true;
       phase = "running";
       const rtmpStarted = rtmpIngest.start(options.rtmpPort);
       if (!rtmpStarted.ok) {
         streams.clear();
-        const stopped = hls.stop();
-        if (stopped.ok) hlsListening = false;
+        const stopped = httpFlv.stop();
+        if (stopped.ok) httpFlvListening = false;
         return failure("RTMP_START_FAILED", transition("failed", DIAGNOSTIC));
       }
       rtmpListening = true;
@@ -157,11 +157,11 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
       const playerResult = player.clear();
       const rtmpResult = rtmpListening ? rtmpIngest.stop() : null;
       if (rtmpResult?.ok) rtmpListening = false;
-      const hlsResult = hlsListening ? hls.stop() : null;
-      if (hlsResult?.ok) hlsListening = false;
+      const httpFlvResult = httpFlvListening ? httpFlv.stop() : null;
+      if (httpFlvResult?.ok) httpFlvListening = false;
       endpoint = null;
       if (rtmpResult !== null && !rtmpResult.ok) return failure("RTMP_STOP_FAILED", transition("failed", DIAGNOSTIC));
-      if (hlsResult !== null && !hlsResult.ok) return failure("HLS_STOP_FAILED", transition("failed", DIAGNOSTIC));
+      if (httpFlvResult !== null && !httpFlvResult.ok) return failure("HTTP_FLV_STOP_FAILED", transition("failed", DIAGNOSTIC));
       if (!playerResult.ok) return failure("PLAYER_FAILED", transition("failed", DIAGNOSTIC));
       return success(transition("idle"));
     },
@@ -176,7 +176,7 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
       }
       return success(current());
     },
-    notifyPlaylistReady: (deviceId) => {
+    notifyPlaybackReady: (deviceId) => {
       if (phase === "disposed") return failure("DISPOSED", current());
       if (phase !== "running") return failure("NOT_STARTED", current());
       const record = streams.get(deviceId as string);
@@ -201,7 +201,7 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
       if (phase === "disposed") return;
       streams.clear();
       rtmpIngest.stop();
-      hls.stop();
+      httpFlv.stop();
       player.clear();
       phase = "disposed";
       revision += 1;

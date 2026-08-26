@@ -198,7 +198,7 @@
 | `rtmp-ingest` | 接收推流、按设备分配流标识、报告推流开始与结束 | 不转码，不播放 |
 | `ffmpeg-locator` | 在多个来源中定位可用转码器并报告缺失原因 | 不启动转码进程 |
 | `transcode-runner` | 转码子进程的启动、停止、异常退出和清理 | 不决定何时开始直播，不服务播放请求 |
-| `hls-server` | 本地分片分发与生命周期 | 不转码，不决定播放器行为 |
+| `http-flv-server` | 本地分片分发与生命周期 | 不转码，不决定播放器行为 |
 | `stream-health` | 就绪判定、无帧超时、自动停止和诊断文本 | 不启动转码，不渲染界面 |
 | `video-player` | 播放器装载与致命错误分类恢复 | 不管理服务端进程 |
 
@@ -353,7 +353,7 @@ live-stream-control
 | 重连后的任务安全处置：保持 `disconnected`，要求重新暂存与上传 | `mission-control` | 根模块的中继断线协调 + `mission-dispatcher` |
 | 起飞、降落、返航 | `flight-control` | `flight-command-dispatcher`、`dangerous-action-confirm` |
 | 接收飞行器视频 | `media-pipeline` | `rtmp-ingest`、`network-endpoint` |
-| 转码与本地播放 | `media-pipeline` | `ffmpeg-locator`、`transcode-runner`、`hls-server`、`video-player` |
+| 转码与本地播放 | `media-pipeline` | `ffmpeg-locator`、`transcode-runner`、`http-flv-server`、`video-player` |
 | 视频就绪与超时诊断 | `media-pipeline` | `stream-health` |
 | 直播协议配置 | `live-stream-control` | `stream-protocol-config` |
 | 开始与停止直播 | `live-stream-control` | `stream-dispatcher` |

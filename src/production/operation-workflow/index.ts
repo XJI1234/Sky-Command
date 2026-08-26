@@ -261,10 +261,10 @@ function create(dependencies: Dependencies) {
         return success(outcome);
       } catch { return failure("DEPENDENCY_FAILURE"); }
     },
-    notifyPlaylistReady: (deviceId: string): WorkflowResult => {
+    notifyPlaybackReady: (deviceId: string): WorkflowResult => {
       if (disposed) return failure("DISPOSED");
       if (!validId(deviceId)) return failure("INVALID_INPUT");
-      const notify = read(dependencies.mediaPipeline, "notifyPlaylistReady");
+      const notify = read(dependencies.mediaPipeline, "notifyPlaybackReady");
       if (typeof notify !== "function") return failure("DEPENDENCY_FAILURE");
       try { const outcome = notify(deviceId); publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); }
     },

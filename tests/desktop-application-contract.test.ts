@@ -27,7 +27,7 @@ const text = (value: string) => ({ kind: "string" as const, value });
 const bool = (value: boolean) => ({ kind: "boolean" as const, value });
 const object = (fields: Record<string, unknown>) => ({ kind: "object" as const, fields });
 
-const options = (relayPort: number, calls: string[], behavior: Readonly<{ readonly failRtmpStart?: boolean; readonly failHlsStop?: boolean }> = {}) => ({
+const options = (relayPort: number, calls: string[], behavior: Readonly<{ readonly failRtmpStart?: boolean; readonly failHttpFlvStop?: boolean }> = {}) => ({
   network: { listenPort: 19_350, relayPort, manualHost: null as string | null },
   relay: {
     address: { host: "127.0.0.1", port: relayPort },
@@ -39,17 +39,17 @@ const options = (relayPort: number, calls: string[], behavior: Readonly<{ readon
   media: {
     dependencies: {
       rtmp: { listen: () => { calls.push("rtmp-listen"); if (behavior.failRtmpStart) throw new Error("受控 RTMP 启动失败"); }, close: () => { calls.push("rtmp-close"); } },
-      hls: { listen: () => { calls.push("hls-listen"); }, close: () => { calls.push("hls-close"); if (behavior.failHlsStop) throw new Error("受控 HLS 停止失败"); } },
+      httpFlv: { listen: () => { calls.push("http-flv-listen"); }, close: () => { calls.push("http-flv-close"); if (behavior.failHttpFlvStop) throw new Error("受控 HTTP-FLV 停止失败"); } },
       fileFacts: { isExecutableFile: () => true },
       processFactory: () => ({ launch: () => ({ terminate: () => undefined }) }),
       player: { setSource: () => undefined, clear: () => { calls.push("player-clear"); } },
       clock: () => 100,
     },
-    options: { rtmpPort: 19_350, hlsPort: 18_080, health: { ingestTimeoutMs: 1_000, playlistTimeoutMs: 1_000 } },
+    options: { rtmpPort: 19_350, httpFlvPort: 18_080, health: { ingestTimeoutMs: 1_000, playbackTimeoutMs: 1_000 } },
     startInput: {
       interfaces: [{ name: "test-wifi", enabled: true, internal: false, kind: "wifi", ipv4: "192.168.1.8" }],
       manualHost: null,
-      hlsRootDirectory: "D:/controlled-hls",
+      httpFlvRootDirectory: "D:/controlled-http-flv",
       ffmpegCandidates: [{ source: "bundled", executablePath: "D:/controlled-ffmpeg.exe" }],
     },
   },
@@ -111,7 +111,7 @@ describe("DesktopApplication", () => {
     unsubscribe();
     await created.value.dispose();
 
-    expect(calls).toEqual(["hls-listen", "rtmp-listen", "player-clear", "rtmp-close", "hls-close", "player-clear"]);
+    expect(calls).toEqual(["http-flv-listen", "rtmp-listen", "player-clear", "rtmp-close", "http-flv-close", "player-clear"]);
     expect([...new Set(observed)]).toEqual(["starting", "running", "stopping", "idle"]);
     await expect(created.value.start()).resolves.toMatchObject({ ok: false, code: "DISPOSED" });
   });
@@ -178,7 +178,7 @@ describe("DesktopApplication", () => {
 
     await expect(created.value.start()).resolves.toMatchObject({ ok: false, code: "MEDIA_START_FAILED", value: { phase: "idle" } });
     expect(created.value.snapshot()).toMatchObject({ phase: "idle", runtime: { phase: "idle" } });
-    expect(calls).toEqual(["hls-listen", "rtmp-listen", "hls-close"]);
+    expect(calls).toEqual(["http-flv-listen", "rtmp-listen", "http-flv-close"]);
     await expect(created.value.stop()).resolves.toMatchObject({ ok: false, code: "NOT_RUNNING" });
     await created.value.dispose();
   });
@@ -237,7 +237,7 @@ describe("DesktopApplication", () => {
     expect(calls).toContain("webrtc-launch");
     await expect(created.value.stop()).resolves.toMatchObject({ ok: true, value: { phase: "idle" } });
     expect(calls).toContain("webrtc-terminate");
-    expect(calls).toContain("hls-close");
+    expect(calls).toContain("http-flv-close");
     await created.value.dispose();
   });
 
@@ -274,7 +274,7 @@ describe("DesktopApplication", () => {
     await expect(created.value.stop()).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE", value: { phase: "idle" } });
     expect(calls).toContain("webrtc-terminate");
     expect(calls).toContain("rtmp-close");
-    expect(calls).toContain("hls-close");
+    expect(calls).toContain("http-flv-close");
     await created.value.dispose();
   });
 
@@ -295,7 +295,7 @@ describe("DesktopApplication", () => {
 
   it("串行化并发启停，并在媒体停止失败后仍释放中继", async () => {
     const calls: string[] = [];
-    const created = DesktopApplication.create(options(await reservePort(), calls, { failHlsStop: true }));
+    const created = DesktopApplication.create(options(await reservePort(), calls, { failHttpFlvStop: true }));
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
@@ -307,7 +307,7 @@ describe("DesktopApplication", () => {
     await expect(stopping).resolves.toMatchObject({ ok: false, code: "MEDIA_STOP_FAILED", value: { phase: "idle" } });
     expect(created.value.snapshot()).toMatchObject({ phase: "idle", runtime: { relay: { devices: [] } } });
     await created.value.dispose();
-    expect(calls).toContain("hls-close");
+    expect(calls).toContain("http-flv-close");
   });
 
   it("returns stable results for duplicate lifecycle calls and release", async () => {

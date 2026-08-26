@@ -153,7 +153,7 @@ describe("飞行作业工作流模块契约", () => {
     const workflow = workflowWith({
       mediaPipeline: {
         snapshot: () => ({
-          streams: [{ deviceId: "relay-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/hls/stream-1/index.m3u8", diagnostic: "private" }],
+          streams: [{ deviceId: "relay-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/live/stream-1.flv", diagnostic: "private" }],
         }),
         evaluate: () => ({ ok: true }),
         selectPlayer: () => ({ ok: true }),
@@ -162,7 +162,7 @@ describe("飞行作业工作流模块契约", () => {
     });
     const snapshot = workflow.snapshot() as { media?: { streams?: readonly unknown[] } };
     expect(snapshot.media).toEqual({
-      streams: [{ deviceId: "relay-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/hls/stream-1/index.m3u8" }],
+      streams: [{ deviceId: "relay-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/live/stream-1.flv" }],
     });
     expect(Object.isFrozen(snapshot.media)).toBe(true);
   });
@@ -355,7 +355,7 @@ describe("飞行作业工作流模块契约", () => {
     await expect(faulty.writeCameraSettings("relay-a", {})).resolves.toMatchObject({ ok: false, code: "DISPOSED" });
     expect(faulty.clearVideo()).toMatchObject({ ok: false, code: "DISPOSED" });
     expect(faulty.refreshMedia()).toMatchObject({ ok: false, code: "DISPOSED" });
-    expect(faulty.notifyPlaylistReady("relay-a")).toMatchObject({ ok: false, code: "DISPOSED" });
+    expect(faulty.notifyPlaybackReady("relay-a")).toMatchObject({ ok: false, code: "DISPOSED" });
     expect(faulty.requestFlightAction("relay-a", "takeoff")).toMatchObject({ ok: false, code: "DISPOSED" });
     await expect(faulty.confirmFlightAction("relay-a", "confirm-a")).resolves.toMatchObject({ ok: false, code: "DISPOSED" });
     expect(faulty.cancelFlightAction("relay-a", "confirm-a")).toMatchObject({ ok: false, code: "DISPOSED" });
@@ -389,15 +389,15 @@ describe("飞行作业工作流模块契约", () => {
     expect(missing.selectVideo("relay-a")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     expect(missing.clearVideo()).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     expect(missing.forgetCompletedTask("relay-a")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-    expect(missing.notifyPlaylistReady("relay-a")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
+    expect(missing.notifyPlaybackReady("relay-a")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
 
-    const playlist = workflowWith({ mediaPipeline: { snapshot: () => ({ streams: [] }), evaluate: () => ({ ok: true }), notifyPlaylistReady: (deviceId: string) => { calls.push(`ready:${deviceId}`); return { ok: true }; } } });
-    expect(playlist.notifyPlaylistReady("relay-a")).toMatchObject({ ok: true });
-    expect(playlist.notifyPlaylistReady(" ")).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    const playlist = workflowWith({ mediaPipeline: { snapshot: () => ({ streams: [] }), evaluate: () => ({ ok: true }), notifyPlaybackReady: (deviceId: string) => { calls.push(`ready:${deviceId}`); return { ok: true }; } } });
+    expect(playlist.notifyPlaybackReady("relay-a")).toMatchObject({ ok: true });
+    expect(playlist.notifyPlaybackReady(" ")).toMatchObject({ ok: false, code: "INVALID_INPUT" });
     expect(calls).toEqual(["select", "clear", "evaluate", "ready:relay-a"]);
 
-    const throwing = workflowWith({ mediaPipeline: { snapshot: () => ({ streams: [] }), notifyPlaylistReady: () => { throw new Error("playlist"); } } });
-    expect(throwing.notifyPlaylistReady("relay-a")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
+    const throwing = workflowWith({ mediaPipeline: { snapshot: () => ({ streams: [] }), notifyPlaybackReady: () => { throw new Error("playlist"); } } });
+    expect(throwing.notifyPlaybackReady("relay-a")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
   });
 
   it("快照隔离每个事实读取的缺失和异常依赖", () => {
@@ -602,7 +602,7 @@ describe("飞行作业工作流模块契约", () => {
   });
 
   it("将同设备的未就绪媒体严格拒绝为不可播放", () => {
-    const workflow = workflowWith({ mediaPipeline: { snapshot: () => ({ streams: [{ deviceId: "relay-a", phase: "awaiting-playlist" }] }), evaluate: () => ({ ok: true }) } });
+    const workflow = workflowWith({ mediaPipeline: { snapshot: () => ({ streams: [{ deviceId: "relay-a", phase: "awaiting-playback" }] }), evaluate: () => ({ ok: true }) } });
     expect(workflow.selectVideo("relay-a")).toMatchObject({ ok: false, code: "VIDEO_NOT_READY" });
   });
 

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { VideoPlayer } from "../src/modules/media-pipeline/video-player/index.js";
 
-const source = { deviceId: "drone-a", url: "http://127.0.0.1:18080/hls/drone-a/index.m3u8" };
-const SOURCE_FAILED = "播放器无法加载视频源。请检查图传流与本地 HLS 服务。";
+const source = { deviceId: "drone-a", url: "http://127.0.0.1:18080/live/drone-a.flv" };
+const SOURCE_FAILED = "播放器无法加载视频源。请检查图传流与本地图传服务。";
 const CLEAR_FAILED = "播放器无法清理当前视频源。请检查播放器状态。";
-const FATAL = "播放器报告了致命错误。请检查图传流与本地 HLS 服务。";
+const FATAL = "播放器报告了致命错误。请检查图传流与本地图传服务。";
 
 function fixture(options: { readonly setSource?: (input: Readonly<typeof source>, onFatal: (error: unknown) => void) => void; readonly clear?: () => void } = {}) {
   const sources: Array<Readonly<typeof source>> = [];
@@ -25,14 +25,14 @@ describe("media-pipeline video-player 契约", () => {
     expect(player.select(input)).toEqual({ ok: true, value: { phase: "playing", deviceId: "drone-a", revision: 1, diagnostic: null } });
     input.deviceId = "changed";
     expect(sources[0]).toEqual(source);
-    expect(player.select({ deviceId: "drone-b", url: "https://localhost:1/live/index.m3u8" })).toEqual({ ok: true, value: { phase: "playing", deviceId: "drone-b", revision: 2, diagnostic: null } });
+    expect(player.select({ deviceId: "drone-b", url: "https://localhost:1/live.flv" })).toEqual({ ok: true, value: { phase: "playing", deviceId: "drone-b", revision: 2, diagnostic: null } });
   });
 
   it("拒绝畸形输入并且不触碰适配器", () => {
     const { player, sources, clears } = fixture();
     const callableInput = Object.assign(() => undefined, source);
     const coercibleUrl = { toString: () => source.url };
-    const invalid: readonly unknown[] = [null, 1, {}, callableInput, { deviceId: " ", url: source.url }, { deviceId: "a\0b", url: source.url }, { deviceId: "a".repeat(129), url: source.url }, { deviceId: "a", url: 1 }, { deviceId: "a", url: coercibleUrl }, { deviceId: "a", url: "ftp://localhost/index.m3u8" }, { deviceId: "a", url: "http://user:pass@localhost/index.m3u8" }, { deviceId: "a", url: "http://user@localhost/index.m3u8" }, { deviceId: "a", url: "http://:pass@localhost/index.m3u8" }, { deviceId: "a", url: "http://localhost/index.m3u8?token=secret" }, { deviceId: "a", url: "http://localhost/index.m3u8#part" }, { deviceId: "a", url: "http://localhost/live/stream.m3u8" }, { deviceId: "a", url: "not-url" }];
+    const invalid: readonly unknown[] = [null, 1, {}, callableInput, { deviceId: " ", url: source.url }, { deviceId: "a\0b", url: source.url }, { deviceId: "a".repeat(129), url: source.url }, { deviceId: "a", url: 1 }, { deviceId: "a", url: coercibleUrl }, { deviceId: "a", url: "ftp://localhost.flv" }, { deviceId: "a", url: "http://user:pass@localhost.flv" }, { deviceId: "a", url: "http://user@localhost.flv" }, { deviceId: "a", url: "http://:pass@localhost.flv" }, { deviceId: "a", url: "http://localhost.flv?token=secret" }, { deviceId: "a", url: "http://localhost.flv#part" }, { deviceId: "a", url: "http://localhost/live/stream.m3u8" }, { deviceId: "a", url: "not-url" }];
     for (const value of invalid) expect(player.select(value)).toEqual({ ok: false, code: "INVALID_INPUT", value: player.snapshot() });
     expect(sources).toHaveLength(0);
     expect(player.select({ deviceId: "a".repeat(128), url: source.url })).toMatchObject({ ok: true, value: { deviceId: "a".repeat(128) } });
