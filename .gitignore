@@ -10,4 +10,5 @@ tmp/
 tmp-hls/
 *.log
 .claude/
+.worktrees/
 cross-runtime-verification-report.json
