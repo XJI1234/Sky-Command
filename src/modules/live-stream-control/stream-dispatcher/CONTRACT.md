@@ -35,7 +35,7 @@ instance.subscribe(listener) -> unsubscribe
 4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`；
 5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。
 
-`stop(deviceId)` 不读取媒体端点也不构造地址；它同样检查设备能力，进入 `stopping` 后发送冻结空字段对象。中继成功时进入 `idle`，失败时进入 `failed`。手机端命令成功只表示 DJI 操作结果，播放器可用性仍由 `media-pipeline` 决定。
+`stop(deviceId)` 不读取媒体端点、不构造地址、也不走启动用的 `CapabilityGate(live-stream)`。它只校验设备标识与同设备互斥，进入 `stopping` 后发送冻结空字段对象。中继成功时进入 `idle`，失败时进入 `failed`。手机端命令成功只表示 DJI 操作结果，播放器可用性仍由 `media-pipeline` 决定。
 
 错误码只能是：`INVALID_INPUT`、`MEDIA_PIPELINE_UNAVAILABLE`、`CONFIGURATION_INVALID`、`CAPABILITY_BLOCKED`、`OPERATION_IN_PROGRESS`、`RELAY_REJECTED`、`DEPENDENCY_FAILURE`、`DISCONNECTED` 或 `ILLEGAL_STATE`。能力拒绝必须复制 `CapabilityGate` 的原因码。`RELAY_REJECTED` 可以把手机端已知拒绝详情映射为封闭原因码 `ANOTHER_VIDEO_TRANSPORT_ACTIVE`，但不能把遥测、RTMP URL 或原始异常带入结果。
 

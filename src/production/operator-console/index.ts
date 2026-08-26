@@ -55,6 +55,8 @@ export interface OperatorView {
   readonly missionLabel: string;
   readonly streamLabel: string;
   readonly playbackReady: boolean;
+  readonly streamCanStart: boolean;
+  readonly streamCanStop: boolean;
 }
 
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
@@ -162,13 +164,12 @@ const missionLabelOf = (mission: unknown): string => {
     default: return "未开始";
   }
 };
+const transportBusy = (lane: unknown): boolean => {
+  const phase = text(read(lane, "phase"));
+  return phase === "starting" || phase === "streaming" || phase === "stopping";
+};
 const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
-  const whipPhase = text(read(read(device, "whipStream"), "phase"));
-  if (whipPhase === "starting") return "正在启动低延迟图传";
-  if (whipPhase === "streaming") return "低延迟图传已启动，等待画面";
-  if (whipPhase === "stopping") return "正在停止低延迟图传";
-  if (whipPhase === "failed") return "低延迟图传失败";
-  if (whipPhase === "disconnected") return "低延迟图传已中断";
+  if (device === undefined) return "图传未就绪：未选择图传机";
   const videoPhase = text(read(read(device, "video"), "phase"));
   if (videoPhase === "ready") return "图传播放中";
   if (videoPhase === "awaiting-playlist") return "正在准备画面";
@@ -176,15 +177,37 @@ const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (videoPhase === "failed") return "图传失败";
   const streamPhase = text(read(read(device, "stream"), "phase"));
   if (streamPhase === "starting" || streamPhase === "streaming") return "手机已接受推流命令";
-  return "空闲";
+  if (streamPhase === "stopping") return "正在停止图传";
+  if (streamPhase === "failed") return "图传失败";
+  if (streamPhase === "disconnected") return "图传已中断，可重新启动";
+  const connection = read(device, "connection");
+  if (read(connection, "sdk") !== "ready") return "图传未就绪：等待手机就绪";
+  if (read(connection, "remoteController") !== "connected") return "图传未就绪：遥控器未连接";
+  if (read(read(device, "capabilities"), "liveVideo") === "unsupported") return "图传未就绪：当前机不支持图传";
+  if (transportBusy(read(device, "whipStream"))) return "图传未就绪：另一路图传占用中";
+  return "图传可启动";
 };
-const transportBusy = (lane: unknown): boolean => {
-  const phase = text(read(lane, "phase"));
-  return phase === "starting" || phase === "streaming" || phase === "stopping";
+const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean => {
+  if (device === undefined) return false;
+  if (transportBusy(read(device, "whipStream"))) return false;
+  const streamPhase = text(read(read(device, "stream"), "phase"));
+  if (streamPhase === "starting" || streamPhase === "streaming" || streamPhase === "stopping") return false;
+  const connection = read(device, "connection");
+  return read(connection, "sdk") === "ready"
+    && read(connection, "remoteController") === "connected"
+    && read(read(device, "capabilities"), "liveVideo") !== "unsupported";
+};
+const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean => {
+  if (device === undefined) return false;
+  if (transportBusy(read(device, "whipStream"))) return false;
+  const streamPhase = text(read(read(device, "stream"), "phase"));
+  // failed 也允许停：启动半成功或遥测抖动后控制态可能已 failed，手机仍可能在推。
+  if (streamPhase === "starting" || streamPhase === "streaming" || streamPhase === "stopping" || streamPhase === "failed") return true;
+  const videoPhase = text(read(read(device, "video"), "phase"));
+  return videoPhase === "ready" || videoPhase === "awaiting-playlist" || videoPhase === "awaiting-ingest";
 };
 const reject = (reason: string): OperatorActionResult => freeze({ ok: false, reason });
 const accept = (): OperatorActionResult => freeze({ ok: true });
-const aircraftConnected = (device: Record<string, unknown> | undefined): boolean => read(read(device, "connection"), "aircraft") === "connected";
 const waypointSupported = (device: Record<string, unknown> | undefined): boolean => read(read(device, "capabilities"), "waypointMission") === "supported";
 const batteryPercent = (device: Record<string, unknown> | undefined): number | null => finite(read(read(device, "connection"), "batteryPercent"));
 const deviceById = (view: OperatorView, deviceId: string | null): Record<string, unknown> | undefined =>
@@ -197,7 +220,11 @@ const flightDevice = (view: OperatorView, action: string): OperatorActionResult 
   if (deviceId === null) return reject(streamAction ? "请选择用于图传的飞机" : "请选择用于执行任务的飞机");
   const device = deviceById(view, deviceId);
   if (device === undefined) return reject("所选手机已离线");
-  if (action !== "mission-stage" && !action.startsWith("stream-") && !action.startsWith("webrtc-stream-") && !aircraftConnected(device)) return reject("飞机尚未连接");
+  if (action !== "mission-stage" && !action.startsWith("stream-") && !action.startsWith("webrtc-stream-")) {
+    const connection = read(device, "connection");
+    if (read(connection, "flightController") !== "connected") return reject("飞机飞控未连接，请确认飞机已开机");
+    if (read(connection, "aircraft") !== "connected") return reject("飞机尚未连接");
+  }
   return device;
 };
 const rejected = (value: OperatorActionResult | Record<string, unknown>): value is OperatorActionResult => "ok" in value;
@@ -235,6 +262,8 @@ function project(input: unknown): OperatorView {
     missionLabel: missionLabelOf(missionDevice === undefined ? null : read(missionDevice, "mission")),
     streamLabel: streamLabelOf(streamDevice),
     playbackReady: videoPhase === "ready",
+    streamCanStart: streamCanStartOf(streamDevice),
+    streamCanStop: streamCanStopOf(streamDevice),
   });
 }
 
@@ -251,11 +280,11 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   const device = flightDevice(current, name);
   if (rejected(device)) return device;
   if (name === "stream-start" || name === "stream-stop" || name === "stream-select" || name === "webrtc-stream-start" || name === "webrtc-stream-stop" || name === "webrtc-stream-select") {
-    if (name === "stream-start" || name === "webrtc-stream-start") {
+    if (name.startsWith("webrtc-")) return reject("请使用页面上的「启动图传」");
+    if (name === "stream-start") {
       if (read(read(device, "connection"), "remoteController") !== "connected") return reject("遥控器未连接，无法启动图传");
     }
-    const otherLane = name.startsWith("webrtc-") ? read(device, "stream") : read(device, "whipStream");
-    if ((name === "stream-start" || name === "stream-stop" || name === "webrtc-stream-start" || name === "webrtc-stream-stop") && transportBusy(otherLane)) {
+    if ((name === "stream-start" || name === "stream-stop") && transportBusy(read(device, "whipStream"))) {
       return reject("另一路图传正在使用，请先停止");
     }
     return accept();
@@ -264,12 +293,18 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   if (name === "flight-takeoff" || name === "flight-land" || name === "flight-return-home") {
     if (read(read(device, "connection"), "sdk") === "not-ready") return reject("手机尚未就绪");
     if (read(read(device, "connection"), "remoteController") !== "connected") return reject("遥控器未连接");
-    if (read(read(device, "connection"), "flightController") !== "connected") return reject("飞机尚未连接");
+    if (read(read(device, "connection"), "flightController") !== "connected") return reject("飞机飞控未连接，请确认飞机已开机");
+    if (read(read(device, "connection"), "aircraft") !== "connected") return reject("飞机尚未连接");
     if (name === "flight-takeoff") {
       const battery = batteryPercent(device);
       if (battery === null) return reject("尚未取得所选飞机的电池遥测");
       if (read(read(device, "connection"), "flightState") === "flying") return reject("飞机已在空中，不能起飞");
       if (read(read(device, "connection"), "flightState") !== "grounded") return reject("尚未确认飞机是否在地面，不能起飞");
+    }
+    if (name === "flight-land" || name === "flight-return-home") {
+      const flightState = read(read(device, "connection"), "flightState");
+      if (flightState === "unknown" || flightState === null || flightState === undefined) return reject("尚未确认飞机是否在空中");
+      if (flightState === "grounded") return reject(name === "flight-land" ? "飞机已在地面，无需降落" : "飞机已在地面，不能返航");
     }
     return accept();
   }
@@ -299,8 +334,9 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   if (phase !== "uploaded") return reject("请先将当前航线上传到所选飞机");
   if (read(read(device, "connection"), "sdk") === "not-ready") return reject("手机尚未就绪");
   if (read(read(device, "connection"), "remoteController") !== "connected") return reject("遥控器未连接");
-  if (read(read(device, "connection"), "flightController") !== "connected") return reject("飞机尚未连接");
-  if (read(read(device, "connection"), "pairingState") !== "PAIRED") return reject("飞机尚未完成对频，禁止启动航线");
+  if (read(read(device, "connection"), "flightController") !== "connected") return reject("飞机飞控未连接，请确认飞机已开机");
+  if (read(read(device, "connection"), "aircraft") !== "connected") return reject("飞机尚未连接");
+  if (read(read(device, "connection"), "pairingState") !== "PAIRED") return reject("飞机尚未完成对频，请先在手机上完成对频");
   if (read(read(device, "connection"), "flightState") === "flying") return reject("飞机已在空中，禁止启动航线");
   if (read(read(device, "connection"), "flightState") !== "grounded") return reject("尚未确认飞机是否在地面，禁止启动航线");
   return accept();

@@ -99,7 +99,13 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
       if (!target.ok || !record(target.value) || target.value.ok !== true || !record(target.value.value) || typeof target.value.value.rtmpUrl !== "string") return result(deviceId, lane, "start", false, "CONFIGURATION_INVALID");
       return send(deviceId, lane, "start", freeze({ name: "live-stream.start" as const, fields: freeze({ rtmpUrl: target.value.value.rtmpUrl }) }));
     },
-    stop: async (deviceId) => { const lane = laneFor(typeof deviceId === "string" ? deviceId : ""); const rejected = checked(deviceId, "stop", lane); if (rejected) return rejected; return send(deviceId, lane, "stop", freeze({ name: "live-stream.stop" as const, fields: freeze({}) })); },
+    stop: async (deviceId) => {
+      const lane = laneFor(typeof deviceId === "string" ? deviceId : "");
+      if (!validId(deviceId)) return freeze({ ok: false as const, operation: "stop" as const, code: "INVALID_INPUT" as const, state: null });
+      if (lane.busy) return freeze({ ok: false as const, operation: "stop" as const, code: "OPERATION_IN_PROGRESS" as const, state: snapshot(deviceId, lane) });
+      // 停止不得复用启动能力门闩：遥控器/SDK 遥测抖动时仍须能发 live-stream.stop。
+      return send(deviceId, lane, "stop", freeze({ name: "live-stream.stop" as const, fields: freeze({}) }));
+    },
     get: (deviceId) => validId(deviceId) && lanes.has(deviceId) ? snapshot(deviceId, lanes.get(deviceId)!) : empty(typeof deviceId === "string" ? deviceId : ""),
     list,
     recordDisconnected: (deviceId) => { const lane = lanes.get(deviceId); if (!lane) return null; lane.phase = "disconnected"; lane.busy = false; lane.failureCode = "DISCONNECTED"; lane.reason = null; const state = snapshot(deviceId, lane); publish(); return state; },

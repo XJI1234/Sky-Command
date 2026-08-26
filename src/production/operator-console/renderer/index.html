@@ -13,6 +13,8 @@
     nav { display: flex; gap: 8px; }
     nav button, .row button, .actions button { background: #0d1519; color: var(--text); border: 1px solid #405057; min-height: 32px; padding: 0 12px; cursor: pointer; }
     nav button.active, .device.inspected { border-color: var(--accent); color: var(--accent); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #stream-ready.ok, #stream-label.ok { color: var(--accent); }
     main { display: none; flex: 1; min-height: 0; }
     main.active { display: grid; }
     #workspace-devices { grid-template-columns: 280px 1fr; }
@@ -113,7 +115,7 @@
   <main id="workspace-routes">
     <section class="route-preview-panel">
       <header>
-        <div><span>WAYLINE REVIEW</span><h2>航迹文件预览</h2></div>
+        <div><span>航迹预览</span><h2>航迹文件预览</h2></div>
         <p id="route-summary">尚未导入航迹文件</p>
         <button id="route-import" type="button">导入 KML / KMZ</button>
       </header>
@@ -122,9 +124,9 @@
     </section>
     <section class="route-mission-wrap">
       <div class="route-mission-control">
-        <span class="eyebrow">ACTIVE WAYLINE</span>
+        <span class="eyebrow">当前航线</span>
         <label id="route-picker-wrap" class="route-picker" hidden>
-          <span>CURRENT ROUTE</span>
+          <span>选择航线</span>
           <select id="route-select"></select>
         </label>
         <div id="route-details" class="route-details" hidden>
@@ -154,7 +156,8 @@
     </section>
     <section class="flight-controls">
       <h2>任务与控制</h2>
-      <p class="muted">点「启动图传」后，左侧会显示实时画面。</p>
+      <p id="stream-ready" class="notice"></p>
+      <p class="muted">先看上方图传是否可启动；未就绪时「启动图传」不可点。</p>
       <label class="muted">任务飞机</label>
       <select id="mission-select"></select>
       <label class="muted">图传飞机</label>

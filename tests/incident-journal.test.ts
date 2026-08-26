@@ -112,4 +112,32 @@ describe("事故日志", () => {
     expect(log).toMatch(/downlink MEDIA_PUBLISHER_READY/);
     stop();
   });
+
+  it("连接类事实需连续两次一致才落盘，unknown 不写 WARN", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    let listener: ((snapshot: unknown) => void) | undefined;
+    const device = (aircraft: string) => ({
+      deviceId: "phone-1",
+      connection: { sdk: "ready", remoteController: "connected", flightController: "connected", aircraft, pairingState: "PAIRED" },
+      mission: { phase: "idle" },
+      stream: { phase: "idle" },
+      video: { phase: "idle" },
+    });
+    const stop = watchApplication({
+      snapshot: () => ({ workflow: { devices: [device("connected")] }, runtime: {} }),
+      subscribe: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    }, journal);
+    listener?.({ workflow: { devices: [device("disconnected")] }, runtime: {} });
+    expect(readFileSync(journal.logPath, "utf8")).not.toContain("AIRCRAFT_DISCONNECTED");
+    listener?.({ workflow: { devices: [device("disconnected")] }, runtime: {} });
+    expect(readFileSync(journal.logPath, "utf8")).toContain("AIRCRAFT_DISCONNECTED");
+    listener?.({ workflow: { devices: [device("unknown")] }, runtime: {} });
+    expect(readFileSync(journal.logPath, "utf8")).not.toMatch(/WARN .*AIRCRAFT_UNKNOWN/);
+    stop();
+  });
 });

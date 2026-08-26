@@ -38,14 +38,14 @@ export type HardwareReadinessResult =
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
 const messages: Readonly<Record<HardwareReadinessBlockerCode, string>> = freeze({
-  INVALID_INPUT: "无法读取实机预检状态。",
-  DESKTOP_NETWORK_UNAVAILABLE: "电脑没有可用的局域网地址。",
-  LEGACY_MEDIA_UNAVAILABLE: "电脑未找到可用的旧图传媒体服务。",
+  INVALID_INPUT: "无法读取预检状态，请稍后重试。",
+  DESKTOP_NETWORK_UNAVAILABLE: "电脑没有可用的局域网地址，请检查 Wi-Fi/网线。",
+  LEGACY_MEDIA_UNAVAILABLE: "电脑图传服务不可用，请重启 Sky Command。",
   PHONE_DISCONNECTED: "手机尚未连接到电脑。",
-  PHONE_SESSION_UNSTABLE: "手机连接正在稳定中。",
-  SDK_NOT_READY: "DJI SDK 尚未就绪。",
+  PHONE_SESSION_UNSTABLE: "手机刚连上，请稍等十几秒再操作。",
+  SDK_NOT_READY: "手机端 DJI 尚未就绪，请在手机上确认已启动。",
   REMOTE_CONTROLLER_DISCONNECTED: "遥控器尚未连接。",
-  FLIGHT_CONTROLLER_DISCONNECTED: "飞控尚未连接。",
+  FLIGHT_CONTROLLER_DISCONNECTED: "飞机飞控未连接，请确认飞机已开机。",
   AIRCRAFT_DISCONNECTED: "飞机尚未连接。",
 });
 

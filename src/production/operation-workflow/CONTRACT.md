@@ -250,7 +250,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 7. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`；若装配了低延迟旁路，还必须调用 `whipStreamControl.recordDisconnected(deviceId)`。同一设备编号换了会话时同样必须复位这两条图传车道，不得继续显示“已启动”。任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
 8. `clearVideo()` 只清空本地播放器选择，不向手机发送停止推流命令。
 9. `refreshMedia()` 调用已运行媒体管线的 `mediaPipeline.evaluate(now())`，并据其返回的既有媒体快照更新工作流快照。它不启动媒体服务、不构造 RTMP 地址，也不创建额外的转码、播放或健康状态机。仅当媒体快照中某在线设备已 `failed`、且该设备图传仍为 `starting` 或 `streaming` 时，必须对该设备调用 `stopStream`；设备已离线时不得补发停止。
-10. `notifyPlaylistReady(deviceId)` 只委托 `mediaPipeline.notifyPlaylistReady(deviceId)`。它由桌面装配在 FFmpeg 写出 HLS 播放列表后调用，不启动图传、不伪造 `ready`。
+10. `notifyPlaylistReady(deviceId)` 只委托 `mediaPipeline.notifyPlaylistReady(deviceId)`。生产路径在 RTMP publish 时已由 `media-pipeline` 自行标记 ready；该入口保留为幂等补标，不启动图传。
 
 ## 9. 设备设置规则
 
@@ -279,6 +279,10 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 5. 用保存的确认 ID 取消该设备尚未确认的直接飞行动作；
 6. 不发送 `wayline.stop`、`live-stream.stop` 或任何飞控命令；
 7. 不自动重连、不自动重传、不自动恢复任务或图传。
+
+同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道、清空该设备连接滞回；不得让旧确认对话框在新会话上继续可点。
+
+连接快照中的 `connected`（飞机）、`remoteControllerConnected`、`flightControllerConnected` 必须经短滞回后再对外显示 true→false，避免遥测闪断带动 UI/门闩抖动；false→true 与 unknown 立即生效。
 
 同 ID 的新手机会话后续重新出现时被视为新在线设备：旧任务和旧图传都不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。
 

@@ -16,12 +16,13 @@ describe("Electron WHEP 播放链路", () => {
     expect(source).not.toContain("gateway-invoke");
   });
 
-  it("渲染器通过 recvonly PeerConnection 完成 WHEP offer/answer，并只在首帧后回报", () => {
+  it("渲染器保留封存 WHEP 适配代码，但生产路径只刷新经典图传", () => {
     const source = renderer();
     for (const fragment of ["RTCPeerConnection", "recvonly", "createOffer", "application/sdp", "setRemoteDescription", "ontrack", "loadeddata", "whepReady", "whepFatal"]) expect(source).toContain(fragment);
     expect(source).toContain('bridge().invoke("stream-refresh")');
     expect(source).toContain("whepPeer !== null");
-    for (const method of ["webrtc-start", "webrtc-stop", "webrtc-refresh", "webrtc-stream-start", "webrtc-stream-stop", "webrtc-stream-select"]) expect(source).toContain(method);
+    for (const method of ["webrtc-start", "webrtc-stop", "webrtc-stream-start", "webrtc-stream-stop", "webrtc-stream-select"]) expect(source).toContain(method);
+    expect(source).not.toContain('invoke("webrtc-refresh")');
     expect(source).toContain("ANOTHER_VIDEO_TRANSPORT_ACTIVE");
     expect(source).toContain("另一路图传正在使用，请先停止");
     expect(source).toContain("飞行状态尚未确认");
@@ -29,6 +30,8 @@ describe("Electron WHEP 播放链路", () => {
     expect(source).toContain('read(connection, "sdk") !== "ready"');
     expect(source).not.toContain("value !== \"disconnected\" && read(connection, \"sdk\")");
     expect(source).not.toContain("JSON.stringify(unwrap(");
+    expect(source).not.toContain("readyState=");
+    expect(source).toContain("flightActionLabel");
   });
 
   it("飞行页只暴露旧 RTMP 图传按钮，图传状态写在飞行页内", () => {
@@ -37,7 +40,12 @@ describe("Electron WHEP 播放链路", () => {
     expect(renderer()).not.toContain("video-dock");
     const flight = page.slice(page.indexOf('<main id="workspace-flight"'));
     expect(flight).toContain('id="stream-label"');
+    expect(flight).toContain('id="stream-ready"');
     expect(page.indexOf('id="stream-label"')).toBeGreaterThan(page.indexOf('id="workspace-flight"'));
+    expect(renderer()).toContain("飞机未连接");
+    expect(renderer()).toContain("飞机状态未知");
+    expect(renderer()).toContain("streamCanStart");
+    expect(renderer()).toContain('button[data-action="stream-start"]');
     expect(page).toContain('<video id="video"');
     expect(page).toContain('data-action="stream-start"');
     expect(page).toContain('data-action="stream-stop"');
@@ -47,7 +55,7 @@ describe("Electron WHEP 播放链路", () => {
     expect(page).not.toContain("启动低延迟");
     expect(page).not.toContain("webrtc-stream-start");
     expect(page).not.toContain("图传监看");
-    expect(page).toContain("左侧会显示实时画面");
+    expect(page).toContain("未就绪时「启动图传」不可点");
     expect(renderer()).toContain("playVideo");
     expect(renderer()).toContain("flvjs");
     expect(renderer()).toContain("自动播放被拦截，请点一下上方画面");

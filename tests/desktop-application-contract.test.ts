@@ -441,4 +441,12 @@ describe("DesktopApplication", () => {
       await created.value.dispose();
     }
   });
+
+  it("stop 必须先尽力停止活动航线，且不把桌面退出写成降落", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("../src/production/desktop-application/index.ts", import.meta.url), "utf8");
+    expect(source).toContain("missionControl.stop(deviceId)");
+    expect(source).toContain("best-effort stop on desktop shutdown");
+    expect(source).not.toContain('requestFlightAction');
+  });
 });

@@ -2,6 +2,7 @@ import { AssignmentRegistry } from "./assignment-registry/index.js";
 import { WorkflowSnapshot } from "./workflow-snapshot/index.js";
 import { WorkflowSubscriptions } from "./workflow-subscriptions/index.js";
 import { WorkflowActions } from "./workflow-actions/index.js";
+import { createConnectionHold } from "./connection-hold.js";
 import { CapabilityGate } from "../../modules/device-console/index.js";
 import { HardwareReadiness, type HardwareReadinessResult, type HardwareReadinessTarget } from "../../modules/hardware-readiness/index.js";
 
@@ -58,6 +59,7 @@ function create(dependencies: Dependencies) {
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
   const connectedSince = new Map<string, number>();
+  const connectionHold = createConnectionHold();
   const initialConnectionTime = clock();
   if (initialConnectionTime !== null) for (const deviceId of previousOnline) connectedSince.set(deviceId, initialConnectionTime);
   const online = (deviceId: string): boolean => onlineIds().includes(deviceId);
@@ -69,9 +71,33 @@ function create(dependencies: Dependencies) {
   const task = (deviceId: string): unknown => { const get = read(dependencies.missionControl, "get"); try { return typeof get === "function" ? get(deviceId) : freeze({ deviceId, phase: "idle" }); } catch { return freeze({ deviceId, phase: "idle" }); } };
   const stream = (deviceId: string): unknown => { const get = read(dependencies.liveStreamControl, "get"); try { return typeof get === "function" ? get(deviceId) : freeze({ deviceId, phase: "idle" }); } catch { return freeze({ deviceId, phase: "idle" }); } };
   const whipStream = (deviceId: string): unknown => { const get = read(dependencies.whipStreamControl, "get"); try { return typeof get === "function" ? get(deviceId) : freeze({ deviceId, phase: "idle", lastOperation: null, failureCode: null, reason: null }); } catch { return freeze({ deviceId, phase: "idle", lastOperation: null, failureCode: null, reason: null }); } };
-  const telemetry = (deviceId: string): unknown => { const get = read(dependencies.relayOperations, "telemetry"); try { return typeof get === "function" ? get(deviceId) : null; } catch { return null; } };
+  const telemetryRaw = (deviceId: string): unknown => { const get = read(dependencies.relayOperations, "telemetry"); try { return typeof get === "function" ? get(deviceId) : null; } catch { return null; } };
+  const telemetry = (deviceId: string): unknown => {
+    const raw = telemetryRaw(deviceId);
+    const now = clock();
+    const source = record(raw);
+    const payload = source === null ? null : record(read(source, "payload"));
+    if (source === null || payload === null || now === null) return raw;
+    const next = freeze({
+      ...payload,
+      connected: connectionHold.hold(deviceId, "connected", payload.connected, now),
+      remoteControllerConnected: connectionHold.hold(deviceId, "remoteControllerConnected", payload.remoteControllerConnected, now),
+      flightControllerConnected: connectionHold.hold(deviceId, "flightControllerConnected", payload.flightControllerConnected, now),
+    });
+    return freeze({ ...source, payload: next });
+  };
   const settings = (deviceId: string): unknown => { const get = read(dependencies.deviceSettings, "snapshot"); try { return typeof get === "function" ? get(deviceId) : freeze({}); } catch { return freeze({}); } };
   const media = (): unknown => { const snapshot = read(dependencies.mediaPipeline, "snapshot"); try { return typeof snapshot === "function" ? snapshot() : freeze({ streams: [] }); } catch { return freeze({ streams: [] }); } };
+  const clearFlightConfirm = (deviceId: string): void => {
+    const confirmationId = pending.get(deviceId);
+    if (confirmationId !== undefined) {
+      pending.delete(deviceId);
+      const cancel = read(dependencies.flightControl, "cancel");
+      try { if (typeof cancel === "function") void cancel(deviceId, confirmationId); } catch { /* disconnect still clears local state */ }
+    }
+    const clear = read(dependencies.flightControl, "clear");
+    try { if (typeof clear === "function") clear(deviceId); } catch { /* leftover confirmations must not survive reconnect */ }
+  };
   const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => freeze({ deviceId, telemetry: telemetry(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), whipStream: whipStream(deviceId), settings: settings(deviceId), pendingFlightAction: (() => { const get = read(dependencies.flightControl, "get"); try { return typeof get === "function" ? get(deviceId) : null; } catch { return null; } })() })), routes: (() => { const list = read(dependencies.routeLibrary, "list"); try { return typeof list === "function" && Array.isArray(list()) ? list() : []; } catch { return []; } })(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
   const publish = (): void => { revision += 1; const current = snapshot(); for (const listener of [...listeners]) { try { listener(current); } catch { /* listener faults are isolated */ } } };
   const forgetVideo = (deviceId: string): void => {
@@ -89,12 +115,12 @@ function create(dependencies: Dependencies) {
       const nextSession = sessions.get(deviceId);
       const replaced = !gone && previousSession !== undefined && nextSession !== undefined && previousSession !== nextSession;
       if (!gone && !replaced) continue;
+      // 设备消失或会话替换：危险确认与图传车道都必须作废，避免重连后点到旧确认。
+      clearFlightConfirm(deviceId);
+      connectionHold.forget(deviceId);
       if (gone) {
         connectedSince.delete(deviceId);
         assignments.removeDevice(deviceId);
-        const confirmationId = pending.get(deviceId);
-        if (confirmationId !== undefined) { pending.delete(deviceId); const cancel = read(dependencies.flightControl, "cancel"); try { if (typeof cancel === "function") void cancel(deviceId, confirmationId); } catch { /* a disconnect still clears local state */ } }
-        const clear = read(dependencies.flightControl, "clear"); try { if (typeof clear === "function") clear(deviceId); } catch { /* leftover confirmations must not survive reconnect */ }
       }
       forgetVideo(deviceId);
     }
@@ -267,7 +293,7 @@ function create(dependencies: Dependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); const forget = read(dependencies.missionControl, "forget"); if (typeof forget !== "function") return failure("DEPENDENCY_FAILURE"); try { const forgotten = forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); connectionHold.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
   });
 }
 

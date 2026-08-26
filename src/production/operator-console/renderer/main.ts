@@ -1,5 +1,4 @@
 import flvjs from "flv.js";
-import Hls from "hls.js";
 import { OperatorConsole } from "../index.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
@@ -43,6 +42,13 @@ const el = (id: string): HTMLElement => {
 
 const show = (message: string): void => { el("status").textContent = message; };
 
+const flightActionLabel = (action: unknown): string => {
+  if (action === "takeoff") return "起飞";
+  if (action === "land") return "降落";
+  if (action === "return-home" || action === "returnHome" || action === "rth") return "返航";
+  return typeof action === "string" && action.length > 0 ? action : "该动作";
+};
+
 const operatorNotice = (value: unknown): string => {
   const inner = unwrap(value);
   const codeOf = (source: unknown): string | null => typeof read(source, "code") === "string" ? read(source, "code") as string : null;
@@ -60,32 +66,44 @@ const operatorNotice = (value: unknown): string => {
   if (reason === "ANOTHER_VIDEO_TRANSPORT_ACTIVE") return "另一路图传正在使用，请先停止";
   if (reason === "VIDEO_TRANSPORT_FAILED") return "图传未能完成";
   if (reason === "VIDEO_TRANSPORT_UNAVAILABLE") return "图传当前不可用";
-  if (code === "RELAY_REJECTED") return "手机拒绝了该命令";
-  if (code === "WEBRTC_MEDIA_UNAVAILABLE") return "请先启动低延迟服务";
-  if (code === "TARGET_INVALID") return "低延迟地址无效";
+  if (code === "RELAY_REJECTED") return "手机拒绝了该命令，请在手机上看原因后重试";
+  if (code === "WEBRTC_MEDIA_UNAVAILABLE" || code === "TARGET_INVALID") return "该图传方式不可用，请使用「启动图传」";
   if (code === "CAPABILITY_BLOCKED") return "当前飞机不支持图传";
-  if (code === "OPERATION_IN_PROGRESS") return "上一条图传命令尚未完成";
-  if (code === "VIDEO_NOT_READY") return "画面尚未就绪";
-  if (code === "DISCONNECTED") return "手机已离线";
-  if (code === "DEPENDENCY_FAILURE") return "无法完成该操作";
-  if (read(inner, "ok") === true) return "已完成";
-  if (read(value, "ok") === true && read(inner, "ok") !== false) return "已完成";
-  return code === null ? "已完成" : "无法完成该操作";
+  if (code === "OPERATION_IN_PROGRESS") return "上一条命令还在处理，请稍候";
+  if (code === "VIDEO_NOT_READY") return "画面还没出来，请稍候或重新启动图传";
+  if (code === "DISCONNECTED") return "手机已离线，请先在设备页连上手机";
+  if (code === "DEPENDENCY_FAILURE") return "暂时无法完成，请稍后重试";
+  if (read(inner, "ok") === true) return "已发送到手机";
+  if (read(value, "ok") === true && read(inner, "ok") !== false) return "已发送到手机";
+  return code === null ? "已发送到手机" : "暂时无法完成，请稍后重试";
 };
 
-let hlsPlayer: Hls | null = null;
 let flvPlayer: ReturnType<typeof flvjs.createPlayer> | null = null;
 let attachedUrl: string | null = null;
-let hlsBlocked = false;
-let hlsFatalStreak = 0;
+let flvFatalStreak = 0;
+let flvRecoverTimer: number | null = null;
 let lastPlaybackHealthAt = 0;
+let attachedAtMs = 0;
+let lastPaintAtMs = 0;
+let lastSeenCurrentTime = 0;
 let whepPeer: RTCPeerConnection | null = null;
 let whepGeneration = 0;
 
+const NO_FRAME_MS = 5_000;
+const STALL_MS = 4_000;
+
+const clearFlvRecoverTimer = (): void => {
+  if (flvRecoverTimer === null) return;
+  window.clearTimeout(flvRecoverTimer);
+  flvRecoverTimer = null;
+};
+
+const isPainting = (video: HTMLVideoElement): boolean =>
+  video.videoWidth > 0 && !video.paused && Number.isFinite(video.currentTime) && video.currentTime > 0;
+
 const detachVideo = (): void => {
+  clearFlvRecoverTimer();
   const video = el("video") as HTMLVideoElement;
-  hlsPlayer?.destroy();
-  hlsPlayer = null;
   if (flvPlayer !== null) {
     try { flvPlayer.pause(); } catch { /* ignore */ }
     try { flvPlayer.unload(); } catch { /* ignore */ }
@@ -94,6 +112,9 @@ const detachVideo = (): void => {
     flvPlayer = null;
   }
   attachedUrl = null;
+  attachedAtMs = 0;
+  lastPaintAtMs = 0;
+  lastSeenCurrentTime = 0;
   video.removeAttribute("src");
   video.srcObject = null;
   video.load();
@@ -110,95 +131,128 @@ const playVideo = (video: HTMLVideoElement): void => {
   });
 };
 
+const softReloadFlv = (video: HTMLVideoElement): boolean => {
+  if (flvPlayer === null) return false;
+  try {
+    flvPlayer.unload();
+    flvPlayer.load();
+    playVideo(video);
+    attachedAtMs = Date.now();
+    lastPaintAtMs = 0;
+    lastSeenCurrentTime = 0;
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const scheduleFlvReattach = (retryUrl: string): void => {
+  clearFlvRecoverTimer();
+  const delayMs = Math.min(5_000, 800 * (2 ** Math.min(flvFatalStreak - 1, 3)));
+  flvRecoverTimer = window.setTimeout(() => {
+    flvRecoverTimer = null;
+    attachVideo(retryUrl);
+  }, delayMs);
+};
+
+const recoverStuckFlv = (video: HTMLVideoElement, url: string, reason: string): void => {
+  if (flvRecoverTimer !== null) return;
+  flvFatalStreak += 1;
+  if (flvFatalStreak <= 3 && softReloadFlv(video)) {
+    show(`${reason}，正在自动恢复…`);
+    return;
+  }
+  show(`${reason}，正在重新连接…`);
+  detachVideo();
+  scheduleFlvReattach(url);
+};
+
+const notePaintProgress = (video: HTMLVideoElement): void => {
+  if (!isPainting(video)) return;
+  const current = video.currentTime;
+  if (lastPaintAtMs === 0 || Math.abs(current - lastSeenCurrentTime) >= 0.05) {
+    lastPaintAtMs = Date.now();
+    lastSeenCurrentTime = current;
+    flvFatalStreak = 0;
+  }
+};
+
+const watchPlaybackStall = (video: HTMLVideoElement): void => {
+  if (attachedUrl === null || flvPlayer === null || flvRecoverTimer !== null) return;
+  const now = Date.now();
+  notePaintProgress(video);
+  if (isPainting(video)) {
+    if (lastPaintAtMs > 0 && now - lastPaintAtMs > STALL_MS) {
+      recoverStuckFlv(video, attachedUrl, "画面停住");
+    }
+    return;
+  }
+  if (attachedAtMs > 0 && now - attachedAtMs > NO_FRAME_MS) {
+    recoverStuckFlv(video, attachedUrl, "长时间未出画");
+  }
+};
+
 const reportPlaybackHealth = (video: HTMLVideoElement): void => {
   const now = Date.now();
   if (now - lastPlaybackHealthAt < 2_000) return;
   lastPlaybackHealthAt = now;
-  if (video.videoWidth > 0 && !video.paused && video.currentTime > 0) {
-    hlsFatalStreak = 0;
-    show(`图传播放中 ${video.videoWidth}×${video.videoHeight}`);
+  notePaintProgress(video);
+  if (isPainting(video)) {
+    show(video.videoWidth > 0 ? `图传正常播放中（${video.videoWidth}×${video.videoHeight}）` : "图传正常播放中");
     return;
   }
-  if (attachedUrl !== null && (flvPlayer !== null || hlsPlayer !== null)) {
-    show(`图传已附着未出画 readyState=${video.readyState} size=${video.videoWidth}x${video.videoHeight}`);
+  if (attachedUrl !== null && flvPlayer !== null) {
+    show("图传已启动，正在等待画面…若长时间无画面请点「停止图传」后重试");
   }
 };
 
 const attachVideo = (url: string): void => {
   closeWhep();
   const video = el("video") as HTMLVideoElement;
-  if (attachedUrl === url && (flvPlayer !== null || hlsPlayer !== null)) {
-    if (video.paused || video.currentTime === 0 || video.videoWidth === 0) playVideo(video);
+  if (attachedUrl === url && flvPlayer !== null) {
+    if (isPainting(video)) {
+      notePaintProgress(video);
+      reportPlaybackHealth(video);
+      return;
+    }
+    if (video.paused) playVideo(video);
+    // 已附着但不出画：不得直接 return，交给卡死看门狗做软恢复/重挂。
+    watchPlaybackStall(video);
     reportPlaybackHealth(video);
     return;
   }
+  clearFlvRecoverTimer();
   detachVideo();
   attachedUrl = url;
+  attachedAtMs = Date.now();
+  lastPaintAtMs = 0;
+  lastSeenCurrentTime = 0;
   const play = (): void => {
     playVideo(video);
     reportPlaybackHealth(video);
   };
-  if (url.includes(".flv") && flvjs.isSupported()) {
-    flvPlayer = flvjs.createPlayer(
-      { type: "flv", isLive: true, hasAudio: false, url },
-      { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true },
-    );
-    flvPlayer.on(flvjs.Events.ERROR, (errorType, errorDetail) => {
-      show(`图传中断（${String(errorType)}/${String(errorDetail)}），正在重试`);
-      const retryUrl = attachedUrl;
-      detachVideo();
-      if (retryUrl !== null) window.setTimeout(() => attachVideo(retryUrl), 800);
-    });
-    flvPlayer.attachMediaElement(video);
-    flvPlayer.load();
-    play();
+  if (!url.includes(".flv") || !flvjs.isSupported()) {
+    show("当前电脑无法播放图传画面，请重启 Sky Command 后再试");
     return;
   }
-  if (Hls.isSupported()) {
-    hlsPlayer = new Hls({
-      enableWorker: typeof location === "undefined" || location.protocol !== "file:",
-      lowLatencyMode: true,
-      liveSyncDurationCount: 1,
-      liveMaxLatencyDurationCount: 4,
-      maxLiveSyncPlaybackRate: 1.2,
-      liveDurationInfinity: true,
-      maxBufferLength: 4,
-      maxMaxBufferLength: 8,
-      backBufferLength: 0,
-    });
-    hlsPlayer.on(Hls.Events.MANIFEST_PARSED, play);
-    hlsPlayer.on(Hls.Events.FRAG_CHANGED, () => { reportPlaybackHealth(video); });
-    hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
-      if (data?.fatal !== true || hlsPlayer === null) return;
-      hlsFatalStreak += 1;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && hlsFatalStreak <= 3) {
-        show("图传网络抖动，正在重连播放列表");
-        hlsPlayer.startLoad();
-        return;
-      }
-      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && hlsFatalStreak <= 3) {
-        show("图传解码异常，正在恢复播放器");
-        hlsPlayer.recoverMediaError();
-        playVideo(video);
-        return;
-      }
-      const retryUrl = attachedUrl;
-      show("经典图传画面中断，正在重新附着");
-      detachVideo();
-      hlsBlocked = hlsFatalStreak >= 6;
-      if (!hlsBlocked && retryUrl !== null) {
-        window.setTimeout(() => {
-          if (!hlsBlocked) attachVideo(retryUrl);
-        }, 800);
-      } else {
-        show("经典图传画面中断，请停止后重试");
-      }
-    });
-    hlsPlayer.loadSource(url);
-    hlsPlayer.attachMedia(video);
-    return;
-  }
-  video.src = url;
+  flvPlayer = flvjs.createPlayer(
+    { type: "flv", isLive: true, hasAudio: false, url },
+    { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true },
+  );
+  flvPlayer.on(flvjs.Events.ERROR, () => {
+    flvFatalStreak += 1;
+    const retryUrl = attachedUrl;
+    if (retryUrl === null) return;
+    if (flvFatalStreak <= 3 && softReloadFlv(video)) {
+      show("图传不稳定，正在自动恢复…");
+      return;
+    }
+    show("图传中断，正在重新连接…");
+    detachVideo();
+    scheduleFlvReattach(retryUrl);
+  });
+  flvPlayer.attachMediaElement(video);
+  flvPlayer.load();
   play();
 };
 
@@ -226,7 +280,7 @@ const closeWhep = (): void => {
     try { peer.close(); } catch { /* stale PeerConnection cleanup is best effort */ }
   }
   const video = el("video") as HTMLVideoElement;
-  if (hlsPlayer !== null || video.srcObject !== null) detachVideo();
+  if (flvPlayer !== null || video.srcObject !== null) detachVideo();
 };
 
 const waitForIce = async (peer: RTCPeerConnection): Promise<void> => {
@@ -249,7 +303,7 @@ const waitForIce = async (peer: RTCPeerConnection): Promise<void> => {
 const reportWhepFatal = (generation: number): void => {
   if (generation !== whepGeneration) return;
   try { bridge().whepFatal?.(generation); } catch { /* IPC failure must not escape the render loop */ }
-  show("低延迟视频无法建立连接");
+  show("低延迟画面无法接通，请改用「启动图传」");
 };
 
 const connectWhep = async (input: unknown): Promise<void> => {
@@ -316,45 +370,52 @@ const clearWhep = (input: unknown): void => {
 const accepted = (value: unknown): boolean => value !== null && typeof value === "object" && (value as { ok?: unknown }).ok === true;
 
 const playbackUrl = (value: unknown): string | null => {
-  let current: unknown = value;
-  for (let step = 0; step < 8; step += 1) {
-    if (current !== null && typeof current === "object" && read(current, "ok") === false) return null;
-    const url = read(current, "url");
-    if (typeof url === "string" && url.trim().length > 0) return url;
-    const next = unwrap(current);
-    if (next === current) break;
-    current = next;
-  }
-  return null;
+  const body = unwrap(value);
+  if (body !== null && typeof body === "object" && read(body, "ok") === false) return null;
+  const url = read(body, "url");
+  if (typeof url === "string" && url.trim().length > 0) return url;
+  const nested = unwrap(body);
+  const nestedUrl = read(nested, "url");
+  return typeof nestedUrl === "string" && nestedUrl.trim().length > 0 ? nestedUrl : null;
 };
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
   if (whepPeer !== null) return;
   if (!view.playbackReady) {
-    hlsBlocked = false;
-    hlsFatalStreak = 0;
     if (attachedUrl !== null) detachVideo();
     return;
   }
-  if (hlsBlocked) return;
   if (view.streamDeviceId === null) return;
   const url = playbackUrl(await bridge().invoke("video-playback", { deviceId: view.streamDeviceId }));
   if (url === null) return;
   attachVideo(url);
+  watchPlaybackStall(el("video") as HTMLVideoElement);
 }
 
-const connectionLabel = (connection: unknown, key: string, ok: string, wait: string): string => {
+const connectionLabel = (connection: unknown, key: string, ok: string, disconnected: string, unknownLabel: string): string => {
   const value = read(connection, key);
   if (value === "ready" || value === "connected" || value === "online") return ok;
   if ((key === "remoteController" || key === "aircraft") && read(connection, "sdk") !== "ready") {
     return "等待手机就绪";
   }
-  return wait;
+  if (value === "disconnected") return disconnected;
+  return unknownLabel;
 };
 
 const connected = (connection: unknown, key: string): boolean => {
   const value = read(connection, key);
   return value === "ready" || value === "connected" || value === "online";
+};
+
+const aircraftLinkLabel = (connection: unknown): string => {
+  const aircraft = read(connection, "aircraft");
+  const flightController = read(connection, "flightController");
+  if (aircraft === "connected" && flightController === "connected") return "飞机已连接";
+  if (aircraft === "connected" && flightController === "disconnected") return "飞机已连上，但飞控未通（请确认飞机已开机）";
+  if (aircraft === "connected" && flightController !== "connected") return "飞机已连上，飞控状态未知";
+  if (aircraft === "disconnected") return "飞机未连接";
+  if (read(connection, "sdk") !== "ready") return "等待手机就绪";
+  return "飞机状态未知";
 };
 
 const pairingFact = (connection: unknown): { readonly label: string; readonly ok: boolean } => {
@@ -364,7 +425,8 @@ const pairingFact = (connection: unknown): { readonly label: string; readonly ok
     case "STOPPING": return { label: "正在结束对频", ok: false };
     case "FAILED": return { label: "对频失败", ok: false };
     case "IDLE": return { label: "未对频", ok: false };
-    default: return { label: "未对频", ok: false };
+    case "UNKNOWN": return { label: "对频状态未知", ok: false };
+    default: return { label: "对频状态未知", ok: false };
   }
 };
 
@@ -428,7 +490,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     if (device.deviceId === view.missionDeviceId) node.classList.add("inspected");
     const connection = device.connection ?? {};
     const pairing = pairingFact(connection);
-    node.innerHTML = `<strong>${String(device.deviceId)}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "等待遥控器")} · ${pairing.label} · ${connectionLabel(connection, "aircraft", "飞机已连接", "等待飞机")}</div>`;
+    node.innerHTML = `<strong>${String(device.deviceId)}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${pairing.label} · ${aircraftLinkLabel(connection)}</div>`;
     node.addEventListener("click", () => { state.missionDeviceId = String(device.deviceId); void render(); });
     return node;
   }));
@@ -440,9 +502,9 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     : `<p class="muted">编号 ${String(inspected.deviceId)}</p>
       <div class="chain">
         <span class="ok">手机已连接</span>
-        <span class="${connected(connection, "remoteController") ? "ok" : ""}">${connectionLabel(connection, "remoteController", "遥控器已连接", "等待遥控器")}</span>
+        <span class="${connected(connection, "remoteController") ? "ok" : ""}">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")}</span>
         <span class="${pairing.ok ? "ok" : ""}">${pairing.label}</span>
-        <span class="${connected(connection, "aircraft") ? "ok" : ""}">${connectionLabel(connection, "aircraft", "飞机已连接", "等待飞机")}</span>
+        <span class="${connected(connection, "aircraft") && connected(connection, "flightController") ? "ok" : ""}">${aircraftLinkLabel(connection)}</span>
       </div>
       <p>${extraFacts(connection)}</p>
       <p class="muted">对频请在手机上开始或停止。这里只显示手机回报的结果。</p>`;
@@ -501,12 +563,39 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     ? "尚未在航线页选择可执行 KMZ"
     : `${view.selectedRoute.displayName} · ${view.selectedRoute.executable ? "可提交" : view.selectedRoute.blockedReason}`;
   el("stream-label").textContent = view.streamLabel;
+  el("stream-label").classList.toggle("ok", view.playbackReady || view.streamCanStart);
+  const streamReady = el("stream-ready");
+  if (view.playbackReady || view.streamCanStop) {
+    streamReady.textContent = view.playbackReady
+      ? "画面已就绪。要结束请点「停止图传」"
+      : `${view.streamLabel}。要结束请点「停止图传」`;
+    streamReady.classList.add("ok");
+  } else if (view.streamCanStart) {
+    streamReady.textContent = "图传可启动：遥控器已连接，点下方「启动图传」";
+    streamReady.classList.add("ok");
+  } else {
+    streamReady.textContent = view.streamLabel.startsWith("图传未就绪")
+      ? view.streamLabel
+      : `现在不能启动图传：${view.streamLabel}`;
+    streamReady.classList.remove("ok");
+  }
+  const startButton = document.querySelector('button[data-action="stream-start"]');
+  if (startButton instanceof HTMLButtonElement) {
+    startButton.disabled = !view.streamCanStart;
+    startButton.title = view.streamCanStart ? "启动图传" : view.streamLabel;
+  }
+  const stopButton = document.querySelector('button[data-action="stream-stop"]');
+  if (stopButton instanceof HTMLButtonElement) {
+    const canStop = view.streamCanStop || attachedUrl !== null;
+    stopButton.disabled = !canStop;
+    stopButton.title = canStop ? "停止图传" : "当前没有进行中的图传";
+  }
   const guidance = view.guidance as { message?: string } | null;
   el("guidance").textContent = guidance?.message ?? "";
   const confirm = el("confirm");
   if (view.confirmation !== null) {
     confirm.hidden = false;
-    el("confirm-text").textContent = `确认对 ${view.confirmation.deviceId} 执行 ${view.confirmation.action}？停止航线不会自动返航。`;
+    el("confirm-text").textContent = `确认让 ${view.confirmation.deviceId} ${flightActionLabel(view.confirmation.action)}？此操作会立刻下发到飞机；停止航线不会自动返航。`;
     confirm.dataset.deviceId = view.confirmation.deviceId;
     confirm.dataset.confirmationId = view.confirmation.confirmationId;
   } else {
@@ -616,7 +705,13 @@ el("route-import").addEventListener("click", async () => {
     const status = read(imported, "status");
     const routeId = read(read(imported, "route"), "routeId");
     if (status !== "imported" || typeof routeId !== "string") {
-      show(typeof read(imported, "error") === "object" ? "导入失败" : JSON.stringify(imported));
+      const error = read(imported, "error");
+      const detail = typeof read(error, "message") === "string"
+        ? read(error, "message") as string
+        : typeof read(error, "code") === "string"
+          ? `（${read(error, "code") as string}）`
+          : "";
+      show(detail.length > 0 ? `航线导入失败${detail.startsWith("（") ? detail : `：${detail}`}` : "航线导入失败，请确认是 Wayline 导出的 KML/KMZ");
       await render();
       return;
     }
@@ -720,17 +815,14 @@ el("confirm-no").addEventListener("click", async () => {
   await run("flight-cancel", "flight-cancel", { deviceId: el("confirm").dataset.deviceId, confirmationId: el("confirm").dataset.confirmationId });
 });
 
-const whepBridge = bridge();
-whepBridge.onWhepSelect?.((input) => { void connectWhep(input); });
-whepBridge.onWhepClear?.(clearWhep);
-
 const tick = async (): Promise<void> => {
    try {
      await bridge().invoke("stream-refresh");
-     await bridge().invoke("webrtc-refresh");
      await render();
     await ensurePlayback(await projectView());
-  } catch (error) { show(String(error)); }
+  } catch {
+    show("界面刷新失败，请检查手机是否仍连接；若持续出现请重启软件");
+  }
   window.setTimeout(() => { void tick(); }, 800);
 };
 void tick();

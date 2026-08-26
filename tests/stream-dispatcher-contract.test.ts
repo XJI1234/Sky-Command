@@ -98,7 +98,8 @@ describe("StreamDispatcher", () => {
     const hostileTelemetry = fixture({ telemetry: () => ({ get payload(): never { throw new Error("payload"); }, capabilities: {} }) });
     expect(hostileTelemetry.dispatcher.check("phone-1")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     const noReason = fixture({ gate: () => ({ ok: true, value: { enabled: false } }) });
-    await expect(noReason.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "CAPABILITY_UNKNOWN" });
+    await expect(noReason.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "CAPABILITY_UNKNOWN" });
+    await expect(noReason.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: true, operation: "stop", state: { phase: "idle" } });
     const mediaFault = fixture({ media: () => { throw new Error("media"); } });
     await expect(mediaFault.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "MEDIA_PIPELINE_UNAVAILABLE" });
     const configFault = fixture({ target: () => { throw new Error("target"); } });
@@ -158,13 +159,15 @@ describe("StreamDispatcher", () => {
     expect(offlineInputs).toEqual([expect.objectContaining({ relayConnected: false, capabilities: {}, sdkRegistered: undefined, remoteControllerConnected: undefined, flightControllerConnected: undefined, aircraftConnected: undefined })]);
   });
 
-  it("treats malformed telemetry, gate and target contracts as dependency failures without dispatching", async () => {
+  it("treats malformed telemetry and gate contracts as start dependency failures without blocking stop", async () => {
     const telemetryCases = [undefined, true, "telemetry"];
     for (const candidate of telemetryCases) {
       const value = fixture({ telemetry: () => candidate });
       expect(value.dispatcher.check("phone-1")).toEqual({ ok: false, code: "DEPENDENCY_FAILURE" });
-      await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-      expect(value.sent).toEqual([]);
+      await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
+      await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: true, operation: "stop" });
+      expect(value.sent).toEqual([expect.objectContaining({ request: { name: "live-stream.stop", fields: {} } })]);
+      value.sent.length = 0;
     }
     expect(fixture({ telemetry: () => ({}) }).dispatcher.check("phone-1")).toEqual({ ok: true });
     for (const gate of [
@@ -179,8 +182,9 @@ describe("StreamDispatcher", () => {
     ]) {
       const value = fixture({ gate });
       expect(value.dispatcher.check("phone-1")).toEqual({ ok: false, code: "DEPENDENCY_FAILURE" });
-      await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-      expect(value.sent).toEqual([]);
+      await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
+      await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: true, operation: "stop" });
+      expect(value.sent).toEqual([expect.objectContaining({ request: { name: "live-stream.stop", fields: {} } })]);
     }
     for (const target of [
       () => undefined,
@@ -269,24 +273,24 @@ describe("StreamDispatcher", () => {
     await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "RELAY_OFFLINE" });
   });
 
-  it("keeps failed result objects exact when a dependency does not provide an explanatory reason", async () => {
+  it("keeps failed start result objects exact when a dependency does not provide an explanatory reason, and still allows stop", async () => {
     const value = fixture({ gate: () => ({ ok: true, value: null }) });
-    const dependencyFailure = await value.dispatcher.stop("phone-1");
+    const dependencyFailure = await value.dispatcher.start("phone-1");
     expect(dependencyFailure).toEqual({
       ok: false,
-      operation: "stop",
+      operation: "start",
       code: "DEPENDENCY_FAILURE",
       state: { deviceId: "phone-1", phase: "idle", lastOperation: null, failureCode: null, reason: null }
     });
     expect(Object.hasOwn(dependencyFailure, "reason")).toBe(false);
     const blocked = fixture({ gate: () => ({ ok: true, value: { enabled: false } }) });
-    await expect(blocked.dispatcher.stop("phone-1")).resolves.toEqual({
+    await expect(blocked.dispatcher.start("phone-1")).resolves.toMatchObject({
       ok: false,
-      operation: "stop",
+      operation: "start",
       code: "CAPABILITY_BLOCKED",
       reason: "CAPABILITY_UNKNOWN",
-      state: { deviceId: "phone-1", phase: "idle", lastOperation: null, failureCode: null, reason: null }
     });
+    await expect(blocked.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: true, operation: "stop", state: { phase: "idle" } });
   });
 
   it("does not create a non-string lane key for an invalid device input", async () => {

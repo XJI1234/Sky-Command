@@ -228,6 +228,9 @@ function connectionFacts(value: unknown): Readonly<Record<string, string>> {
 export function watchApplication(application: { snapshot: () => unknown; subscribe: (listener: (snapshot: unknown) => void) => () => void }, journal: IncidentJournal): () => void {
   let previousDevices = new Set<string>();
   let previousFacts = new Map<string, Record<string, string>>();
+  /** 连接类事实需连续两次快照一致才落盘，压制遥测闪断刷屏。 */
+  const pendingConnection = new Map<string, Record<string, string>>();
+  const connectionKeys = new Set(["sdk", "remoteController", "flightController", "aircraft", "pairingState"]);
   const apply = (snapshot: unknown): void => {
     try {
     const root = asRecord(snapshot);
@@ -256,8 +259,26 @@ export function watchApplication(application: { snapshot: () => unknown; subscri
         if (mediaPhase !== null) facts.media = mediaPhase;
       }
       const last = previousFacts.get(deviceId) ?? {};
+      const pending = pendingConnection.get(deviceId) ?? {};
+      const nextPending: Record<string, string> = { ...pending };
+      const nextLogged: Record<string, string> = { ...last };
       for (const [key, value] of Object.entries(facts)) {
-        if (last[key] === value) continue;
+        if (last[key] === value) {
+          delete nextPending[key];
+          continue;
+        }
+        if (connectionKeys.has(key)) {
+          if (value === "unknown") {
+            nextLogged[key] = value;
+            delete nextPending[key];
+            continue;
+          }
+          if (pending[key] !== value) {
+            nextPending[key] = value;
+            continue;
+          }
+          delete nextPending[key];
+        }
         const link: IncidentLink = key === "mission" ? "uplink" : key === "stream" || key === "video" || key === "media" ? "downlink" : "phone-pc";
         const level: IncidentLevel = value === "failed" || value === "disconnected" || value === "not-ready" ? "WARN" : "INFO";
         journal.record({
@@ -267,13 +288,17 @@ export function watchApplication(application: { snapshot: () => unknown; subscri
           deviceId,
           detail: `${key} is ${value}`,
         });
+        nextLogged[key] = value;
       }
-      previousFacts.set(deviceId, facts);
+      if (Object.keys(nextPending).length === 0) pendingConnection.delete(deviceId);
+      else pendingConnection.set(deviceId, nextPending);
+      previousFacts.set(deviceId, nextLogged);
     }
     for (const deviceId of previousDevices) {
       if (ids.has(deviceId)) continue;
       journal.record({ link: "phone-pc", level: "WARN", event: "DEVICE_UNPAIRED", deviceId, detail: "Android relay disconnected" });
       previousFacts.delete(deviceId);
+      pendingConnection.delete(deviceId);
     }
     previousDevices = ids;
     } catch { /* 快照观察失败不得挡住业务 */ }

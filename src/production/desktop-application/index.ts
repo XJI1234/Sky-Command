@@ -287,6 +287,21 @@ function instance(dependencies: Readonly<{
     operation = "stop";
     transition("stopping");
     active = (async () => {
+      const list = dependencies.missionControl.list;
+      if (typeof list === "function") {
+        try {
+          const lanes = list();
+          if (Array.isArray(lanes)) {
+            await Promise.all(lanes.map(async (lane) => {
+              const deviceId = typeof (lane as { deviceId?: unknown }).deviceId === "string" ? (lane as { deviceId: string }).deviceId : null;
+              const phase = typeof (lane as { phase?: unknown }).phase === "string" ? (lane as { phase: string }).phase : "";
+              if (deviceId === null) return;
+              if (!["starting", "running", "pausing", "paused", "resuming", "stopping", "staging", "staged", "uploading", "uploaded"].includes(phase)) return;
+              try { await dependencies.missionControl.stop(deviceId); } catch { /* best-effort stop on desktop shutdown */ }
+            }));
+          }
+        } catch { /* mission inventory failure must not block media/relay stop */ }
+      }
       const lowLatencyClean = await stopLowLatency();
       const stopped = await dependencies.runtime.stop();
       operation = null;

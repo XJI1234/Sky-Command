@@ -83,7 +83,8 @@ function playable(deviceId: string, workflow: WorkflowPort): GatewayResult {
     if (typeof url !== "string") return success(freeze({ ok: false, code: "VIDEO_NOT_READY" }));
     const parsed = new URL(url);
     if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") || parsed.username.length > 0 || parsed.password.length > 0) return success(freeze({ ok: false, code: "VIDEO_NOT_READY" }));
-    return success(freeze({ ok: true, value: freeze({ deviceId, url: parsed.toString() }) }));
+    // 就绪时只返回一层业务对象；未就绪仍用 { ok:false, code }，避免再包 { ok:true, value:{deviceId,url} }。
+    return success(freeze({ deviceId, url: parsed.toString() }));
   } catch { return failure("DEPENDENCY_FAILURE"); }
 }
 

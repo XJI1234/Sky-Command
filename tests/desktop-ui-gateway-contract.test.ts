@@ -60,7 +60,7 @@ describe("DesktopUiGateway", () => {
     for (const command of commands) await expect(gateway.invoke(command.method, command.input)).resolves.toMatchObject({ ok: true, value: { ok: true } });
     await expect(gateway.invoke("state.snapshot", undefined)).resolves.toEqual({ ok: true, value: { phase: "running", workflow: {} } });
     await expect(gateway.invoke("network.hint", undefined)).resolves.toEqual({ ok: true, value: { hints: [] } });
-    await expect(gateway.invoke("video.playback", { deviceId: "device-a" })).resolves.toEqual({ ok: true, value: { ok: true, value: { deviceId: "device-a", url: "http://127.0.0.1:18080/stream-a/index.m3u8" } } });
+    await expect(gateway.invoke("video.playback", { deviceId: "device-a" })).resolves.toEqual({ ok: true, value: { deviceId: "device-a", url: "http://127.0.0.1:18080/stream-a/index.m3u8" } });
     await expect(gateway.invoke("video.playback", { deviceId: "device-b" })).resolves.toEqual({ ok: true, value: { ok: false, code: "VIDEO_NOT_READY" } });
     expect(calls.map((call) => call.name)).toEqual([
       "checkHardwareReadiness", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",
@@ -162,7 +162,7 @@ describe("DesktopUiGateway", () => {
     const throwing = DesktopUiGateway.create({ application: { snapshot: () => ({}), subscribe: () => () => undefined, workflow: () => ({ snapshot: () => { throw new Error("snapshot"); } }) } });
     await expect(throwing.invoke("video.playback", { deviceId: "a" })).resolves.toEqual({ ok: false, code: "DEPENDENCY_FAILURE" });
     const valid = DesktopUiGateway.create({ application: { snapshot: () => ({}), subscribe: () => () => undefined, workflow: () => ({ snapshot: () => ({ media: { streams: [{ deviceId: "a", phase: "ready", playbackUrl: "https://localhost:18080/video" }] } }) }) } });
-    await expect(valid.invoke("video.playback", { deviceId: "a" })).resolves.toMatchObject({ ok: true, value: { ok: true, value: { deviceId: "a" } } });
+    await expect(valid.invoke("video.playback", { deviceId: "a" })).resolves.toMatchObject({ ok: true, value: { deviceId: "a" } });
   });
 
   it("isolates dependency, observer and lifecycle failures", async () => {

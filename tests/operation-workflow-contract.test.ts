@@ -622,13 +622,22 @@ describe("飞行作业工作流模块契约", () => {
     expect(assigned.selectVideo("relay-a")).toMatchObject({ ok: false, code: "DISPOSED" });
   });
 
-  it("同一手机换了会话时必须复位图传车道，不得继续显示已启动", () => {
+  it("同一手机换了会话时必须复位图传车道并作废危险确认，不得继续显示已启动", () => {
     let sessionId = "session-1";
     let signal!: () => void;
     const disconnected: string[] = [];
     const whip: string[] = [];
+    const cancelled: Array<{ deviceId: string; confirmationId: string }> = [];
+    let pending: { deviceId: string; action: string; confirmationId: string } | null = null;
     const workflow = workflowWith({
-      relayOperations: { devices: () => [{ deviceId: "relay-a", sessionId }], telemetry: () => null, subscribe: (listener: () => void) => { signal = listener; return () => undefined; } },
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId }],
+        telemetry: () => ({
+          payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, batteryPercent: 80, isFlying: false },
+          capabilities: {},
+        }),
+        subscribe: (listener: () => void) => { signal = listener; return () => undefined; },
+      },
       liveStreamControl: {
         start: async () => ({ ok: true }),
         stop: async () => ({ ok: true }),
@@ -643,11 +652,35 @@ describe("飞行作业工作流模块契约", () => {
         recordDisconnected: (id: string) => { whip.push(id); return { phase: "disconnected" }; },
         subscribe: () => () => undefined,
       },
+      flightControl: {
+        request: () => {
+          pending = { deviceId: "relay-a", action: "takeoff", confirmationId: "confirm-old" };
+          return { ok: true, code: "CONFIRMATION_REQUIRED", confirmation: pending };
+        },
+        confirm: async () => ({ ok: true }),
+        cancel: (deviceId: string, confirmationId: string) => {
+          cancelled.push({ deviceId, confirmationId });
+          pending = null;
+          return { ok: true, code: "CANCELLED" };
+        },
+        clear: () => { pending = null; },
+        get: () => pending,
+        subscribe: () => () => undefined,
+        dispose: () => undefined,
+      },
+    });
+    expect(workflow.requestFlightAction("relay-a", "takeoff")).toMatchObject({ ok: true });
+    expect(workflow.snapshot().devices[0]?.pendingFlightAction).toEqual({
+      deviceId: "relay-a",
+      action: "takeoff",
+      confirmationId: "confirm-old",
     });
     sessionId = "session-2";
     signal();
     expect(disconnected).toEqual(["relay-a"]);
     expect(whip).toEqual(["relay-a"]);
+    expect(cancelled).toEqual([{ deviceId: "relay-a", confirmationId: "confirm-old" }]);
+    expect(workflow.snapshot().devices[0]?.pendingFlightAction).toBeNull();
   });
 
   it("转码失败且手机仍在线时必须停止这一路图传，手机已离线则不得补发停止", async () => {
