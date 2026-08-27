@@ -132,6 +132,136 @@ describe("飞行作业工作流内部模块", () => {
     expect(create({ pairingState: "UNKNOWN" })?.pairingState).toBe("UNKNOWN");
   });
 
+  it("投影已确认的设备、飞行和当前图传事实", () => {
+    const snapshot = WorkflowSnapshot.create({
+      devices: [{
+        deviceId: "relay-a",
+        telemetry: {
+          payload: {
+            flightControllerConnected: true,
+            aircraftModel: "Matrice 4T",
+            remoteControllerModel: "DJI RC Plus",
+            batteryPercent: 87,
+            isFlying: false,
+            motorsOn: false,
+            flightMode: "N",
+            remainingFlightTimeSeconds: 1085,
+            altitudeMeters: 12.3,
+            latitude: 30.27415,
+            longitude: 120.15515,
+            liveStreaming: true,
+            liveResolution: "1920x1080",
+            liveFps: 29.97,
+            liveVideoBitrateKbps: 1802,
+            liveRttMillis: 42,
+          },
+          capabilities: {},
+        },
+        assignment: null, mission: null, stream: null, settings: null, pendingFlightAction: null,
+      }],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0, media: { streams: [] }, disposed: false,
+    });
+
+    expect(snapshot.devices[0]?.connection).toMatchObject({
+      aircraftModel: "Matrice 4T",
+      remoteControllerModel: "DJI RC Plus",
+      batteryPercent: 87,
+      flightState: "grounded",
+      motorsOn: false,
+      flightMode: "N",
+      remainingFlightTimeSeconds: 1085,
+      pose: { latitude: 30.27415, longitude: 120.15515, altitudeMeters: 12.3 },
+      live: { streaming: true, resolution: "1920x1080", fps: 29.97, videoBitrateKbps: 1802, rttMillis: 42 },
+    });
+  });
+
+  it("在飞控断开时清空动态飞行事实，但保留当前图传观测", () => {
+    const snapshot = WorkflowSnapshot.create({
+      devices: [{
+        deviceId: "relay-a",
+        telemetry: {
+          payload: {
+            flightControllerConnected: false,
+            batteryPercent: 87,
+            isFlying: true,
+            motorsOn: true,
+            flightMode: "N",
+            remainingFlightTimeSeconds: 1085,
+            altitudeMeters: 12.3,
+            latitude: 30.27415,
+            longitude: 120.15515,
+            liveStreaming: true,
+            liveResolution: "1920x1080",
+            liveFps: 30,
+            liveVideoBitrateKbps: 1802,
+            liveRttMillis: 42,
+          },
+          capabilities: {},
+        },
+        assignment: null, mission: null, stream: null, settings: null, pendingFlightAction: null,
+      }],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0, media: { streams: [] }, disposed: false,
+    });
+
+    expect(snapshot.devices[0]?.connection).toMatchObject({
+      flightController: "disconnected",
+      batteryPercent: null,
+      flightState: "unknown",
+      motorsOn: null,
+      flightMode: null,
+      remainingFlightTimeSeconds: null,
+      pose: null,
+      live: { streaming: true, resolution: "1920x1080", fps: 30, videoBitrateKbps: 1802, rttMillis: 42 },
+    });
+  });
+
+  it("丢弃畸形动态事实，并区分未运行与未知的图传观测", () => {
+    const device = (payload: Record<string, unknown>) => ({
+      deviceId: "relay-a",
+      telemetry: { payload, capabilities: {} },
+      assignment: null, mission: null, stream: null, settings: null, pendingFlightAction: null,
+    });
+    const create = (payload: Record<string, unknown>) => WorkflowSnapshot.create({
+      devices: [device(payload)],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0,
+      media: { streams: [{ deviceId: 1, phase: "ready" }] }, disposed: false,
+    }).devices[0]?.connection;
+
+    expect(create({
+      flightControllerConnected: true,
+      aircraftModel: "M".repeat(129),
+      remoteControllerModel: "RC\u0000 Plus",
+      batteryPercent: 87.5,
+      motorsOn: "true",
+      flightMode: " ",
+      remainingFlightTimeSeconds: 86_401,
+      liveStreaming: false,
+    })).toMatchObject({
+      aircraftModel: null,
+      remoteControllerModel: null,
+      batteryPercent: null,
+      motorsOn: null,
+      flightMode: null,
+      remainingFlightTimeSeconds: null,
+      live: { streaming: false, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null },
+    });
+
+    expect(create({
+      liveStreaming: true,
+      liveResolution: "\u0000",
+      liveFps: 241,
+      liveVideoBitrateKbps: -1,
+      liveRttMillis: 1.5,
+    })?.live).toEqual({ streaming: true, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null });
+    expect(create({})?.live).toEqual({ streaming: null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null });
+
+    const snapshot = WorkflowSnapshot.create({
+      devices: [device({})], routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0,
+      media: { streams: [{ deviceId: 1, phase: "ready" }, { deviceId: "relay-a", phase: "ready", playbackUrl: null }] }, disposed: false,
+    });
+    expect(snapshot.media.streams).toEqual([{ deviceId: "relay-a", phase: "ready", playbackUrl: null }]);
+  });
+
   it("隔离订阅异常并在释放后忽略迟到事件", () => {
     let fire!: () => void;
     let stopped = 0;

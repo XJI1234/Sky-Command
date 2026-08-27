@@ -6,6 +6,9 @@ const state = (value: unknown, yes: string, no: string): string => value === tru
 const pairingStates = ["UNKNOWN", "IDLE", "PAIRING", "PAIRED", "STOPPING", "FAILED"] as const;
 const pairingState = (value: unknown): string => typeof value === "string" && pairingStates.includes(value as typeof pairingStates[number]) ? value : "unknown";
 const poseNumber = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
+const safeText = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value) ? value : null;
+const boundedInteger = (value: unknown, minimum: number, maximum: number): number | null => typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : null;
+const boundedNumber = (value: unknown, minimum: number, maximum: number): number | null => typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum ? value : null;
 const pose = (payload: unknown): Readonly<{ readonly latitude: number | null; readonly longitude: number | null; readonly altitudeMeters: number | null }> | null => {
   const latitude = poseNumber(read(payload, "latitude"));
   const longitude = poseNumber(read(payload, "longitude"));
@@ -13,6 +16,38 @@ const pose = (payload: unknown): Readonly<{ readonly latitude: number | null; re
   const coordinates = latitude !== null && longitude !== null && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
   if (!coordinates && altitudeMeters === null) return null;
   return freeze({ latitude: coordinates ? latitude : null, longitude: coordinates ? longitude : null, altitudeMeters });
+};
+const live = (payload: unknown) => {
+  const streaming = read(payload, "liveStreaming");
+  if (streaming !== true) return freeze({ streaming: streaming === false ? false : null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null });
+  return freeze({
+    streaming: true,
+    resolution: safeText(read(payload, "liveResolution")),
+    fps: boundedNumber(read(payload, "liveFps"), 0, 240),
+    videoBitrateKbps: boundedNumber(read(payload, "liveVideoBitrateKbps"), 0, 100_000),
+    rttMillis: boundedInteger(read(payload, "liveRttMillis"), 0, 60_000),
+  });
+};
+const connection = (payload: unknown) => {
+  const flightController = state(read(payload, "flightControllerConnected"), "connected", "disconnected");
+  const flightFactsAvailable = flightController !== "disconnected";
+  return freeze({
+    relay: "online" as const,
+    sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"),
+    remoteController: state(read(payload, "remoteControllerConnected"), "connected", "disconnected"),
+    flightController,
+    aircraft: state(read(payload, "connected"), "connected", "disconnected"),
+    aircraftModel: safeText(read(payload, "aircraftModel")),
+    remoteControllerModel: safeText(read(payload, "remoteControllerModel")),
+    batteryPercent: flightFactsAvailable ? boundedInteger(read(payload, "batteryPercent"), 0, 100) : null,
+    flightState: flightFactsAvailable ? state(read(payload, "isFlying"), "flying", "grounded") : "unknown",
+    motorsOn: flightFactsAvailable && typeof read(payload, "motorsOn") === "boolean" ? read(payload, "motorsOn") as boolean : null,
+    flightMode: flightFactsAvailable ? safeText(read(payload, "flightMode")) : null,
+    remainingFlightTimeSeconds: flightFactsAvailable ? boundedInteger(read(payload, "remainingFlightTimeSeconds"), 0, 86_400) : null,
+    pairingState: pairingState(read(payload, "pairingState")),
+    pose: flightFactsAvailable ? pose(payload) : null,
+    live: live(payload),
+  });
 };
 
 function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly telemetry: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly whipStream?: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
@@ -27,7 +62,7 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
     const videoPhase = mediaPhase === "awaiting-ingest" || mediaPhase === "awaiting-playback" || mediaPhase === "ready" || mediaPhase === "failed" ? mediaPhase : "unavailable";
     return freeze({
       deviceId: device.deviceId,
-      connection: freeze({ relay: "online" as const, sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"), remoteController: state(read(payload, "remoteControllerConnected"), "connected", "disconnected"), flightController: state(read(payload, "flightControllerConnected"), "connected", "disconnected"), aircraft: state(read(payload, "connected"), "connected", "disconnected"), batteryPercent: typeof read(payload, "batteryPercent") === "number" ? read(payload, "batteryPercent") as number : null, flightState: state(read(payload, "isFlying"), "flying", "grounded"), pairingState: pairingState(read(payload, "pairingState")), pose: pose(payload) }),
+      connection: connection(payload),
       capabilities: freeze({ waypointMission: read(capabilities, "waypointMission") === true && read(capabilities, "waypointMissionSupport") === "supported" ? "supported" : read(capabilities, "waypointMission") === false || read(capabilities, "waypointMissionSupport") === "unsupported" ? "unsupported" : "unknown", liveVideo: read(capabilities, "liveVideo") === true ? "supported" : read(capabilities, "liveVideo") === false ? "unsupported" : "unknown" }),
       assignment: device.assignment,
       mission: device.mission,

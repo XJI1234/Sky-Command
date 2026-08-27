@@ -1,5 +1,6 @@
 import flvjs from "flv.js";
 import { OperatorConsole } from "../index.js";
+import { DeviceFactSummary } from "../device-fact-summary/index.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight";
@@ -443,22 +444,7 @@ const pairingFact = (connection: unknown): { readonly label: string; readonly ok
   }
 };
 
-const extraFacts = (connection: unknown): string => {
-  const battery = read(connection, "batteryPercent");
-  const parts = [typeof battery === "number" ? `电量 ${battery}%` : "电量尚未取得"];
-  const flightState = read(connection, "flightState");
-  if (flightState === "flying") parts.push("飞机在空中");
-  else if (flightState === "grounded") parts.push("飞机在地面");
-  else parts.push("飞行状态尚未确认");
-  const pose = read(connection, "pose");
-  const latitude = read(pose, "latitude");
-  const longitude = read(pose, "longitude");
-  const altitude = read(pose, "altitudeMeters");
-  if (typeof latitude === "number" && typeof longitude === "number") {
-    parts.push(`位置 ${latitude.toFixed(5)}, ${longitude.toFixed(5)}${typeof altitude === "number" ? ` · 高度 ${altitude} m` : ""}`);
-  }
-  return parts.join(" · ");
-};
+const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 
 async function projectView(): Promise<ReturnType<typeof OperatorConsole.project>> {
   const snapshotResult = unwrap(await bridge().invoke("state-snapshot"));
@@ -503,7 +489,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     if (device.deviceId === view.missionDeviceId) node.classList.add("inspected");
     const connection = device.connection ?? {};
     const pairing = pairingFact(connection);
-    node.innerHTML = `<strong>${String(device.deviceId)}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${pairing.label} · ${aircraftLinkLabel(connection)}</div>`;
+    node.innerHTML = `<strong>${escapeHtml(String(device.deviceId))}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${pairing.label} · ${aircraftLinkLabel(connection)}</div>`;
     node.addEventListener("click", () => { state.missionDeviceId = String(device.deviceId); void render(); });
     return node;
   }));
@@ -512,14 +498,14 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const pairing = pairingFact(connection);
   el("device-detail").innerHTML = inspected === undefined
     ? "从左侧选择已连接的手机。"
-    : `<p class="muted">编号 ${String(inspected.deviceId)}</p>
+    : `<p class="muted">编号 ${escapeHtml(String(inspected.deviceId))}</p>
       <div class="chain">
         <span class="ok">手机已连接</span>
         <span class="${connected(connection, "remoteController") ? "ok" : ""}">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")}</span>
         <span class="${pairing.ok ? "ok" : ""}">${pairing.label}</span>
         <span class="${connected(connection, "aircraft") && connected(connection, "flightController") ? "ok" : ""}">${aircraftLinkLabel(connection)}</span>
       </div>
-      <p>${extraFacts(connection)}</p>
+      <p>${escapeHtml(DeviceFactSummary.format(connection))}</p>
       <p class="muted">对频请在手机上开始或停止。这里只显示手机回报的结果。</p>`;
   el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。遥控器连上后，请在手机上开始对频，再等飞机连上。电脑关掉后，需要在手机上重新连接。`;
 }

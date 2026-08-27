@@ -54,10 +54,19 @@ instance.dispose() -> void
 | `remoteController` | `remoteControllerConnected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
 | `flightController` | `flightControllerConnected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
 | `aircraft` | `connected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
-| `isFlying`、`motorsOn`、`batteryPercent` | 同名字段 | 仅保留有效布尔值或 `0..100` 的有限数值 |
+| `aircraftModel`、`remoteControllerModel` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
+| `isFlying`、`motorsOn` | 同名字段 | 仅保留布尔值 |
+| `flightMode` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
+| `batteryPercent` | 同名字段 | 仅保留 `0..100` 的有限数值 |
+| `remainingFlightTimeSeconds` | 同名字段 | 仅保留 `0..86,400` 的非负安全整数 |
 | `pairing` | `pairingState` | 仅保留 `UNKNOWN`、`IDLE`、`PAIRING`、`PAIRED`、`STOPPING`、`FAILED` |
 | `latitude` / `longitude` | 同名字段 | 仅在两者都是有限数值且分别落在 `[-90,90]`、`[-180,180]` 时成对保留；缺一、越界、JSON null 均省略，不得写成 `0` |
 | `altitudeMeters` | 同名字段 | 仅保留有限数值，不受电池 `0..100` 范围限制 |
+| `liveStreaming` | 同名字段 | 仅保留布尔值；它是当前只读观测，不能改变桌面图传状态机 |
+| `liveResolution` | 同名字段 | 仅在 `liveStreaming=true` 时保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
+| `liveFps` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..240` 的有限数值 |
+| `liveVideoBitrateKbps` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..100,000` 的有限数值 |
+| `liveRttMillis` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..60,000` 的非负安全整数 |
 | `missionExecution` | 同名封闭枚举 | 仅保留 `NOT_STARTED`、`STARTING`、`EXECUTING`、`PAUSED`、`STOPPING`、`FINISHED`、`FAILED` |
 | `missionFileName` | 同名字段 | 仅保留安全 `.kmz` 基名；缺失或 null 为 `undefined` |
 | `capabilities.liveVideo` | 同名字段 | 仅保留布尔值；字段名不得改写 |
@@ -65,6 +74,8 @@ instance.dispose() -> void
 | `capabilities.waypointMissionSupport` | 同名字段 | 线协议 `SUPPORTED` / `UNSUPPORTED` 归一为桌面门禁词表 `supported` / `unsupported`；其他值为 `undefined`。这不是改字段名。 |
 
 投影还必须保留用于设备页显示的安全原始枚举值，但不得公开协议 JSON 或任意未知字段。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
+
+`liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。
 
 ## 航线阶段快照投影
 

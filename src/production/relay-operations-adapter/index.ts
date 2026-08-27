@@ -10,29 +10,43 @@ type JsonValue = Readonly<{ readonly kind: "null" }>
 
 type CommandStatus = "succeeded" | "rejected" | "timed-out" | "disconnected" | "transport-failed";
 
+export interface DesktopRelayTelemetryPayload {
+  readonly [key: string]: unknown;
+  readonly sdkRegistered?: boolean;
+  readonly remoteControllerConnected?: boolean;
+  readonly flightControllerConnected?: boolean;
+  readonly connected?: boolean;
+  readonly isFlying?: boolean;
+  readonly motorsOn?: boolean;
+  readonly batteryPercent?: number;
+  readonly aircraftModel?: string;
+  readonly remoteControllerModel?: string;
+  readonly flightMode?: string;
+  readonly remainingFlightTimeSeconds?: number;
+  readonly pairingState?: "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED";
+  readonly latitude?: number;
+  readonly longitude?: number;
+  readonly altitudeMeters?: number;
+  readonly liveStreaming?: boolean;
+  readonly liveResolution?: string;
+  readonly liveFps?: number;
+  readonly liveVideoBitrateKbps?: number;
+  readonly liveRttMillis?: number;
+  readonly missionExecution?: "NOT_STARTED" | "STARTING" | "EXECUTING" | "PAUSED" | "STOPPING" | "FINISHED" | "FAILED";
+  readonly missionFileName?: string;
+}
+
 export interface DesktopRelayTelemetry {
   readonly deviceId: string;
-  readonly payload: Readonly<{
-    readonly sdkRegistered?: boolean;
-    readonly remoteControllerConnected?: boolean;
-    readonly flightControllerConnected?: boolean;
-    readonly connected?: boolean;
-    readonly isFlying?: boolean;
-    readonly motorsOn?: boolean;
-    readonly batteryPercent?: number;
-    readonly pairingState?: "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED";
-    readonly latitude?: number;
-    readonly longitude?: number;
-    readonly altitudeMeters?: number;
-    readonly missionExecution?: "NOT_STARTED" | "STARTING" | "EXECUTING" | "PAUSED" | "STOPPING" | "FINISHED" | "FAILED";
-    readonly missionFileName?: string;
-  }>;
+  readonly payload: DesktopRelayTelemetryPayload;
   readonly capabilities: Readonly<{
     readonly liveVideo?: boolean;
     readonly waypointMission?: boolean;
     readonly waypointMissionSupport?: "supported" | "unsupported";
   }>;
 }
+
+type MutableDesktopRelayTelemetryPayload = { -readonly [Field in keyof DesktopRelayTelemetryPayload]: DesktopRelayTelemetryPayload[Field] };
 
 export interface DesktopRelayDevice { readonly deviceId: string; readonly sessionId?: string; }
 export interface RelayOperationsSnapshot {
@@ -116,6 +130,15 @@ const number = (value: unknown): number | undefined => {
   const parsed = finiteNumber(value);
   return parsed !== undefined && parsed >= 0 && parsed <= 100 ? parsed : undefined;
 };
+const safeText = (value: unknown): string | undefined => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value) ? value : undefined;
+const boundedNumber = (value: unknown, minimum: number, maximum: number): number | undefined => {
+  const parsed = finiteNumber(value);
+  return parsed !== undefined && parsed >= minimum && parsed <= maximum ? parsed : undefined;
+};
+const boundedInteger = (value: unknown, minimum: number, maximum: number): number | undefined => {
+  const parsed = boundedNumber(value, minimum, maximum);
+  return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
+};
 const latitude = (value: unknown): number | undefined => {
   const parsed = finiteNumber(value);
   return parsed !== undefined && parsed >= -90 && parsed <= 90 ? parsed : undefined;
@@ -144,7 +167,7 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   const payload = fieldsOf(read(raw, "payload"));
   const capabilities = fieldsOf(read(raw, "capabilities"));
   if (payload === null || capabilities === null) return null;
-  const outputPayload: { sdkRegistered?: boolean; remoteControllerConnected?: boolean; flightControllerConnected?: boolean; connected?: boolean; isFlying?: boolean; motorsOn?: boolean; batteryPercent?: number; pairingState?: "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED"; latitude?: number; longitude?: number; altitudeMeters?: number; missionExecution?: "NOT_STARTED" | "STARTING" | "EXECUTING" | "PAUSED" | "STOPPING" | "FINISHED" | "FAILED"; missionFileName?: string } = {};
+  const outputPayload: MutableDesktopRelayTelemetryPayload = {};
   const outputCapabilities: { liveVideo?: boolean; waypointMission?: boolean; waypointMissionSupport?: "supported" | "unsupported" } = {};
   const sdk = string(payload.sdkAvailability); if (sdk === "READY") outputPayload.sdkRegistered = true; else if (sdk === "STARTING" || sdk === "STOPPED" || sdk === "FAILED") outputPayload.sdkRegistered = false;
   const remote = string(payload.remoteController); if (remote === "CONNECTED") outputPayload.remoteControllerConnected = true; else if (remote === "DISCONNECTED") outputPayload.remoteControllerConnected = false;
@@ -153,6 +176,10 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   const isFlying = boolean(payload.isFlying); if (isFlying !== undefined) outputPayload.isFlying = isFlying;
   const motorsOn = boolean(payload.motorsOn); if (motorsOn !== undefined) outputPayload.motorsOn = motorsOn;
   const batteryPercent = number(payload.batteryPercent); if (batteryPercent !== undefined) outputPayload.batteryPercent = batteryPercent;
+  const aircraftModel = safeText(string(payload.aircraftModel)); if (aircraftModel !== undefined) outputPayload.aircraftModel = aircraftModel;
+  const remoteControllerModel = safeText(string(payload.remoteControllerModel)); if (remoteControllerModel !== undefined) outputPayload.remoteControllerModel = remoteControllerModel;
+  const flightMode = safeText(string(payload.flightMode)); if (flightMode !== undefined) outputPayload.flightMode = flightMode;
+  const remainingFlightTimeSeconds = boundedInteger(payload.remainingFlightTimeSeconds, 0, 86_400); if (remainingFlightTimeSeconds !== undefined) outputPayload.remainingFlightTimeSeconds = remainingFlightTimeSeconds;
   const pairing = pairingState(payload.pairing); if (pairing !== undefined) outputPayload.pairingState = pairing;
   const latitudeValue = latitude(payload.latitude);
   const longitudeValue = longitude(payload.longitude);
@@ -161,6 +188,16 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
     outputPayload.longitude = longitudeValue;
   }
   const altitudeMeters = finiteNumber(payload.altitudeMeters); if (altitudeMeters !== undefined) outputPayload.altitudeMeters = altitudeMeters;
+  const liveStreaming = boolean(payload.liveStreaming);
+  if (liveStreaming !== undefined) {
+    outputPayload.liveStreaming = liveStreaming;
+    if (liveStreaming) {
+      const liveResolution = safeText(string(payload.liveResolution)); if (liveResolution !== undefined) outputPayload.liveResolution = liveResolution;
+      const liveFps = boundedNumber(payload.liveFps, 0, 240); if (liveFps !== undefined) outputPayload.liveFps = liveFps;
+      const liveVideoBitrateKbps = boundedNumber(payload.liveVideoBitrateKbps, 0, 100_000); if (liveVideoBitrateKbps !== undefined) outputPayload.liveVideoBitrateKbps = liveVideoBitrateKbps;
+      const liveRttMillis = boundedInteger(payload.liveRttMillis, 0, 60_000); if (liveRttMillis !== undefined) outputPayload.liveRttMillis = liveRttMillis;
+    }
+  }
   const missionExecution = string(payload.missionExecution);
   if (missionExecution === "NOT_STARTED" || missionExecution === "STARTING" || missionExecution === "EXECUTING" || missionExecution === "PAUSED" || missionExecution === "STOPPING" || missionExecution === "FINISHED" || missionExecution === "FAILED") outputPayload.missionExecution = missionExecution;
   const missionFileName = string(payload.missionFileName); if (validMissionFileName(missionFileName)) outputPayload.missionFileName = missionFileName;

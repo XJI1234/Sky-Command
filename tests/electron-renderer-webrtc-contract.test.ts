@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const preload = () => readFileSync(new URL("../src/production/electron-host/preload.cjs", import.meta.url), "utf8");
 const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8");
+const deviceFactSummary = () => readFileSync(new URL("../src/production/operator-console/device-fact-summary/index.ts", import.meta.url), "utf8");
 const html = () => readFileSync(new URL("../src/production/operator-console/renderer/index.html", import.meta.url), "utf8");
 
 describe("Electron WHEP 播放链路", () => {
@@ -25,7 +26,8 @@ describe("Electron WHEP 播放链路", () => {
     expect(source).not.toContain('invoke("webrtc-refresh")');
     expect(source).toContain("ANOTHER_VIDEO_TRANSPORT_ACTIVE");
     expect(source).toContain("另一路图传正在使用，请先停止");
-    expect(source).toContain("飞行状态尚未确认");
+    expect(source).toContain("DeviceFactSummary.format(connection)");
+    expect(deviceFactSummary()).toContain("飞行状态尚未确认");
     expect(source).toContain("等待手机就绪");
     expect(source).toContain('read(connection, "sdk") !== "ready"');
     expect(source).not.toContain("value !== \"disconnected\" && read(connection, \"sdk\")");

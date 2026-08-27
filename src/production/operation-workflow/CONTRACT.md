@@ -166,13 +166,25 @@ interface WorkflowDevice {
     readonly flightController: "connected" | "disconnected" | "unknown";
     readonly aircraft: "connected" | "disconnected" | "unknown";
     readonly batteryPercent: number | null;
+    readonly aircraftModel: string | null;
+    readonly remoteControllerModel: string | null;
     readonly flightState: "grounded" | "flying" | "unknown";
+    readonly motorsOn: boolean | null;
+    readonly flightMode: string | null;
+    readonly remainingFlightTimeSeconds: number | null;
     readonly pairingState: "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED" | "unknown";
     readonly pose: {
       readonly latitude: number | null;
       readonly longitude: number | null;
       readonly altitudeMeters: number | null;
     } | null;
+    readonly live: {
+      readonly streaming: boolean | null;
+      readonly resolution: string | null;
+      readonly fps: number | null;
+      readonly videoBitrateKbps: number | null;
+      readonly rttMillis: number | null;
+    };
   };
   readonly capabilities: {
     readonly waypointMission: "supported" | "unsupported" | "unknown";

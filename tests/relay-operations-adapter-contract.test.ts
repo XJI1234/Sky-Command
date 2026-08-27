@@ -10,6 +10,7 @@ type JsonValue =
 
 const text = (value: string): JsonValue => Object.freeze({ kind: "string" as const, value });
 const bool = (value: boolean): JsonValue => Object.freeze({ kind: "boolean" as const, value });
+const numeric = (value: string): JsonValue => Object.freeze({ kind: "number" as const, value });
 const nil: JsonValue = Object.freeze({ kind: "null" as const });
 const object = (fields: Readonly<Record<string, JsonValue>>): JsonValue => Object.freeze({ kind: "object" as const, fields: Object.freeze({ ...fields }) });
 
@@ -88,6 +89,69 @@ describe("RelayOperationsAdapter", () => {
       }
     });
     expect(adapter.devices()).toEqual([{ deviceId: "relay-1", sessionId: "session-1" }]);
+  });
+
+  it("投影设备页所需的已验证飞机与当前图传事实", () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+    fixture.replaceTelemetry(
+      object({
+        aircraftModel: text("Matrice 4T"),
+        remoteControllerModel: text("DJI RC Plus"),
+        flightMode: text("GPS_NORMAL"),
+        remainingFlightTimeSeconds: numeric("1085"),
+        liveStreaming: bool(true),
+        liveResolution: text("1920x1080"),
+        liveFps: numeric("29.97"),
+        liveVideoBitrateKbps: numeric("1802"),
+        liveRttMillis: numeric("42"),
+      }),
+      object({}),
+    );
+
+    expect(adapter.telemetry("relay-1")?.payload).toEqual({
+      aircraftModel: "Matrice 4T",
+      remoteControllerModel: "DJI RC Plus",
+      flightMode: "GPS_NORMAL",
+      remainingFlightTimeSeconds: 1085,
+      liveStreaming: true,
+      liveResolution: "1920x1080",
+      liveFps: 29.97,
+      liveVideoBitrateKbps: 1802,
+      liveRttMillis: 42,
+    });
+  });
+
+  it("丢弃畸形图传指标，并在未直播时清除可能陈旧的图传细节", () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+    fixture.replaceTelemetry(
+      object({
+        aircraftModel: text(" "),
+        remoteControllerModel: text("DJI\u0000 RC"),
+        flightMode: text(" "),
+        remainingFlightTimeSeconds: numeric("1085.5"),
+        liveStreaming: bool(true),
+        liveResolution: text("\u0000"),
+        liveFps: numeric("240.1"),
+        liveVideoBitrateKbps: numeric("100000.1"),
+        liveRttMillis: numeric("1.5"),
+      }),
+      object({}),
+    );
+    expect(adapter.telemetry("relay-1")?.payload).toEqual({ liveStreaming: true });
+
+    fixture.replaceTelemetry(
+      object({
+        liveStreaming: bool(false),
+        liveResolution: text("1920x1080"),
+        liveFps: numeric("30"),
+        liveVideoBitrateKbps: numeric("1802"),
+        liveRttMillis: numeric("42"),
+      }),
+      object({}),
+    );
+    expect(adapter.telemetry("relay-1")?.payload).toEqual({ liveStreaming: false });
   });
 
   it("only exposes a valid private relay ingress address to the stream command gateway", () => {

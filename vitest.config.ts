@@ -73,6 +73,7 @@ export default defineConfig({
         ,"src/production/node-runtime/**/*.ts"
         ,"src/production/relay-operations-adapter/**/*.ts"
         ,"src/production/operation-workflow/**/*.ts"
+        ,"src/production/operator-console/device-fact-summary/**/*.ts"
         ,"src/production/desktop-application/**/*.ts"
         ,"src/production/desktop-ui-gateway/**/*.ts"
       ],
