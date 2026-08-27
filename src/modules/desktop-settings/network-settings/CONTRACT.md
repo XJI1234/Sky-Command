@@ -29,7 +29,8 @@ type NetworkSettings = Readonly<{
 
 - 端口只接受 1024..65535 的安全整数。`listenPort` 是 RTMP 收流口；`relayPort` 是
   WebSocket 中继口，缺省 `8080`。两者独立校验，缺省 `relayPort` 不得改写 `listenPort`。
-- `manualHost` 只接受 `null` 或合法私网 IPv4。回环地址（`127.0.0.1`）不是给手机
+- `manualHost` 只接受 `null` 或合法私网 IPv4（`10/8`、`172.16/12`、`192.168/16`），
+  以及 Tailscale 网格 CGNAT `100.64/10`。回环地址（`127.0.0.1`）不是给手机
   推流用的主机。IPv6（含唯一本地、链路本地、回环、映射地址和带端口的文本）不是当前
   RTMP/WHIP 端点格式，必须拒绝，不得猜测方括号规则。
 - 字符串必须不含空白与控制字符；不接受主机名、URL、CIDR 或公网地址。

@@ -50,7 +50,10 @@ describe("desktop-settings network-settings public contract", () => {
     ["10/8 IPv4", "10.0.0.1", "10.0.0.1"],
     ["172.16 lower boundary", "172.16.0.1", "172.16.0.1"],
     ["172.16/12 IPv4", "172.31.255.254", "172.31.255.254"],
-    ["192.168/16 IPv4", "192.168.1.5", "192.168.1.5"]
+    ["192.168/16 IPv4", "192.168.1.5", "192.168.1.5"],
+    ["Tailscale CGNAT 100.64/10", "100.89.74.6", "100.89.74.6"],
+    ["Tailscale lower boundary", "100.64.0.1", "100.64.0.1"],
+    ["Tailscale upper boundary", "100.127.255.254", "100.127.255.254"]
   ])("accepts and canonicalizes %s", (_, manualHost, expected) => {
     expect(NetworkSettings.create({ listenPort: 19500, manualHost })).toMatchObject({
       ok: true,
@@ -66,6 +69,8 @@ describe("desktop-settings network-settings public contract", () => {
     ["IPv6 unique local", { listenPort: 19500, manualHost: "FD00:0:0:0000:0:0:0:ABCD" }, "manualHost", "ipv6-unsupported"],
     ["IPv6 link local", { listenPort: 19500, manualHost: "FE80:0:0:0:0:0:0:2" }, "manualHost", "ipv6-unsupported"],
     ["public IPv4", { listenPort: 19500, manualHost: "8.8.8.8" }, "manualHost", "not-local"],
+    ["outside Tailscale CGNAT low", { listenPort: 19500, manualHost: "100.63.255.255" }, "manualHost", "not-local"],
+    ["outside Tailscale CGNAT high", { listenPort: 19500, manualHost: "100.128.0.1" }, "manualHost", "not-local"],
     ["hostname", { listenPort: 19500, manualHost: "relay.local" }, "manualHost", "invalid-ip"],
     ["address with port", { listenPort: 19500, manualHost: "192.168.1.2:19500" }, "manualHost", "ipv6-unsupported"],
     ["CIDR", { listenPort: 19500, manualHost: "192.168.1.2/24" }, "manualHost", "invalid-ip"],

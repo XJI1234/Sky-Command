@@ -33,12 +33,24 @@ const privateIpv4 = (value: string): boolean => {
   const [first, second] = parts as [number, number, number, number];
   return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
 };
-
-const virtualName = (name: string): boolean => /vmware|vmnet|vbox|virtualbox|vethernet|hyper-v|loopback|docker|wsl|tun|tailscale|mihomo|openvpn|nord|wireguard|hamachi|zerotier|radmin|\bvpn\b/i.test(name);
+/** Tailscale CGNAT 100.64.0.0/10 — mesh LAN replacement for phone↔PC. */
+const meshIpv4 = (value: string): boolean => {
+  const parts = value.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [first, second] = parts as [number, number, number, number];
+  return first === 100 && second >= 64 && second <= 127;
+};
+const reachableIpv4 = (value: string): boolean => privateIpv4(value) || meshIpv4(value);
+const meshName = (name: string): boolean => /tailscale/i.test(name);
+const virtualName = (name: string): boolean => {
+  if (meshName(name)) return false;
+  return /vmware|vmnet|vbox|virtualbox|vethernet|hyper-v|loopback|docker|wsl|tun|mihomo|clash|openvpn|nord|wireguard|hamachi|zerotier|radmin|\bvpn\b/i.test(name);
+};
 const wifiName = (name: string): boolean => /wi-?fi|wlan|wireless|无线/i.test(name);
 const hotspotIpv4 = (ipv4: string): boolean =>
   ipv4.startsWith("172.20.10.") || ipv4.startsWith("192.168.42.") || ipv4.startsWith("192.168.43.") || ipv4.startsWith("192.168.137.");
 const cardScore = (name: string, ipv4: string, kind: "wifi" | "physical"): number => {
+  if (meshIpv4(ipv4) || meshName(name)) return -20;
   if (virtualName(name)) return 100;
   if (hotspotIpv4(ipv4)) return -10;
   if (kind === "wifi" || wifiName(name)) return 0;
@@ -50,8 +62,8 @@ const lanCards = (): readonly { readonly name: string; readonly enabled: true; r
   for (const [name, addresses] of Object.entries(networkInterfaces())) {
     for (const address of addresses ?? []) {
       const ipv4 = address.family === "IPv4" || address.family === 4 ? address.address : null;
-      if (ipv4 === null || address.internal || !privateIpv4(ipv4) || virtualName(name) || ipv4.startsWith("192.168.56.")) continue;
-      const kind = wifiName(name) ? "wifi" as const : "physical" as const;
+      if (ipv4 === null || address.internal || !reachableIpv4(ipv4) || virtualName(name) || ipv4.startsWith("192.168.56.")) continue;
+      const kind = wifiName(name) || meshName(name) ? "wifi" as const : "physical" as const;
       cards.push({ name, enabled: true, internal: false, kind, ipv4, score: cardScore(name, ipv4, kind) });
     }
   }
@@ -71,7 +83,7 @@ async function launch(): Promise<void> {
   const preferred = interfaces[0];
   if (preferred === undefined) {
     journal.record({ link: "phone-pc", level: "ERROR", event: "LAN_UNAVAILABLE", detail: "No private IPv4 was found" });
-    dialog.showErrorBox("Sky Command", "未检测到可用的局域网 IPv4。请连接 WLAN 后重开。");
+    dialog.showErrorBox("Sky Command", "未检测到可用的局域网 IPv4。请连接 WLAN 或 Tailscale 后重开。");
     app.exit(1);
     return;
   }

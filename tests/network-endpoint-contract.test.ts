@@ -92,10 +92,10 @@ describe("媒体管线 network-endpoint 契约", () => {
     expect(() => NetworkEndpoint.create(19500.5)).toThrow();
     expect(() => NetworkEndpoint.create(65535)).not.toThrow();
     const endpoint = NetworkEndpoint.create(19500);
-    for (const host of ["10.255.255.255", "172.16.0.1", "172.31.255.255", "192.168.0.1"]) {
+    for (const host of ["10.255.255.255", "172.16.0.1", "172.31.255.255", "192.168.0.1", "100.64.0.1", "100.89.74.6", "100.127.255.254"]) {
       expect(endpoint.resolve([], host)).toMatchObject({ ok: true, value: { host } });
     }
-    for (const host of ["172.15.255.255", "172.32.0.0", "192.167.255.255", "193.168.0.0", "999.1.1.1", "192.168.1"]) {
+    for (const host of ["172.15.255.255", "172.32.0.0", "192.167.255.255", "193.168.0.0", "100.63.255.255", "100.128.0.0", "999.1.1.1", "192.168.1"]) {
       expect(endpoint.resolve([], host)).toEqual({ ok: false, code: "INVALID_INPUT" });
     }
     expect(endpoint.resolve([], "192.168.999.1")).toEqual({ ok: false, code: "INVALID_INPUT" });
