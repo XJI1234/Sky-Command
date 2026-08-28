@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { OperationWorkflow } from "../src/production/operation-workflow/index.js";
 import { OperatorConsole } from "../src/production/operator-console/index.js";
@@ -19,6 +21,24 @@ const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkf
 } as never);
 
 describe("飞行作业工作流模块契约", () => {
+  it("内部模块契约反映已实施的公开接口", () => {
+    const contract = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+    const workflow = contract("src/production/operation-workflow/CONTRACT.md");
+    const registry = contract("src/production/operation-workflow/assignment-registry/CONTRACT.md");
+    const actions = contract("src/production/operation-workflow/workflow-actions/CONTRACT.md");
+    const subscriptions = contract("src/production/operation-workflow/workflow-subscriptions/CONTRACT.md");
+
+    for (const value of [workflow, registry, actions, subscriptions]) {
+      expect(value).not.toContain("待实施");
+    }
+    expect(workflow).not.toContain("实现前必须");
+    expect(registry).toContain("instance.assign(deviceId, routeId) -> boolean");
+    expect(registry).toContain("instance.clear(deviceId) -> boolean");
+    expect(subscriptions).toContain("WorkflowSubscriptions.create(sources, onChange) -> instance");
+    expect(subscriptions).toContain("instance.dispose() -> void");
+    expect(subscriptions).not.toContain("instance.subscribe(listener)");
+  });
+
   it("只允许给在线设备分配合格航线，并通过任务控制暂存该分配", async () => {
     const staged: unknown[] = [];
     const workflow = OperationWorkflow.create({

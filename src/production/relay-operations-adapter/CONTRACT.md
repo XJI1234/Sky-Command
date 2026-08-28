@@ -34,7 +34,6 @@ instance.subscribe(listener) -> unsubscribe
 
 instance.missionGateway() -> MissionRelayGateway
 instance.streamGateway() -> StreamRelayGateway
-instance.whipStreamGateway() -> WhipStreamRelayGateway
 instance.pairingGateway() -> PairingRelayPort
 instance.flightGateway() -> FlightRelay
 instance.settingsGateway() -> RelaySettingsGateway
@@ -43,6 +42,8 @@ instance.dispose() -> void
 ```
 
 每次调用端口工厂返回同一逻辑门面；门面不暴露 `RelayLink`。所有快照为深度隔离的冻结副本。
+
+实现中保留的 `whipStreamGateway()` 仅供封存源码与其独立测试维持可编译性；它不是生产接口，`desktop-application`、UI、IPC 和任何新业务代码不得调用或重新接线它。
 
 ## 入站遥测投影
 
@@ -93,8 +94,6 @@ instance.dispose() -> void
 | 航线上传/启动/暂停/继续/停止 | `wayline.*` | `{ confirm: true }` |
 | 图传开始 | `live-stream.start` | `{ rtmpUrl: string }` |
 | 图传停止 | `live-stream.stop` | `{}` |
-| 低延迟图传开始 | `live-stream-webrtc.start` | `{ whipUrl: string }` |
-| 低延迟图传停止 | `live-stream-webrtc.stop` | `{}` |
 | 起飞/降落/返航 | `flight.takeoff` / `flight.land` / `flight.return-home` | `{ confirm: true }` |
 | 相机与图传设置 | `device.settings.*` | 由 `relay-device-settings` 契约规定的字段 |
 
@@ -107,13 +106,13 @@ instance.dispose() -> void
 - `wayline.start` 成功只表示 DJI 接受启动请求；只有有效且属于当前任务代际的 `ROUTE_EXECUTION_STARTED` 才能使任务状态进入执行中。
 - DJI `missionExecution=FINISHED` 或 `FAILED` 只在文件名和当前任务匹配时才能使桌面任务进入终态；它们不补造 `ROUTE_EXECUTION_STARTED`。
 - 暂停、继续、停止在等待命令结果时必须保留“请求中”状态；命令成功后才进入对应已确认状态。
-- `live-stream.start` 成功只表示手机接受推流；播放成功只能由媒体管线确认播放列表和播放器后产生。
+- `live-stream.start` 成功只表示手机接受 RTMP 推流；播放成功只能由媒体管线确认本机 HTTP-FLV 已就绪并由播放器附着后产生。
 - `flight.*` 成功只表示 DJI 已完成该调用；飞行状态必须仍由后续遥测显示。
 - `telemetry.read` 成功只表示手机已发布当前快照；不得据此把链路标为 ready。
 - 设置读写成功必须携带可解码的 `command-result.result` 完整快照；缺失或畸形结果是 `invalid-result`，不得乐观更新。
 - `pairing.status` 仅在命令 `succeeded` 时携带根契约 §7.4 的结构化 `result`（`pairingState`、`aircraftConnected`、`flightControllerConnected`、`aircraftModel`、`motorsOn`、`sdkRegistered`）。失败、超时或 `pairing.start` / `pairing.stop` 不得附带该 `result`。实时配对显示仍以入站遥测的 `pairingState` 为准，命令成功不等于已配对。
 
-所有命令结果统一保留为业务模块已有的 `succeeded`、`rejected`、`timed-out`、`disconnected` 或 `transport-failed` 语义。`streamGateway` 与 `whipStreamGateway` 可以把手机 `command-result.detail` 原样转成有界字符串（1..256 码点、无控制字符），供图传调度映射封闭原因码；不得泄露连接 ID、会话 ID、字节、路径、令牌、DJI 异常。
+所有生产命令结果统一保留为业务模块已有的 `succeeded`、`rejected`、`timed-out`、`disconnected` 或 `transport-failed` 语义。`streamGateway` 可以把手机 `command-result.detail` 原样转成有界字符串（1..256 码点、无控制字符），供图传调度映射封闭原因码；不得泄露连接 ID、会话 ID、字节、路径、令牌、DJI 异常。
 
 ## 会话、断连与迟到事件
 

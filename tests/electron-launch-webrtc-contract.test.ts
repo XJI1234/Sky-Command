@@ -57,4 +57,29 @@ describe("Electron 主进程图传装配（HTTP-FLV 单路径）", () => {
       "video-playback",
     ]));
   });
+
+  it("生产契约只公开 RTMP 到 HTTP-FLV 的图传方案", () => {
+    const contract = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+    const root = contract("CONTRACT.md");
+    const application = contract("src/production/desktop-application/CONTRACT.md");
+    const gateway = contract("src/production/desktop-ui-gateway/CONTRACT.md");
+    const shell = contract("src/production/desktop-shell/CONTRACT.md");
+    const adapter = contract("src/production/relay-operations-adapter/CONTRACT.md");
+    const crossRuntime = contract("src/modules/cross-runtime-e2e/CONTRACT.md");
+    const player = contract("src/modules/media-pipeline/video-player/CONTRACT.md");
+    const workflow = contract("src/production/operation-workflow/CONTRACT.md");
+
+    expect(root).toContain("手机 DJI -> RTMP -> 电脑 Node Media Server -> 本机 HTTP-FLV -> flv.js");
+    expect(application).not.toContain("application.lowLatency()");
+    expect(gateway).not.toContain("webrtc.start");
+    expect(shell).not.toContain("webrtc-* 短名");
+    expect(adapter).not.toContain("| 低延迟图传开始");
+    expect(crossRuntime).not.toContain("HLS 服务");
+    expect(crossRuntime).not.toContain("转码、HLS 和播放编排");
+    expect(player).not.toContain("index.m3u8");
+    expect(workflow).not.toContain("whipStreamControl");
+    expect(workflow).not.toContain("whipStream:");
+    expect(workflow).not.toContain("播放列表");
+    expect(workflow).not.toContain("待实施");
+  });
 });

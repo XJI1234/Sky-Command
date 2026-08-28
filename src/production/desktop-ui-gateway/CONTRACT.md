@@ -19,7 +19,7 @@ gateway.subscribe(listener) -> unsubscribe
 gateway.dispose() -> void
 ```
 
-`application` 至少提供 `snapshot()`、`subscribe(listener)` 和 `workflow()`；低延迟旁路可额外提供 `lowLatency() -> LowLatencyMediaInstance | null`。未提供或返回 `null` 时，所有 `webrtc.*` 方法均返回 `DEPENDENCY_FAILURE`。
+`application` 只提供 `snapshot()`、`subscribe(listener)` 和 `workflow()`。生产网关不接受低延迟旁路；任何 `webrtc.*` 方法都不在白名单中，必须返回 `METHOD_NOT_ALLOWED`。
 
 所有入口均接收 `unknown`，网关先验证精确输入形状再调用下游；不允许“通用方法名 + 任意对象”的透传。
 
@@ -33,7 +33,6 @@ gateway.dispose() -> void
 | 分配 | `assignment.assign`、`assignment.clear` |
 | 任务 | `mission.stage`、`mission.upload`、`mission.start`、`mission.pause`、`mission.resume`、`mission.stop` |
 | 图传 | `stream.start`、`stream.stop`、`stream.refresh`、`stream.select`、`stream.clear` |
-| 低延迟图传 | `webrtc.start`、`webrtc.stop`、`webrtc.stream-start`、`webrtc.stream-stop`、`webrtc.stream-select`、`webrtc.stream-clear`、`webrtc.refresh` |
 | 设置 | `settings.transmission.read`、`settings.transmission.write`、`settings.camera.read`、`settings.camera.write` |
 | 飞控 | `flight.request`、`flight.confirm`、`flight.cancel` |
 | 受控视频 | `video.playback` |
@@ -46,7 +45,7 @@ gateway.dispose() -> void
 
 `hardware.readiness` 与每个设备操作均要求唯一 `{ deviceId }`；航线操作要求 `{ routeId }`；分配要求 `{ deviceId, routeId }`；设置写入额外要求 `{ patch }`；飞控请求要求 `{ deviceId, action }`，确认/取消额外要求 `{ confirmationId }`。`state.snapshot`、`stream.refresh`、`stream.clear`、`network.hint` 不接受输入。不接受多余字段、控制字符、空标识符、非有限时间值或错误值类型。
 
-`hardware.readiness` 只委托 `workflow.checkHardwareReadiness(deviceId)`，返回脱敏后的旧图传与直接飞控预检及可显示阻塞项；它不调用 `stream.start`、`flight.request`、`webrtc.*` 或任一媒体服务生命周期方法。
+`hardware.readiness` 只委托 `workflow.checkHardwareReadiness(deviceId)`，返回脱敏后的图传与直接飞控预检及可显示阻塞项；它不调用 `stream.start`、`flight.request` 或任一媒体服务生命周期方法。
 
 ## 5. 快照和视频资源
 
@@ -56,7 +55,7 @@ gateway.dispose() -> void
 
 `video.playback` 是唯一能返回播放地址的方法。它读取工作流快照中未脱敏的 `media.streams`：仅当指定设备为 `ready` 且地址为无凭据的 `http(s)://127.0.0.1/...` 或 `http(s)://localhost/...` 时，返回 `{ deviceId, url }`。UI `snapshot()` 仍必须去掉 `playbackUrl`。未就绪、未知设备或任何非本机地址均返回稳定业务失败，不泄露候选地址。
 
-低延迟方法只调用可选 `lowLatency()` 门面：`webrtc.start`、`webrtc.stop`、`webrtc.refresh` 和 `webrtc.stream-clear` 不接受输入；`webrtc.stream-start`、`webrtc.stream-stop`、`webrtc.stream-select` 接收唯一 `{ deviceId }`。低延迟播放地址由 `webrtc.stream-select` 触发播放器适配器，首帧事实由该门面返回；不能把手机命令成功当作首帧成功。
+`stream.start` 的成功只表示手机已接受 RTMP 推流；画面是否可播放仍由 `media-pipeline` 的 `ready` 状态和 `video.playback` 返回的受控本机 HTTP-FLV 地址共同确定。网关不得把命令成功写成首帧成功。
 
 ## 6. 生命周期
 

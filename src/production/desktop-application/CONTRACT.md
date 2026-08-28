@@ -18,7 +18,6 @@ application.stop() -> Promise<ApplicationResult>
 application.snapshot() -> ApplicationSnapshot
 application.subscribe(listener) -> unsubscribe
 application.workflow() -> OperationWorkflowInstance
-application.lowLatency() -> LowLatencyMediaInstance | null
 application.dispose() -> Promise<void>
 ```
 
@@ -34,19 +33,9 @@ hardwareReadiness: {
 }
 ```
 
-生产装配必须提供实际 LAN 与可执行 FFmpeg 探测结果，且 `sessionStableAfterMs` 为 15,000。它们只交给 `operation-workflow` 的开始操作预检，不改变中继、媒体或低延迟旁路的启动和生命周期。低延迟旁路配置可选，形状为：
+生产装配必须提供实际 LAN 与 HTTP-FLV 服务探测结果，且 `sessionStableAfterMs` 为 15,000。它们只交给 `operation-workflow` 的开始操作预检，不改变中继或媒体的启动和生命周期。
 
-```text
-lowLatency?: {
-  media: {
-    dependencies: WebRtcMediaDependencies
-    options: WebRtcMediaOptions
-    startInput: unknown
-  }
-}
-```
-
-`legacyMediaRequired?: boolean` 为可选启动策略，默认 `true`。生产桌面同时装配低延迟旁路时必须传 `false`，使旧 RTMP/HTTP-FLV 的失败只影响旧链路；它不改变旧链路已构造的对象图，也不自动启动低延迟旁路。
+`legacyMediaRequired?: boolean` 为可选启动策略，默认 `true`。生产桌面固定传 `true`；`false` 只保留给受控故障隔离测试，使中继可在媒体失败时保留运行，不会装配、启动或暴露替代媒体路径。
 
 调用者不传入已经构造好的业务实例，避免出现不完整或所有权不清的对象图。
 
@@ -67,21 +56,18 @@ WebSocket 中继口取自 `network.relayPort`，RTMP 收流口取自 `network.li
 7. `FlightCommandDispatcher -> FlightControl`
 8. `DesktopRuntime`
 9. `OperationWorkflow`
-10. 可选 `WebRtcMedia -> WhipStreamControl` 低延迟旁路
 
 依赖方向只能从本模块指向上述公开一级接口。任一被组合模块不得反向依赖本模块，也不得依赖 UI 网关、Electron 或地图。
 
 ## 4. 生命周期
 
-初始阶段为 `idle`。`start()` 委托 `DesktopRuntime.start()`，其既定顺序为先启动中继监听，再启动旧媒体服务。默认策略要求两者成功；`legacyMediaRequired: false` 时，中继成功即允许应用进入 `running`，旧媒体失败只保留在运行时媒体快照。
+初始阶段为 `idle`。`start()` 委托 `DesktopRuntime.start()`，其既定顺序为先启动中继监听，再启动 RTMP/HTTP-FLV 媒体服务。生产策略要求两者成功；`legacyMediaRequired: false` 仅在受控测试中允许中继成功后进入 `running`，并把媒体失败保留在运行时媒体快照。
 
-`stop()` 先尽力对仍处于活动阶段的任务调用 `missionControl.stop(deviceId)`（失败不得阻断后续清理），再停止可选低延迟旁路，最后委托 `DesktopRuntime.stop()`：先停止已知设备图传，再停止媒体服务，最后停止中继监听。任一步失败均不得阻止后续清理；结果映射为稳定的应用错误码。`stop()` 不发送起飞/降落/返航；桌面退出不等于飞机已落地，收尾仍以遥控器为准。重复启动、重复停止、进行中的竞争操作和释放后的调用均返回稳定结果，不抛出底层异常。
+`stop()` 先尽力对仍处于活动阶段的任务调用 `missionControl.stop(deviceId)`（失败不得阻断后续清理），再委托 `DesktopRuntime.stop()`：先停止已知设备图传，再停止媒体服务，最后停止中继监听。任一步失败均不得阻止后续清理；结果映射为稳定的应用错误码。`stop()` 不发送起飞/降落/返航；桌面退出不等于飞机已落地，收尾仍以遥控器为准。重复启动、重复停止、进行中的竞争操作和释放后的调用均返回稳定结果，不抛出底层异常。
 
 `dispose()` 幂等，并按以下顺序执行：若仍在运行先完成 `stop()`（因此可能发出上述尽力而为的航线停止）；停止工作流订阅；停止任务订阅；清空航线内存；清空飞控确认；释放运行时及其媒体资源；释放中继操作适配器；停止对外发布。释放本身不再额外发送起飞/降落/返航。
 
-低延迟旁路是可选配置。默认配置不创建它，不改变旧 RTMP/HTTP-FLV 启动顺序。配置存在时，`lowLatency()` 返回独立门面，只有调用其 `start()` 才启动 MediaMTX；低延迟启动失败只能影响该门面。应用停止或处置时必须先尽力停止该门面的 WHIP 设备和 MediaMTX，再执行旧运行时停止。
-
-两条媒体链路的启动、运行、播放和停止结果互不升级：旧链路故障不得阻止 `lowLatency().start()`，低延迟故障不得阻止旧运行时启动或停止。两者仅共享中继控制面和手机连接；旧 `live-stream.*` 与新 `live-stream-webrtc.*` 命令、端口、进程、状态和播放器适配器保持分离。
+本对象图没有低延迟旁路。封存的 WebRTC/WHIP/WHEP 源码不得作为 `create` 输入、实例成员或生命周期步骤出现；生产图传只通过 `DesktopRuntime` 管理 RTMP/HTTP-FLV。
 
 ## 5. 快照与订阅
 

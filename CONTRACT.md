@@ -2,16 +2,24 @@
 
 **文档用途：** Sky Command 电脑端重构的唯一模块地图和验收依据
 **当前版本：** v1
-**状态：** 待审阅
+**状态：** 已实施；电脑-手机连接与生产图传已实机验证，航线和飞行动作仍待对应实机验收
 **适用范围：** `D:\Desktop\Sky Command` 中的新电脑端项目
 
 > 这份文档回答三个问题：电脑端负责哪些业务、这些业务分给哪些模块、模块之间允许怎样协作。
 > 手机端总契约见 [`../MSDK-relay/CONTRACT.md`](../MSDK-relay/CONTRACT.md)。两份文档共同覆盖整个系统；任何一端新增业务能力，都必须先更新对应根契约的业务覆盖检查表。
 
-已有的一级模块契约：
+一级模块契约索引：
 
 - [`src/modules/app-shell/CONTRACT.md`](src/modules/app-shell/CONTRACT.md)
+- [`src/modules/desktop-settings/CONTRACT.md`](src/modules/desktop-settings/CONTRACT.md)
+- [`src/modules/relay-link/CONTRACT.md`](src/modules/relay-link/CONTRACT.md)
+- [`src/modules/device-console/CONTRACT.md`](src/modules/device-console/CONTRACT.md)
+- [`src/modules/geo-map/CONTRACT.md`](src/modules/geo-map/CONTRACT.md)
 - [`src/modules/route-library/CONTRACT.md`](src/modules/route-library/CONTRACT.md)
+- [`src/modules/mission-control/CONTRACT.md`](src/modules/mission-control/CONTRACT.md)
+- [`src/modules/flight-control/CONTRACT.md`](src/modules/flight-control/CONTRACT.md)
+- [`src/modules/media-pipeline/CONTRACT.md`](src/modules/media-pipeline/CONTRACT.md)
+- [`src/modules/live-stream-control/CONTRACT.md`](src/modules/live-stream-control/CONTRACT.md)
 
 ---
 
@@ -51,10 +59,18 @@
 | `route-library` | 航线文件导入、合格性判定、目录管理和预览模型 |
 | `mission-control` | 航线任务阶段、起飞前门禁和任务命令调度 |
 | `flight-control` | 直接飞行动作的确认与下发 |
-| `media-pipeline` | 接收飞行器视频、转码、本地分发和播放 |
+| `media-pipeline` | 接收飞行器 RTMP 视频、提供本机 HTTP-FLV 分发与播放就绪事实 |
 | `live-stream-control` | 直播协议配置与直播开关命令 |
 
 模块之间只通过公开接口协作。`relay-link` 不得包含任何飞行业务语义；业务模块不得自己创建 WebSocket、不得自己启动 FFmpeg、不得自己读写设置文件。这样更换网络库、地图引擎、转码器或界面框架时，不需要同时修改所有模块。
+
+### 生产图传方案（唯一）
+
+```text
+手机 DJI -> RTMP -> 电脑 Node Media Server -> 本机 HTTP-FLV -> flv.js
+```
+
+WebSocket 只承载 `live-stream.start` / `live-stream.stop`、结果和遥测，绝不承载视频帧。生产组合根、IPC、界面和 APK 只能装配这条链路。WebRTC/WHIP/WHEP 源码和独立测试允许保留在封存目录中，但不得注册命令、创建进程、暴露界面或打入 APK；恢复它必须取得业务批准，并同时修改两端根契约、生产装配与跨端验证。
 
 ### 2.1 模块拆分原则
 
@@ -80,7 +96,7 @@
 
 ### 2.2 电脑端二级模块地图
 
-下面的名称是电脑端重构的规范名称。实现时目录名和契约文件名必须一致；每个二级模块目录都必须先创建 `CONTRACT.md`。
+下面的名称是电脑端重构的规范模块标识。每个二级模块目录都必须先创建 `CONTRACT.md`；历史短目录可以保留，但其契约必须明确该标识，且不得因目录名不同再创建一套模块。
 
 #### `app-shell`
 
@@ -155,7 +171,7 @@
 
 已有契约见 [`src/modules/route-library/CONTRACT.md`](src/modules/route-library/CONTRACT.md)。二级模块为 `route-domain`、`route-importer`、`route-qualification`、`route-catalog`、`preview-model`、`route-workspace`。
 
-本总契约对它做一处修订：原 `map-adapter` 二级模块提升为一级模块 `geo-map`。理由是它现在有两个真实调用方（航线预览和航线规划），符合 §2.1 的第一条新增条件。`route-library` 只输出与引擎无关的预览模型，由 `geo-map` 负责渲染。
+`geo-map` 是生产地图引擎的唯一归属；`route-library` 只输出与引擎无关的预览模型，由 `geo-map` 负责渲染。封存的 `route-planning` 仅可使用该公开接口，不构成生产调用方。
 
 `route-library` 不规划航线、不修改航点、不重新生成航线文件。
 
@@ -172,10 +188,10 @@
 | `mission-phase-domain` | 任务阶段状态机与合法转换 | 不发送命令，不读取文件 |
 | `preflight-check` | 起飞前门禁判定和拒绝原因码 | 不执行任务，不修改设备状态 |
 | `mission-dispatcher` | 下发上传、开始、暂停、恢复和停止命令并关联结果 | 不判断是否应该执行，不解析或规划航线内容 |
-| `mission-recovery` | 重连后依据遥测对账任务阶段 | 不重新发起任务，不修改航线文件 |
-| `mission-workspace` | 飞行页任务导轨交互 | 不承载业务规则 |
 
 `mission-control` 必须把"文件已暂存到手机""已上传到飞行器""任务已开始执行"作为三个不同阶段，不能合并成一个成功标志。
+
+重连后的安全处置属于 `mission-control` 一级门面与 `mission-dispatcher` 的协作，不存在单独的 `mission-recovery` 二级模块。飞行页交互属于 `operator-console`，不存在 `mission-workspace` 二级模块。
 
 `preflight-check` 必须把"电量未知"和"电量不足"作为两种不同的拒绝原因。任何拒绝都必须带可显示给用户的具体原因，不允许只返回布尔值。
 
@@ -196,17 +212,17 @@
 | --- | --- | --- |
 | `network-endpoint` | 枚举本机网卡、排除虚拟与隧道网卡、给出可用局域网地址 | 不保存设置，不建立连接 |
 | `rtmp-ingest` | 接收推流、按设备分配流标识、报告推流开始与结束 | 不转码，不播放 |
-| `ffmpeg-locator` | 在多个来源中定位可用转码器并报告缺失原因 | 不启动转码进程 |
-| `transcode-runner` | 转码子进程的启动、停止、异常退出和清理 | 不决定何时开始直播，不服务播放请求 |
-| `http-flv-server` | 本地分片分发与生命周期 | 不转码，不决定播放器行为 |
+| `ffmpeg-locator` | 封存的旧转码器定位支持，生产不调用 | 不启动转码进程 |
+| `transcode-runner` | 封存的旧转码进程支持，生产不调用 | 不决定何时开始直播，不服务播放请求 |
+| `http-flv-server` | 本机持续 HTTP-FLV 分发与生命周期 | 不转码，不决定播放器行为 |
 | `stream-health` | 就绪判定、无帧超时、自动停止和诊断文本 | 不启动转码，不渲染界面 |
 | `video-player` | 播放器装载与致命错误分类恢复 | 不管理服务端进程 |
 
 `network-endpoint` 必须拒绝把公网地址作为推流目标，并且必须排除虚拟机、容器和 VPN 网卡。手动覆盖地址由 `desktop-settings/network-settings` 校验后提供。
 
-`ffmpeg-locator` 找不到转码器时，必须返回可显示的具体缺失原因，不得静默失败。
+生产 RTMP/HTTP-FLV 链路不定位或启动 FFmpeg；封存的转码支持不得被生产装配重新接线。
 
-`stream-health` 在超时自动停止时必须给出诊断文本，说明是没有收到推流、转码失败还是分片未就绪。
+`stream-health` 在超时自动停止时必须给出诊断文本，说明是没有收到推流、HTTP-FLV 分发不可用还是播放器未就绪。
 
 #### `live-stream-control`
 
@@ -298,7 +314,7 @@ live-stream-control
 - 跨一级模块的界面依赖只允许发生在工作区层；
 - 判断一段代码属于哪一层的标准是：删掉界面后它是否还需要存在。需要则属于核心层。
 
-当前的工作区层模块只有 `route-library/route-workspace`、`mission-control/mission-workspace`、`device-console/device-guidance` 和 `media-pipeline/video-player`。新增工作区层模块必须先修改本契约。
+当前的工作区层模块只有 `route-library/route-workspace`、`device-console/device-guidance` 和 `media-pipeline/video-player`。新增工作区层模块必须先修改本契约。
 
 ### 2.5 模块之间的协作方式
 
@@ -353,7 +369,7 @@ live-stream-control
 | 重连后的任务安全处置：保持 `disconnected`，要求重新暂存与上传 | `mission-control` | 根模块的中继断线协调 + `mission-dispatcher` |
 | 起飞、降落、返航 | `flight-control` | `flight-command-dispatcher`、`dangerous-action-confirm` |
 | 接收飞行器视频 | `media-pipeline` | `rtmp-ingest`、`network-endpoint` |
-| 转码与本地播放 | `media-pipeline` | `ffmpeg-locator`、`transcode-runner`、`http-flv-server`、`video-player` |
+| HTTP-FLV 分发与本地播放 | `media-pipeline` | `http-flv-server`、`video-player` |
 | 视频就绪与超时诊断 | `media-pipeline` | `stream-health` |
 | 直播协议配置 | `live-stream-control` | `stream-protocol-config` |
 | 开始与停止直播 | `live-stream-control` | `stream-dispatcher` |

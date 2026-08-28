@@ -1,6 +1,6 @@
 # 飞行作业工作流模块契约
 
-状态：已批准设计，待实施
+状态：已实施；生产图传已实机验证，航线与飞行动作仍待对应实机验收
 
 ## 1. 唯一职责
 
@@ -99,11 +99,10 @@ instance.dispose() -> void
 ```ts
 {
   readonly relayOperations: RelayOperationsAdapterInstance;
-  readonly routeLibrary: RouteLibraryInstance;
-  readonly missionControl: MissionControlInstance;
-  readonly liveStreamControl: LiveStreamControlInstance;
-  readonly whipStreamControl?: WhipStreamControlInstance;
-  readonly mediaPipeline: MediaPipelineInstance;
+   readonly routeLibrary: RouteLibraryInstance;
+   readonly missionControl: MissionControlInstance;
+   readonly liveStreamControl: LiveStreamControlInstance;
+   readonly mediaPipeline: MediaPipelineInstance;
   readonly flightControl: FlightControlInstance;
   readonly deviceSettings: DeviceSettingsPanelInstance;
   readonly hardwareReadiness: {
@@ -194,11 +193,10 @@ interface WorkflowDevice {
     readonly routeId: string | null;
     readonly routeName: string | null;
   };
-  readonly mission: MissionDispatchSnapshot;
-  readonly preflight: PreflightSummary;
-  readonly stream: StreamDispatchSnapshot;
-  readonly whipStream: WhipDispatchSnapshot;
-  readonly video: {
+   readonly mission: MissionDispatchSnapshot;
+   readonly preflight: PreflightSummary;
+   readonly stream: StreamDispatchSnapshot;
+   readonly video: {
     readonly phase: "unavailable" | "awaiting-ingest" | "awaiting-playback" | "ready" | "failed";
     readonly selected: boolean;
   };
@@ -209,7 +207,7 @@ interface WorkflowDevice {
 
 `preflight` 必须直接投影任务控制的同一套启动前检查结果，包含 `ready` 与按既有契约固定排序的阻塞项；不得创建第二套规则。只有“已上传任务”的设备才可以是 `ready`。其它任务阶段一律返回 `not-applicable`，而不是假装预检通过。
 
-媒体管线未运行、设备还未推流、播放列表未就绪或视频播放器未选择时，视频均不可被报告为 `ready`。快照不得含 `playbackUrl`；未来 IPC 白名单可单独提供受控播放资源入口。
+媒体管线未运行、设备还未推流、HTTP-FLV 分发未就绪或视频播放器未选择时，视频均不可被报告为 `ready`。快照不得含 `playbackUrl`；未来 IPC 白名单可单独提供受控播放资源入口。
 
 ## 6. 航线管理与分配规则
 
@@ -253,13 +251,13 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 ## 8. 图传与媒体规则
 
-1. `checkHardwareReadiness(deviceId)` 只评估当前已知事实，返回旧图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI、媒体或低延迟命令。
+1. `checkHardwareReadiness(deviceId)` 只评估当前已知事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
 2. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须通过 `legacy-video` 实机预检；未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。通过后仍只委托 `live-stream-control`。
 3. `stopStream(deviceId)` 不经过实机预检，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
 4. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
 5. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。
 6. 图传与航线任务彼此独立：可以在航线开始前或飞行期间启动；图传失败不修改任务状态，任务失败不替其他设备停止图传。
-7. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`；若装配了低延迟旁路，还必须调用 `whipStreamControl.recordDisconnected(deviceId)`。同一设备编号换了会话时同样必须复位这两条图传车道，不得继续显示“已启动”。任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
+7. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`。同一设备编号换了会话时同样必须复位生产 RTMP 图传车道，不得继续显示“已启动”。任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
 8. `clearVideo()` 只清空本地播放器选择，不向手机发送停止推流命令。
 9. `refreshMedia()` 调用已运行媒体管线的 `mediaPipeline.evaluate(now())`，并据其返回的既有媒体快照更新工作流快照。它不启动媒体服务、不构造 RTMP 地址，也不创建额外的转码、播放或健康状态机。仅当媒体快照中某在线设备已 `failed`、且该设备图传仍为 `starting` 或 `streaming` 时，必须对该设备调用 `stopStream`；设备已离线时不得补发停止。
 10. `notifyPlaybackReady(deviceId)` 只委托 `mediaPipeline.notifyPlaybackReady(deviceId)`。生产路径在 RTMP publish 时已由 `media-pipeline` 自行标记 ready；该入口保留为幂等补标，不启动图传。
@@ -287,7 +285,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 1. 从 `devices` 移除该设备；
 2. 清除该设备的本地航线分配；
 3. 让 `mission-control` 保留其 `disconnected` 任务终态；
-4. 调用 `live-stream-control.recordDisconnected(deviceId)`；若存在 `whipStreamControl`，同时调用其 `recordDisconnected(deviceId)`；
+4. 调用 `live-stream-control.recordDisconnected(deviceId)`；
 5. 用保存的确认 ID 取消该设备尚未确认的直接飞行动作；
 6. 不发送 `wayline.stop`、`live-stream.stop` 或任何飞控命令；
 7. 不自动重连、不自动重传、不自动恢复任务或图传。
@@ -316,7 +314,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 ## 13. 验收与测试
 
-实现前必须在本目录继续建立各二级模块的中文契约。建议内部拆分为：
+实现已经按下列二级模块拆分；每个二级模块都有独立中文契约。后续修改必须保持职责归属不变：
 
 | 二级模块 | 唯一职责 |
 | --- | --- |
@@ -331,7 +329,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 2. 航线导入的成功、拒绝、取消和重复语义，航线选择与预览，合格/不合格航线分配、在途任务禁止重分配、删除已分配航线拒绝；
 3. 所有任务阶段及“暂存/上传/启动接受/实际执行”的严格区分；
 4. 全部预检阻塞项、空设备、未知能力、电量边界和设备状态未知；
-5. 图传控制成功、媒体刷新中的媒体未到达、播放列表未就绪、可播放、播放器失败、时钟失败和视频选择切换；
+5. 图传控制成功、媒体刷新中的媒体未到达、HTTP-FLV 分发未就绪、可播放、播放器失败、时钟失败和视频选择切换；
 6. 三项直接飞控动作、一次性确认、取消、过期、跨设备隔离和遥测迟到；
 7. 两类设备设置的读取、写入、门禁、完整确认快照、同设备同域互斥和多设备隔离；
 8. 断连、会话替换、迟到任务/图传/飞控结果、重复释放和订阅者异常；

@@ -18,7 +18,7 @@ function fixture(options: { readonly setSource?: (input: Readonly<typeof source>
 }
 
 describe("media-pipeline video-player 契约", () => {
-  it("将合法 HLS 地址交给适配器并支持替换设备", () => {
+  it("将合法 HTTP-FLV 地址交给适配器并支持替换设备", () => {
     const { player, sources } = fixture();
     expect(player.snapshot()).toEqual({ phase: "idle", deviceId: null, revision: 0, diagnostic: null });
     const input = { ...source };
@@ -38,6 +38,16 @@ describe("media-pipeline video-player 契约", () => {
     expect(player.select({ deviceId: "a".repeat(128), url: source.url })).toMatchObject({ ok: true, value: { deviceId: "a".repeat(128) } });
     expect(player.clear()).toEqual({ ok: true, value: { phase: "idle", deviceId: null, revision: 2, diagnostic: null } });
     expect(clears()).toBe(1);
+  });
+
+  it("拒绝已封存 HLS 播放列表，生产播放器只接收 HTTP-FLV", () => {
+    const { player, sources } = fixture();
+    expect(player.select({ deviceId: "drone-a", url: "http://127.0.0.1:18080/live/index.m3u8" })).toEqual({
+      ok: false,
+      code: "INVALID_INPUT",
+      value: player.snapshot(),
+    });
+    expect(sources).toHaveLength(0);
   });
 
   it("将源加载异常转换为脱敏失败并允许重新选择", () => {

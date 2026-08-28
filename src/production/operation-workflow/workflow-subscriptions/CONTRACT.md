@@ -1,6 +1,6 @@
 # 工作流订阅协调模块契约
 
-状态：已批准设计，待实施
+状态：已实施
 
 ## 唯一职责
 
@@ -9,12 +9,11 @@
 ## 接口
 
 ```ts
-WorkflowSubscriptions.create(dependencies, callbacks) -> instance
-instance.subscribe(listener) -> unsubscribe
+WorkflowSubscriptions.create(sources, onChange) -> instance
 instance.dispose() -> void
 ```
 
-第一次中继快照只建立在线基线，不能误判断连。后续设备消失必须只通知对应设备；订阅、退订和监听器异常均被隔离。`dispose` 幂等，之后任何迟到事件都被忽略。
+`sources` 是父模块已经选定的中继、任务、图传和飞控订阅源；`onChange` 是父模块提供的单一变更回调。模块创建时立即订阅每个源，并把任一事件归并为一次 `onChange` 调用。订阅建立或回调抛出的异常均被隔离。`dispose` 幂等，释放每个已建立订阅；之后任何迟到事件都被忽略。
 
 ## 验收
 
