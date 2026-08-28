@@ -4,16 +4,11 @@ import { DeviceFactSummary } from "../device-fact-summary/index.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight";
-type WhepListener = (input: unknown) => void;
 type RendererBridge = {
   readonly invoke: (name: string, input?: unknown) => Promise<unknown>;
   readonly relayHint?: string;
   readonly incidentLog?: string;
   readonly selectRouteFile?: () => Promise<{ ok?: boolean; fileName?: string; bytes?: Uint8Array }>;
-  readonly onWhepSelect?: (listener: WhepListener) => () => void;
-  readonly onWhepClear?: (listener: WhepListener) => () => void;
-  readonly whepReady?: (generation: number) => void;
-  readonly whepFatal?: (generation: number) => void;
 };
 
 const state: { workspace: WorkspaceName; missionDeviceId: string | null; streamDeviceId: string | null } = {
@@ -68,7 +63,6 @@ const operatorNotice = (value: unknown): string => {
   if (reason === "VIDEO_TRANSPORT_FAILED") return "图传未能完成";
   if (reason === "VIDEO_TRANSPORT_UNAVAILABLE") return "图传当前不可用";
   if (code === "RELAY_REJECTED") return "手机拒绝了该命令，请在手机上看原因后重试";
-  if (code === "WEBRTC_MEDIA_UNAVAILABLE" || code === "TARGET_INVALID") return "该图传方式不可用，请使用「启动图传」";
   if (code === "CAPABILITY_BLOCKED") return "当前飞机不支持图传";
   if (code === "OPERATION_IN_PROGRESS") return "上一条命令还在处理，请稍候";
   if (code === "VIDEO_NOT_READY") return "画面还没出来，请稍候或重新启动图传";
@@ -87,8 +81,6 @@ let lastPlaybackHealthAt = 0;
 let attachedAtMs = 0;
 let lastPaintAtMs = 0;
 let lastSeenCurrentTime = 0;
-let whepPeer: RTCPeerConnection | null = null;
-let whepGeneration = 0;
 
 const NO_FRAME_MS = 8_000;
 const STALL_MS = 12_000;
@@ -233,7 +225,6 @@ const attachVideo = (url: string): void => {
     reportPlaybackHealth(video);
     return;
   }
-  closeWhep();
   clearFlvRecoverTimer();
   detachVideo();
   attachedUrl = url;
@@ -270,117 +261,6 @@ const attachVideo = (url: string): void => {
   play();
 };
 
-const whepTarget = (value: unknown): Readonly<{ readonly generation: number; readonly deviceId: string; readonly url: string }> | null => {
-  const generation = read(value, "generation");
-  const deviceId = read(value, "deviceId");
-  const url = read(value, "url");
-  if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation <= 0 || typeof deviceId !== "string" || deviceId.trim().length === 0 || /[\p{Cc}\\/]/u.test(deviceId) || typeof url !== "string") return null;
-  try {
-    const parsed = new URL(url);
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") || parsed.port.length === 0 || parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== "" || parsed.pathname !== `/live/${encodeURIComponent(deviceId)}/whep`) return null;
-    return Object.freeze({ generation, deviceId, url });
-  } catch {
-    return null;
-  }
-};
-
-const closeWhep = (): void => {
-  const peer = whepPeer;
-  whepPeer = null;
-  if (peer !== null) {
-    peer.ontrack = null;
-    peer.onconnectionstatechange = null;
-    peer.oniceconnectionstatechange = null;
-    try { peer.close(); } catch { /* stale PeerConnection cleanup is best effort */ }
-  }
-  const video = el("video") as HTMLVideoElement;
-  if (flvPlayer !== null || video.srcObject !== null) detachVideo();
-};
-
-const waitForIce = async (peer: RTCPeerConnection): Promise<void> => {
-  if (peer.iceGatheringState === "complete") return;
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = (): void => {
-      if (settled) return;
-      settled = true;
-      peer.removeEventListener("icegatheringstatechange", onState);
-      window.clearTimeout(timer);
-      resolve();
-    };
-    const onState = (): void => { if (peer.iceGatheringState === "complete") finish(); };
-    const timer = window.setTimeout(finish, 5_000);
-    peer.addEventListener("icegatheringstatechange", onState);
-  });
-};
-
-const reportWhepFatal = (generation: number): void => {
-  if (generation !== whepGeneration) return;
-  try { bridge().whepFatal?.(generation); } catch { /* IPC failure must not escape the render loop */ }
-  show("低延迟画面无法接通，请改用「启动图传」");
-};
-
-const connectWhep = async (input: unknown): Promise<void> => {
-  const target = whepTarget(input);
-  if (target === null) {
-    const generation = read(input, "generation");
-    if (typeof generation === "number" && Number.isSafeInteger(generation)) reportWhepFatal(generation);
-    return;
-  }
-  const token = target.generation;
-  whepGeneration = token;
-  closeWhep();
-  try {
-    const peer = new RTCPeerConnection({ iceServers: [] });
-    whepPeer = peer;
-    peer.addTransceiver("video", { direction: "recvonly" });
-    peer.onconnectionstatechange = () => {
-      if (whepPeer === peer && (peer.connectionState === "failed" || peer.connectionState === "closed")) reportWhepFatal(token);
-    };
-    peer.oniceconnectionstatechange = () => {
-      if (whepPeer === peer && peer.iceConnectionState === "failed") reportWhepFatal(token);
-    };
-    peer.ontrack = (event) => {
-      if (whepPeer !== peer || token !== whepGeneration) return;
-      const video = el("video") as HTMLVideoElement;
-      const stream = event.streams[0] ?? new MediaStream([event.track]);
-      video.srcObject = stream;
-      video.muted = true;
-      video.defaultMuted = true;
-      video.volume = 0;
-      const ready = (): void => {
-        if (whepPeer !== peer || token !== whepGeneration) return;
-        try { bridge().whepReady?.(token); } catch { /* renderer-to-host IPC is isolated */ }
-      };
-      video.addEventListener("loadeddata", ready, { once: true });
-      void video.play().then(() => { if (video.readyState >= 2) ready(); }).catch(() => { if (video.readyState >= 2) ready(); });
-      if (video.readyState >= 2) ready();
-    };
-    const offer = await peer.createOffer();
-    await peer.setLocalDescription(offer);
-    await waitForIce(peer);
-    if (whepPeer !== peer || token !== whepGeneration) return;
-    const sdp = peer.localDescription?.sdp;
-    if (typeof sdp !== "string" || sdp.length === 0) throw new Error("WHEP offer missing");
-    const response = await fetch(target.url, { method: "POST", headers: { "Content-Type": "application/sdp", Accept: "application/sdp" }, credentials: "omit", body: sdp });
-    if (!response.ok) throw new Error("WHEP request failed");
-    const answer = await response.text();
-    if (answer.trim().length === 0) throw new Error("WHEP answer missing");
-    await peer.setRemoteDescription({ type: "answer", sdp: answer });
-  } catch {
-    if (token !== whepGeneration) return;
-    closeWhep();
-    reportWhepFatal(token);
-  }
-};
-
-const clearWhep = (input: unknown): void => {
-  const generation = read(input, "generation");
-  if (typeof generation === "number" && Number.isSafeInteger(generation) && generation < whepGeneration) return;
-  if (typeof generation === "number" && Number.isSafeInteger(generation)) whepGeneration = generation;
-  closeWhep();
-};
-
 const accepted = (value: unknown): boolean => value !== null && typeof value === "object" && (value as { ok?: unknown }).ok === true;
 
 const playbackUrl = (value: unknown): string | null => {
@@ -394,7 +274,6 @@ const playbackUrl = (value: unknown): string | null => {
 };
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
-  if (whepPeer !== null) return;
   if (!view.playbackReady) {
     if (attachedUrl !== null) detachVideo();
     return;
@@ -470,11 +349,6 @@ async function run(action: string, invokeName: string, input: unknown): Promise<
   const decision = OperatorConsole.evaluate(action, view);
   if (!decision.ok) { blocked(action, decision.reason ?? "无法执行"); return; }
   show(operatorNotice(await bridge().invoke(invokeName, input)));
-  await render();
-}
-
-async function runWebRtcService(invokeName: string): Promise<void> {
-  show(operatorNotice(await bridge().invoke(invokeName, undefined)));
   await render();
 }
 
@@ -746,35 +620,20 @@ el("route-remove").addEventListener("click", async () => {
   document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     const action = (button as HTMLButtonElement).dataset.action ?? "";
-    if (action === "webrtc-start" || action === "webrtc-stop") {
-      await runWebRtcService(action);
-      return;
-    }
     const view = await projectView();
     if (action === "hardware-readiness") {
       if (view.missionDeviceId === null) { show("请先选择任务飞机"); return; }
       show(operatorNotice(await bridge().invoke("hardware-readiness", { deviceId: view.missionDeviceId })));
       return;
     }
-    const streamAction = action.startsWith("stream-") || action.startsWith("webrtc-stream-");
+    const streamAction = action.startsWith("stream-");
     const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
     if (action === "stream-select") {
       await run(action, "stream-select", { deviceId });
       show("图传已选中，等待本页出画");
       return;
     }
-    if (action === "webrtc-stream-clear") {
-      closeWhep();
-      await runWebRtcService("webrtc-stream-clear");
-      return;
-    }
-    if (action === "webrtc-stream-start") detachVideo();
     if (action === "stream-stop") detachVideo();
-    if (action === "webrtc-stream-stop") closeWhep();
-    if (action === "webrtc-stream-select") {
-      await run("stream-select", "webrtc-stream-select", { deviceId });
-      return;
-    }
     const names: Record<string, string> = {
       "mission-stage": "mission-stage",
       "mission-upload": "mission-upload",
@@ -784,15 +643,12 @@ el("route-remove").addEventListener("click", async () => {
       "mission-stop": "mission-stop",
       "stream-start": "stream-start",
       "stream-stop": "stream-stop",
-      "webrtc-stream-start": "webrtc-stream-start",
-      "webrtc-stream-stop": "webrtc-stream-stop",
       "flight-takeoff": "flight-request",
       "flight-land": "flight-request",
       "flight-return-home": "flight-request",
     };
     const invokeName = names[action];
     if (invokeName === undefined) return;
-    const decisionAction = action.startsWith("webrtc-") ? action.slice("webrtc-".length) : action;
     const input = invokeName === "flight-request"
       ? { deviceId, action: action.replace("flight-", "") }
       : { deviceId };
@@ -803,7 +659,7 @@ el("route-remove").addEventListener("click", async () => {
         return;
       }
     }
-     await run(decisionAction, invokeName, input);
+     await run(action, invokeName, input);
   });
 });
 

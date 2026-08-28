@@ -35,6 +35,28 @@ describe("工作流动作模块契约", () => {
     expect(calls).toEqual([]);
   });
 
+  it("缺少设置补丁时仍委托原写入方法且不补造实参", async () => {
+    const calls: unknown[][] = [];
+    const actions = WorkflowActions.create({
+      online: () => true,
+      assignedRoute: () => null,
+      missionControl: {},
+      liveStreamControl: {},
+      deviceSettings: {
+        readTransmission: async (...args: unknown[]) => { calls.push(["readTransmission", ...args]); return { ok: true }; },
+        writeTransmission: async (...args: unknown[]) => { calls.push(["writeTransmission", ...args]); return { ok: true }; },
+        readCamera: async (...args: unknown[]) => { calls.push(["readCamera", ...args]); return { ok: true }; },
+        writeCamera: async (...args: unknown[]) => { calls.push(["writeCamera", ...args]); return { ok: true }; },
+      },
+      flightControl: {},
+      settingsAllowed: () => true,
+    });
+
+    await expect(actions.writeTransmission("relay-a", undefined)).resolves.toEqual({ ok: true, value: { ok: true } });
+    await expect(actions.writeCamera("relay-a", undefined)).resolves.toEqual({ ok: true, value: { ok: true } });
+    expect(calls).toEqual([["writeTransmission", "relay-a"], ["writeCamera", "relay-a"]]);
+  });
+
   it("飞控确认只委托公开确认接口并保留下游拒绝结果", async () => {
     const actions = WorkflowActions.create({
       online: () => true,

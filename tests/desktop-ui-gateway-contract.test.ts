@@ -245,39 +245,11 @@ describe("DesktopUiGateway", () => {
     await expect(malformed.invoke("network.hint", undefined)).resolves.toEqual({ ok: true, value: { hints: [] } });
   });
 
-  it("通过独立 webrtc 白名单调用低延迟旁路，并在缺失时稳定失败", async () => {
-    const calls: string[] = [];
-    const lowLatency = {
-      start: async () => { calls.push("start"); return { ok: true, value: { phase: "running", endpoint: "private" } }; },
-      stop: async () => { calls.push("stop"); return { ok: true, value: { phase: "idle" } }; },
-      refresh: async (now: unknown) => { calls.push(`refresh:${typeof now}`); return { ok: true, value: { phase: "running" } }; },
-      startStream: async (deviceId: string) => { calls.push(`stream-start:${deviceId}`); return { ok: true, value: { phase: "streaming" } }; },
-      stopStream: async (deviceId: string) => { calls.push(`stream-stop:${deviceId}`); return { ok: true, value: { phase: "idle" } }; },
-      selectPlayer: (deviceId: string) => { calls.push(`stream-select:${deviceId}`); return { ok: true, value: { phase: "playing" } }; },
-      clearPlayer: () => { calls.push("stream-clear"); return { ok: true, value: { phase: "idle" } }; },
-      snapshot: () => ({ phase: "running", endpoint: "private" }),
-      dispose: async () => undefined,
-    };
+  it("拒绝已封存旁路的方法，且不会调用工作流", async () => {
     const gateway = DesktopUiGateway.create({
-      application: { snapshot: () => ({ phase: "running" }), subscribe: () => () => undefined, workflow: () => ({}), lowLatency: () => lowLatency },
+      application: { snapshot: () => ({ phase: "running" }), subscribe: () => () => undefined, workflow: () => ({}) },
     });
-
-    await expect(gateway.invoke("webrtc.start", undefined)).resolves.toMatchObject({ ok: true, value: { ok: true } });
-    await expect(gateway.invoke("webrtc.stop", undefined)).resolves.toMatchObject({ ok: true, value: { ok: true } });
-    await expect(gateway.invoke("webrtc.refresh", undefined)).resolves.toMatchObject({ ok: true, value: { ok: true } });
-    await expect(gateway.invoke("webrtc.stream-start", { deviceId: "phone-1" })).resolves.toMatchObject({ ok: true, value: { ok: true } });
-    await expect(gateway.invoke("webrtc.stream-stop", { deviceId: "phone-1" })).resolves.toMatchObject({ ok: true, value: { ok: true } });
-    await expect(gateway.invoke("webrtc.stream-select", { deviceId: "phone-1" })).resolves.toMatchObject({ ok: true, value: { ok: true } });
-    await expect(gateway.invoke("webrtc.stream-clear", undefined)).resolves.toMatchObject({ ok: true, value: { ok: true } });
-    expect(calls).toEqual(["start", "stop", "refresh:number", "stream-start:phone-1", "stream-stop:phone-1", "stream-select:phone-1", "stream-clear"]);
-    expect(JSON.stringify(await gateway.invoke("webrtc.start", undefined))).not.toContain("private");
-
-    await expect(gateway.invoke("webrtc.start", {})).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
-    await expect(gateway.invoke("webrtc.stream-select", undefined)).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
-    await expect(gateway.invoke("gateway-invoke", { method: "webrtc.start", input: undefined })).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
-
-    const missing = DesktopUiGateway.create({ application: { snapshot: () => ({}), subscribe: () => () => undefined, workflow: () => ({}) } });
-    await expect(missing.invoke("webrtc.start", undefined)).resolves.toEqual({ ok: false, code: "DEPENDENCY_FAILURE" });
-    await expect(missing.invoke("webrtc.stream-start", { deviceId: "phone-1" })).resolves.toEqual({ ok: false, code: "DEPENDENCY_FAILURE" });
+    await expect(gateway.invoke("webrtc.start", undefined)).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
+    await expect(gateway.invoke("webrtc.stream-start", { deviceId: "phone-1" })).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
   });
 });

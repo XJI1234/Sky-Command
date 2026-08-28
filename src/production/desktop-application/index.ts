@@ -8,10 +8,7 @@ import type { MissionDispatcherOptions } from "../../modules/mission-control/mis
 import { NetworkSettings, type NetworkSettingsValue } from "../../modules/desktop-settings/network-settings/index.js";
 import { RouteLibrary, type RouteLibraryCreateOptions } from "../../modules/route-library/index.js";
 import type { JsonObject, JsonValue } from "../../modules/relay-link/protocol-core/index.js";
-import { WebRtcMedia, type WebRtcMediaDependencies, type WebRtcMediaInstance, type WebRtcMediaOptions } from "../../modules/webrtc-media/index.js";
-import { WhipStreamControl } from "../../modules/whip-stream-control/index.js";
 import { DesktopRuntime, type DesktopRuntimeCode, type DesktopRuntimeInstance } from "../desktop-runtime/index.js";
-import { LowLatencyMedia, type LowLatencyMediaInstance } from "../low-latency-media/index.js";
 import { NodeRuntime, type NodeRelayOptions } from "../node-runtime/index.js";
 import { OperationWorkflow } from "../operation-workflow/index.js";
 import { RelayOperationsAdapter, type RelaySettingsGateway as AdapterRelaySettingsGateway } from "../relay-operations-adapter/index.js";
@@ -29,13 +26,6 @@ export interface DesktopApplicationOptions {
     readonly startInput: unknown;
   }>;
   readonly legacyMediaRequired?: boolean;
-  readonly lowLatency?: Readonly<{
-    readonly media: Readonly<{
-      readonly dependencies: WebRtcMediaDependencies;
-      readonly options: WebRtcMediaOptions;
-      readonly startInput: unknown;
-    }>;
-  }>;
   readonly mission: MissionDispatcherOptions;
   readonly flight: FlightControlOptions;
   readonly hardwareReadiness: Readonly<{
@@ -66,7 +56,6 @@ export interface DesktopApplicationInstance {
   readonly snapshot: () => DesktopApplicationSnapshot;
   readonly subscribe: (listener: (snapshot: DesktopApplicationSnapshot) => void) => () => void;
   readonly workflow: () => ReturnType<typeof OperationWorkflow.create>;
-  readonly lowLatency: () => LowLatencyMediaInstance | null;
   readonly dispose: () => Promise<void>;
 }
 
@@ -114,9 +103,6 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
   try {
     const source = record(value);
     const media = record(source?.media);
-    const lowLatency = source?.lowLatency;
-    const lowLatencySource = lowLatency === undefined ? null : record(lowLatency);
-    const lowLatencyMedia = lowLatencySource === null ? null : record(lowLatencySource.media);
     const hardwareReadiness = record(source?.hardwareReadiness);
     return source !== null
       && record(source.network) !== null
@@ -126,7 +112,6 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
       && record(media.options) !== null
       && record(media.startInput) !== null
       && (source.legacyMediaRequired === undefined || typeof source.legacyMediaRequired === "boolean")
-      && (lowLatency === undefined || (lowLatencySource !== null && lowLatencyMedia !== null && record(lowLatencyMedia.dependencies) !== null && record(lowLatencyMedia.options) !== null))
       && record(source.mission) !== null
       && record(source.flight) !== null
       && hardwareReadiness !== null
@@ -187,16 +172,6 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       relay: operations.streamGateway(),
       capabilityGate: DeviceConsole.CapabilityGate,
     });
-    let whipStreamControl: ReturnType<typeof WhipStreamControl.create> | null = null;
-    const lowLatency = options.lowLatency === undefined ? null : (() => {
-      const media = WebRtcMedia.create(options.lowLatency.media.dependencies, options.lowLatency.media.options);
-      whipStreamControl = WhipStreamControl.create({
-        media,
-        relay: operations.whipStreamGateway(),
-        capabilityGate: DeviceConsole.CapabilityGate,
-      });
-      return LowLatencyMedia.create({ media, control: whipStreamControl, startInput: options.lowLatency.media.startInput });
-    })();
     const flightControl = FlightControl.create({
       dispatcher: FlightCommandDispatcher.create({
         relay: operations.flightGateway(),
@@ -227,9 +202,8 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       deviceSettings,
       hardwareReadiness: options.hardwareReadiness,
       now: options.now,
-      ...(whipStreamControl === null ? {} : { whipStreamControl }),
-    } as never);
-    return freeze({ ok: true as const, value: instance({ runtime, workflow, operations, routeLibrary: routeCreated.value, missionControl, flightControl, lowLatency }) });
+    });
+    return freeze({ ok: true as const, value: instance({ runtime, workflow, operations, routeLibrary: routeCreated.value, missionControl, flightControl }) });
   } catch {
     return freeze({ ok: false as const, code: "DEPENDENCY_FAILURE" as const });
   }
@@ -242,7 +216,6 @@ function instance(dependencies: Readonly<{
   readonly routeLibrary: Exclude<ReturnType<typeof RouteLibrary.create>, { readonly ok: false }>['value'];
   readonly missionControl: ReturnType<typeof MissionControl.create>;
   readonly flightControl: ReturnType<typeof FlightControl.create>;
-  readonly lowLatency: LowLatencyMediaInstance | null;
 }>): DesktopApplicationInstance {
   let phase: DesktopApplicationPhase = "idle";
   let revision = 0;
@@ -262,10 +235,6 @@ function instance(dependencies: Readonly<{
   const workflowSubscription = dependencies.workflow.subscribe(() => { if (!disposed) publish(); });
   const transition = (next: DesktopApplicationPhase): void => { phase = next; publish(); };
   const running = (code: DesktopRuntimeCode | undefined, value: DesktopApplicationSnapshot): DesktopApplicationResult => result(code === undefined, value, code);
-  const stopLowLatency = async (): Promise<boolean> => {
-    if (dependencies.lowLatency === null) return true;
-    try { return (await dependencies.lowLatency.stop()).ok; } catch { return false; }
-  };
   const start = (): Promise<DesktopApplicationResult> => {
     if (disposed) return Promise.resolve(result(false, snapshot(), "DISPOSED"));
     if (operation !== null) return Promise.resolve(result(false, snapshot(), "OPERATION_IN_PROGRESS"));
@@ -302,12 +271,11 @@ function instance(dependencies: Readonly<{
           }
         } catch { /* mission inventory failure must not block media/relay stop */ }
       }
-      const lowLatencyClean = await stopLowLatency();
       const stopped = await dependencies.runtime.stop();
       operation = null;
       transition("idle");
       if (!stopped.ok) return running(stopped.code, snapshot());
-      return lowLatencyClean ? result(true, snapshot()) : result(false, snapshot(), "DEPENDENCY_FAILURE");
+      return result(true, snapshot());
     })();
     return active;
   };
@@ -322,7 +290,6 @@ function instance(dependencies: Readonly<{
       return () => { if (subscribed) { subscribed = false; listeners.delete(listener); } };
     },
     workflow: () => dependencies.workflow,
-    lowLatency: () => dependencies.lowLatency,
     dispose: async () => {
       if (disposed) return;
       if (active !== null) await active;
@@ -334,8 +301,6 @@ function instance(dependencies: Readonly<{
       dependencies.missionControl.dispose();
       dependencies.routeLibrary.clear();
       dependencies.flightControl.dispose();
-      await stopLowLatency();
-      try { dependencies.lowLatency?.dispose(); } catch { /* low-latency disposal is isolated */ }
       await dependencies.runtime.dispose();
       dependencies.operations.dispose();
       listeners.clear();

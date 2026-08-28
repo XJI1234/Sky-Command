@@ -350,7 +350,7 @@ describe("操作台工作区", () => {
     expect(noAircraft.streamCanStart).toBe(false);
   });
 
-  it("封存低延迟图传：标签不优先 WHIP，且拒绝 webrtc 操作", () => {
+  it("封存低延迟图传后，生产图传不受归档状态影响", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
         whipStream: { phase: "streaming" },
@@ -359,29 +359,23 @@ describe("操作台工作区", () => {
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(view.streamLabel).toBe("图传未就绪：另一路图传占用中");
+    expect(view.streamLabel).toBe("图传可启动");
     expect(OperatorConsole.evaluate("webrtc-stream-start", view)).toEqual({
       ok: false,
-      reason: "请使用页面上的「启动图传」",
+      reason: "未知操作",
     });
     expect(OperatorConsole.evaluate("webrtc-stream-stop", view)).toEqual({
       ok: false,
-      reason: "请使用页面上的「启动图传」",
+      reason: "未知操作",
     });
-    expect(OperatorConsole.evaluate("stream-start", view)).toEqual({
-      ok: false,
-      reason: "另一路图传正在使用，请先停止",
-    });
+    expect(OperatorConsole.evaluate("stream-start", view)).toEqual({ ok: true });
 
     const hlsView = OperatorConsole.project({
       snapshot: snapshot([device({ stream: { phase: "streaming" } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(OperatorConsole.evaluate("webrtc-stream-start", hlsView)).toEqual({
-      ok: false,
-      reason: "请使用页面上的「启动图传」",
-    });
+    expect(OperatorConsole.evaluate("webrtc-stream-start", hlsView)).toEqual({ ok: false, reason: "未知操作" });
     expect(OperatorConsole.evaluate("stream-start", hlsView)).toEqual({ ok: true });
   });
 

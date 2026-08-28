@@ -92,7 +92,7 @@ async function launch(): Promise<void> {
   let nextConfirmationId = 0;
   journal.record({ link: "phone-pc", level: "INFO", event: "RELAY_HINT", detail: `relay ${relayHint}` });
   app.setName("Sky Command");
-  // WHIP/WHEP 旁路已封存：不装配 lowLatency，飞行页只走 RTMP→HTTP-FLV。
+  // 飞行页只装配已验证的 RTMP→HTTP-FLV 图传路径。
   const mediaPorts = createMediaPorts(mediaLogger(journal));
   let window: BrowserWindow | null = null;
   const created = DesktopApplication.create({

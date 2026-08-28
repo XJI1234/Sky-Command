@@ -1,10 +1,12 @@
-type Source = Readonly<{ readonly subscribe?: (listener: () => void) => () => void }>;
+import type { WorkflowSubscriptionPort } from "../ports.js";
+
+type Source = WorkflowSubscriptionPort;
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 
 function create(sources: readonly Source[], onChange: () => void) {
   let disposed = false;
   const subscriptions = sources.map((source) => {
-    try { return typeof source.subscribe === "function" ? source.subscribe(() => { if (!disposed) onChange(); }) : () => undefined; }
+    try { return source.subscribe(() => { if (!disposed) onChange(); }); }
     catch { return () => undefined; }
   });
   return freeze({

@@ -626,7 +626,6 @@ describe("飞行作业工作流模块契约", () => {
     let sessionId = "session-1";
     let signal!: () => void;
     const disconnected: string[] = [];
-    const whip: string[] = [];
     const cancelled: Array<{ deviceId: string; confirmationId: string }> = [];
     let pending: { deviceId: string; action: string; confirmationId: string } | null = null;
     const workflow = workflowWith({
@@ -645,11 +644,6 @@ describe("飞行作业工作流模块契约", () => {
         list: () => [],
         recordDisconnected: (id: string) => { disconnected.push(id); return { phase: "disconnected" }; },
         forget: () => false,
-        subscribe: () => () => undefined,
-      },
-      whipStreamControl: {
-        get: () => ({ deviceId: "relay-a", phase: "streaming", lastOperation: "start", failureCode: null, reason: null }),
-        recordDisconnected: (id: string) => { whip.push(id); return { phase: "disconnected" }; },
         subscribe: () => () => undefined,
       },
       flightControl: {
@@ -678,7 +672,6 @@ describe("飞行作业工作流模块契约", () => {
     sessionId = "session-2";
     signal();
     expect(disconnected).toEqual(["relay-a"]);
-    expect(whip).toEqual(["relay-a"]);
     expect(cancelled).toEqual([{ deviceId: "relay-a", confirmationId: "confirm-old" }]);
     expect(workflow.snapshot().devices[0]?.pendingFlightAction).toBeNull();
   });
@@ -720,21 +713,25 @@ describe("飞行作业工作流模块契约", () => {
     expect(offlineStops).toEqual([]);
   });
 
-  it("设备离线时同时标记旧图传和低延迟图传为断连", () => {
+  it("设备离线时标记生产 RTMP 图传为断连", () => {
     let online = true;
     let signal!: () => void;
-    const whip: string[] = [];
+    const disconnected: string[] = [];
     const workflow = workflowWith({
       relayOperations: { devices: () => online ? [{ deviceId: "relay-a" }] : [], telemetry: () => null, subscribe: (listener: () => void) => { signal = listener; return () => undefined; } },
-      whipStreamControl: {
-        get: () => ({ deviceId: "relay-a", phase: "streaming", lastOperation: "start", failureCode: null, reason: null }),
-        recordDisconnected: (id: string) => { whip.push(id); return { phase: "disconnected" }; },
+      liveStreamControl: {
+        start: async () => ({ ok: true }),
+        stop: async () => ({ ok: true }),
+        get: () => ({ deviceId: "relay-a", phase: "streaming" }),
+        list: () => [],
+        recordDisconnected: (id: string) => { disconnected.push(id); return { phase: "disconnected" }; },
+        forget: () => false,
         subscribe: () => () => undefined,
       },
     });
-    expect(workflow.snapshot().devices[0]).toMatchObject({ whipStream: { phase: "streaming" } });
+    expect(workflow.snapshot().devices[0]).toMatchObject({ stream: { phase: "streaming" } });
     online = false;
     signal();
-    expect(whip).toEqual(["relay-a"]);
+    expect(disconnected).toEqual(["relay-a"]);
   });
 });

@@ -3,16 +3,11 @@ import { WorkflowSnapshot } from "./workflow-snapshot/index.js";
 import { WorkflowSubscriptions } from "./workflow-subscriptions/index.js";
 import { WorkflowActions } from "./workflow-actions/index.js";
 import { createConnectionHold } from "./connection-hold.js";
+import type { OperationWorkflowDependencies, RouteLibraryPort } from "./ports.js";
 import { CapabilityGate } from "../../modules/device-console/index.js";
 import { HardwareReadiness, type HardwareReadinessResult, type HardwareReadinessTarget } from "../../modules/hardware-readiness/index.js";
 
 type RecordValue = Record<string, unknown>;
-interface Dependencies {
-  readonly relayOperations: RecordValue; readonly routeLibrary: RecordValue; readonly missionControl: RecordValue;
-  readonly liveStreamControl: RecordValue; readonly mediaPipeline: RecordValue; readonly flightControl: RecordValue;
-  readonly deviceSettings: RecordValue; readonly whipStreamControl?: RecordValue; readonly now: () => number;
-  readonly hardwareReadiness: RecordValue;
-}
 type WorkflowResult = Readonly<{ readonly ok: true; readonly value?: unknown }> | Readonly<{ readonly ok: false; readonly code: string; readonly value?: unknown }>;
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
@@ -20,13 +15,8 @@ const record = (value: unknown): RecordValue | null => value !== null && typeof 
 const read = (value: unknown, key: string): unknown => { try { return record(value)?.[key]; } catch { return undefined; } };
 const success = (value?: unknown): WorkflowResult => freeze({ ok: true as const, ...(value === undefined ? {} : { value }) });
 const failure = (code: string, value?: unknown): WorkflowResult => freeze({ ok: false as const, code, ...(value === undefined ? {} : { value }) });
-const invoke = async (target: unknown, method: string, ...args: unknown[]): Promise<WorkflowResult> => {
-  const operation = read(target, method);
-  if (typeof operation !== "function") return failure("DEPENDENCY_FAILURE");
-  try { return success(await operation(...args)); } catch { return failure("DEPENDENCY_FAILURE"); }
-};
 
-function create(dependencies: Dependencies) {
+function create(dependencies: OperationWorkflowDependencies) {
   const assignments = AssignmentRegistry.create();
   const pending = new Map<string, string>();
   const listeners = new Set<(snapshot: unknown) => void>();
@@ -35,10 +25,8 @@ function create(dependencies: Dependencies) {
   let revision = 0;
   let disposed = false;
   const deviceRecords = (): readonly Readonly<{ readonly deviceId: string; readonly sessionId: string | undefined }>[] => {
-    const devices = read(dependencies.relayOperations, "devices");
-    if (typeof devices !== "function") return freeze([]);
     try {
-      const values = devices();
+      const values = dependencies.relayOperations.devices();
       if (!Array.isArray(values)) return freeze([]);
       return freeze(values.flatMap((item) => {
         const deviceId = read(item, "deviceId");
@@ -64,14 +52,11 @@ function create(dependencies: Dependencies) {
   if (initialConnectionTime !== null) for (const deviceId of previousOnline) connectedSince.set(deviceId, initialConnectionTime);
   const online = (deviceId: string): boolean => onlineIds().includes(deviceId);
   const route = (routeId: string): RecordValue | null => {
-    const list = read(dependencies.routeLibrary, "list");
-    if (typeof list !== "function") return null;
-    try { const values = list(); return Array.isArray(values) ? record(values.find((value) => read(value, "routeId") === routeId)) : null; } catch { return null; }
+    try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? record(values.find((value) => read(value, "routeId") === routeId)) : null; } catch { return null; }
   };
-  const task = (deviceId: string): unknown => { const get = read(dependencies.missionControl, "get"); try { return typeof get === "function" ? get(deviceId) : freeze({ deviceId, phase: "idle" }); } catch { return freeze({ deviceId, phase: "idle" }); } };
-  const stream = (deviceId: string): unknown => { const get = read(dependencies.liveStreamControl, "get"); try { return typeof get === "function" ? get(deviceId) : freeze({ deviceId, phase: "idle" }); } catch { return freeze({ deviceId, phase: "idle" }); } };
-  const whipStream = (deviceId: string): unknown => { const get = read(dependencies.whipStreamControl, "get"); try { return typeof get === "function" ? get(deviceId) : freeze({ deviceId, phase: "idle", lastOperation: null, failureCode: null, reason: null }); } catch { return freeze({ deviceId, phase: "idle", lastOperation: null, failureCode: null, reason: null }); } };
-  const telemetryRaw = (deviceId: string): unknown => { const get = read(dependencies.relayOperations, "telemetry"); try { return typeof get === "function" ? get(deviceId) : null; } catch { return null; } };
+  const task = (deviceId: string): unknown => { try { return dependencies.missionControl.get(deviceId); } catch { return freeze({ deviceId, phase: "idle" }); } };
+  const stream = (deviceId: string): unknown => { try { return dependencies.liveStreamControl.get(deviceId); } catch { return freeze({ deviceId, phase: "idle" }); } };
+  const telemetryRaw = (deviceId: string): unknown => { try { return dependencies.relayOperations.telemetry(deviceId); } catch { return null; } };
   const telemetry = (deviceId: string): unknown => {
     const raw = telemetryRaw(deviceId);
     const now = clock();
@@ -86,23 +71,22 @@ function create(dependencies: Dependencies) {
     });
     return freeze({ ...source, payload: next });
   };
-  const settings = (deviceId: string): unknown => { const get = read(dependencies.deviceSettings, "snapshot"); try { return typeof get === "function" ? get(deviceId) : freeze({}); } catch { return freeze({}); } };
-  const media = (): unknown => { const snapshot = read(dependencies.mediaPipeline, "snapshot"); try { return typeof snapshot === "function" ? snapshot() : freeze({ streams: [] }); } catch { return freeze({ streams: [] }); } };
+  const settings = (deviceId: string): unknown => { try { return dependencies.deviceSettings.snapshot(deviceId); } catch { return freeze({}); } };
+  const media = (): unknown => { try { return dependencies.mediaPipeline.snapshot(); } catch { return freeze({ streams: [] }); } };
   const clearFlightConfirm = (deviceId: string): void => {
     const confirmationId = pending.get(deviceId);
     if (confirmationId !== undefined) {
       pending.delete(deviceId);
-      const cancel = read(dependencies.flightControl, "cancel");
-      try { if (typeof cancel === "function") void cancel(deviceId, confirmationId); } catch { /* disconnect still clears local state */ }
+      try { void dependencies.flightControl.cancel(deviceId, confirmationId); } catch { /* disconnect still clears local state */ }
     }
-    const clear = read(dependencies.flightControl, "clear");
-    try { if (typeof clear === "function") clear(deviceId); } catch { /* leftover confirmations must not survive reconnect */ }
+    try { dependencies.flightControl.clear(deviceId); } catch { /* leftover confirmations must not survive reconnect */ }
   };
-  const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => freeze({ deviceId, telemetry: telemetry(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), whipStream: whipStream(deviceId), settings: settings(deviceId), pendingFlightAction: (() => { const get = read(dependencies.flightControl, "get"); try { return typeof get === "function" ? get(deviceId) : null; } catch { return null; } })() })), routes: (() => { const list = read(dependencies.routeLibrary, "list"); try { return typeof list === "function" && Array.isArray(list()) ? list() : []; } catch { return []; } })(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
+  const pendingFlightAction = (deviceId: string): unknown => { try { return dependencies.flightControl.get(deviceId); } catch { return null; } };
+  const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
+  const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => freeze({ deviceId, telemetry: telemetry(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId) })), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
   const publish = (): void => { revision += 1; const current = snapshot(); for (const listener of [...listeners]) { try { listener(current); } catch { /* listener faults are isolated */ } } };
   const forgetVideo = (deviceId: string): void => {
-    const disconnected = read(dependencies.liveStreamControl, "recordDisconnected"); try { if (typeof disconnected === "function") disconnected(deviceId); } catch { /* downstream retains its own failure state */ }
-    const whipDisconnected = read(dependencies.whipStreamControl, "recordDisconnected"); try { if (typeof whipDisconnected === "function") whipDisconnected(deviceId); } catch { /* downstream retains its own failure state */ }
+    try { dependencies.liveStreamControl.recordDisconnected(deviceId); } catch { /* downstream retains its own failure state */ }
     if (selectedVideoDeviceId === deviceId) selectedVideoDeviceId = null;
   };
   const onDisconnects = (): void => {
@@ -135,7 +119,7 @@ function create(dependencies: Dependencies) {
     previousSessions = sessions;
     publish();
   };
-  const subscriptions = WorkflowSubscriptions.create([dependencies.relayOperations, dependencies.missionControl, dependencies.liveStreamControl, dependencies.flightControl, ...(dependencies.whipStreamControl === undefined ? [] : [dependencies.whipStreamControl])], onDisconnects);
+  const subscriptions = WorkflowSubscriptions.create([dependencies.relayOperations, dependencies.missionControl, dependencies.liveStreamControl, dependencies.flightControl], onDisconnects);
   const mission = async (method: "stage" | "upload" | "start" | "pause" | "resume" | "stop", deviceId: string): Promise<WorkflowResult> => {
     if (disposed) return failure("DISPOSED");
     const result = method === "stage" ? await actions.stage(deviceId) : await actions.mission(method, deviceId);
@@ -150,7 +134,8 @@ function create(dependencies: Dependencies) {
     return decision.ok === true && decision.value.enabled === true;
   };
   const readiness = (deviceId: string, target: HardwareReadinessTarget): HardwareReadinessResult => {
-    const configuration = record(dependencies.hardwareReadiness);
+    let configuration: RecordValue | null;
+    try { configuration = record(dependencies.hardwareReadiness); } catch { configuration = null; }
     const configuredDelay = read(configuration, "sessionStableAfterMs");
     const observedAt = clock();
     const connectedAt = connectedSince.get(deviceId);
@@ -215,22 +200,30 @@ function create(dependencies: Dependencies) {
   return freeze({
     snapshot,
     subscribe: (listener: (snapshot: unknown) => void) => { if (disposed) return () => undefined; listeners.add(listener); let active = true; return () => { if (active) { active = false; listeners.delete(listener); } }; },
-    importRoute: async (input: unknown, cancellation?: unknown): Promise<WorkflowResult> => { if (disposed) return failure("DISPOSED"); const result = await invoke(dependencies.routeLibrary, "importFile", input, cancellation); publish(); return result; },
-    getRoutePreview: (routeId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(routeId)) return failure("INVALID_INPUT"); const preview = read(dependencies.routeLibrary, "getPreview"); if (typeof preview !== "function") return failure("DEPENDENCY_FAILURE"); try { return success(preview(routeId)); } catch { return failure("DEPENDENCY_FAILURE"); } },
+    importRoute: async (input: unknown, cancellation?: unknown): Promise<WorkflowResult> => {
+      if (disposed) return failure("DISPOSED");
+      try {
+        const result = await dependencies.routeLibrary.importFile(
+          input as Parameters<RouteLibraryPort["importFile"]>[0],
+          cancellation as Parameters<RouteLibraryPort["importFile"]>[1],
+        );
+        publish();
+        return success(result);
+      } catch { publish(); return failure("DEPENDENCY_FAILURE"); }
+    },
+    getRoutePreview: (routeId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(routeId)) return failure("INVALID_INPUT"); try { return success(dependencies.routeLibrary.getPreview(routeId)); } catch { return failure("DEPENDENCY_FAILURE"); } },
     selectRoute: (routeId: string): WorkflowResult => {
       if (disposed) return failure("DISPOSED");
       if (!validId(routeId)) return failure("INVALID_INPUT");
-      const select = read(dependencies.routeLibrary, "select");
-      if (typeof select !== "function") return failure("DEPENDENCY_FAILURE");
       try {
-        const outcome = select(routeId);
+        const outcome = dependencies.routeLibrary.select(routeId);
         if (read(outcome, "ok") !== true) return failure("ROUTE_NOT_FOUND");
         selectedRouteId = routeId;
         publish();
         return success(outcome);
       } catch { return failure("DEPENDENCY_FAILURE"); }
     },
-    removeRoute: (routeId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(routeId)) return failure("INVALID_INPUT"); if (assignments.routesInUse(routeId).length > 0) return failure("ROUTE_ASSIGNED"); const remove = read(dependencies.routeLibrary, "remove"); if (typeof remove !== "function") return failure("DEPENDENCY_FAILURE"); try { const outcome = remove(routeId); if (read(outcome, "ok") !== true) return failure("ROUTE_NOT_FOUND"); if (selectedRouteId === routeId) { const remainingId = read(read(outcome, "value"), "routeId"); selectedRouteId = validId(remainingId) ? remainingId : null; } publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
+    removeRoute: (routeId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(routeId)) return failure("INVALID_INPUT"); if (assignments.routesInUse(routeId).length > 0) return failure("ROUTE_ASSIGNED"); try { const outcome = dependencies.routeLibrary.remove(routeId); if (read(outcome, "ok") !== true) return failure("ROUTE_NOT_FOUND"); if (selectedRouteId === routeId) { const remainingId = read(read(outcome, "value"), "routeId"); selectedRouteId = validId(remainingId) ? remainingId : null; } publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
     assignRoute: (deviceId: string, routeId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId) || !validId(routeId)) return failure("INVALID_INPUT"); if (!online(deviceId)) return failure("DEVICE_OFFLINE"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); if (read(route(routeId), "classification") !== "upload-candidate") return failure("ROUTE_NOT_UPLOADABLE"); assignments.assign(deviceId, routeId); publish(); return success(); },
     clearAssignment: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); assignments.clear(deviceId); publish(); return success(); },
     stage: (deviceId: string) => mission("stage", deviceId), upload: (deviceId: string) => mission("upload", deviceId), start: (deviceId: string) => mission("start", deviceId), pause: (deviceId: string) => mission("pause", deviceId), resume: (deviceId: string) => mission("resume", deviceId), stop: (deviceId: string) => mission("stop", deviceId),
@@ -245,17 +238,15 @@ function create(dependencies: Dependencies) {
       if (!validId(deviceId)) return failure("INVALID_INPUT");
       return success(readinessSummary(deviceId));
     },
-    selectVideo: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!online(deviceId)) return failure("DEVICE_OFFLINE"); const streams = read(media(), "streams"); const selected = Array.isArray(streams) && streams.some((entry) => read(entry, "deviceId") === deviceId && read(entry, "phase") === "ready"); if (!selected) return failure("VIDEO_NOT_READY"); const player = read(dependencies.mediaPipeline, "selectPlayer"); if (typeof player !== "function") return failure("DEPENDENCY_FAILURE"); try { const outcome = player(deviceId); selectedVideoDeviceId = deviceId; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    clearVideo: (): WorkflowResult => { if (disposed) return failure("DISPOSED"); const clear = read(dependencies.mediaPipeline, "clearPlayer"); if (typeof clear !== "function") return failure("DEPENDENCY_FAILURE"); try { const outcome = clear(); selectedVideoDeviceId = null; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
+    selectVideo: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!online(deviceId)) return failure("DEVICE_OFFLINE"); const streams = read(media(), "streams"); const selected = Array.isArray(streams) && streams.some((entry) => read(entry, "deviceId") === deviceId && read(entry, "phase") === "ready"); if (!selected) return failure("VIDEO_NOT_READY"); try { const outcome = dependencies.mediaPipeline.selectPlayer(deviceId); selectedVideoDeviceId = deviceId; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
+    clearVideo: (): WorkflowResult => { if (disposed) return failure("DISPOSED"); try { const outcome = dependencies.mediaPipeline.clearPlayer(); selectedVideoDeviceId = null; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
     refreshMedia: (): WorkflowResult => {
       if (disposed) return failure("DISPOSED");
       let now: unknown;
       try { now = dependencies.now(); } catch { return failure("CLOCK_FAILURE"); }
       if (typeof now !== "number" || !Number.isFinite(now) || now < 0) return failure("CLOCK_FAILURE");
-      const evaluate = read(dependencies.mediaPipeline, "evaluate");
-      if (typeof evaluate !== "function") return failure("DEPENDENCY_FAILURE");
       try {
-        const outcome = evaluate(now);
+        const outcome = dependencies.mediaPipeline.evaluate(now);
         void stopFailedOnlineStreams();
         publish();
         return success(outcome);
@@ -264,9 +255,7 @@ function create(dependencies: Dependencies) {
     notifyPlaybackReady: (deviceId: string): WorkflowResult => {
       if (disposed) return failure("DISPOSED");
       if (!validId(deviceId)) return failure("INVALID_INPUT");
-      const notify = read(dependencies.mediaPipeline, "notifyPlaybackReady");
-      if (typeof notify !== "function") return failure("DEPENDENCY_FAILURE");
-      try { const outcome = notify(deviceId); publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); }
+      try { const outcome = dependencies.mediaPipeline.notifyPlaybackReady(deviceId); publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); }
     },
     readTransmissionSettings: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.readTransmission(deviceId)),
     writeTransmissionSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.writeTransmission(deviceId, patch)),
@@ -292,7 +281,7 @@ function create(dependencies: Dependencies) {
       const result = actions.cancelFlight(deviceId, confirmationId);
       pending.delete(deviceId); publish(); return result;
     },
-    forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); const forget = read(dependencies.missionControl, "forget"); if (typeof forget !== "function") return failure("DEPENDENCY_FAILURE"); try { const forgotten = forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
+    forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
     dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); connectionHold.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
   });
 }

@@ -57,11 +57,11 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
 
   it("同一 HTTP-FLV 地址的轮询不销毁正在播放的 flv.js 实例", () => {
     const source = renderer();
-    const attach = source.slice(source.indexOf("const attachVideo"), source.indexOf("const whepTarget"));
+    const attach = source.slice(source.indexOf("const attachVideo"), source.indexOf("const accepted"));
     const reuse = attach.indexOf("if (attachedUrl === url && flvPlayer !== null)");
-    const closeWhep = attach.indexOf("closeWhep();");
+    const detach = attach.indexOf("detachVideo();");
 
     expect(reuse).toBeGreaterThanOrEqual(0);
-    expect(closeWhep).toBeGreaterThan(reuse);
+    expect(detach).toBeGreaterThan(reuse);
   });
 });

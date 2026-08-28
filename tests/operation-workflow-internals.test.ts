@@ -1,9 +1,37 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AssignmentRegistry } from "../src/production/operation-workflow/assignment-registry/index.js";
 import { WorkflowSnapshot } from "../src/production/operation-workflow/workflow-snapshot/index.js";
 import { WorkflowSubscriptions } from "../src/production/operation-workflow/workflow-subscriptions/index.js";
 
+const source = (path: string): string => readFileSync(resolve(process.cwd(), path), "utf8");
+
 describe("飞行作业工作流内部模块", () => {
+  it("为已知生产依赖声明最小 Port 契约", () => {
+    const ports = resolve(process.cwd(), "src/production/operation-workflow/ports.ts");
+
+    expect(existsSync(ports)).toBe(true);
+    expect(source("src/production/operation-workflow/ports.ts")).toContain("OperationWorkflowDependencies");
+  });
+
+  it("仅通过 Port 的明确方法调用内部依赖", () => {
+    const workflow = source("src/production/operation-workflow/index.ts");
+    const actions = source("src/production/operation-workflow/workflow-actions/index.ts");
+    const subscriptions = source("src/production/operation-workflow/workflow-subscriptions/index.ts");
+    const desktopApplication = source("src/production/desktop-application/index.ts");
+
+    expect(workflow).not.toMatch(/readonly (?:relayOperations|routeLibrary|missionControl|liveStreamControl|mediaPipeline|flightControl|deviceSettings): RecordValue/);
+    expect(workflow).not.toContain("const invoke =");
+    expect(workflow).not.toMatch(/read\(dependencies\.[a-zA-Z]+, "/);
+    expect(actions).not.toContain("type RecordValue");
+    expect(actions).not.toContain("const invoke =");
+    expect(actions).not.toContain("const invokeSync =");
+    expect(actions).not.toContain("method: string");
+    expect(subscriptions).toContain("WorkflowSubscriptionPort");
+    expect(desktopApplication).not.toMatch(/OperationWorkflow\.create\(\{[\s\S]*?\}\s+as never\)/);
+  });
+
   it("隔离、排序并清理设备航线分配", () => {
     const registry = AssignmentRegistry.create();
     expect(registry.assign("device-b", "route-2")).toBe(true);

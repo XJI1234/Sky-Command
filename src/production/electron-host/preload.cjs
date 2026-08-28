@@ -7,7 +7,6 @@ const methods = Object.freeze([
   "assignment-assign", "assignment-clear",
   "mission-stage", "mission-upload", "mission-start", "mission-pause", "mission-resume", "mission-stop",
   "stream-start", "stream-stop", "stream-refresh", "stream-select", "stream-clear",
-  "webrtc-start", "webrtc-stop", "webrtc-refresh", "webrtc-stream-start", "webrtc-stream-stop", "webrtc-stream-select", "webrtc-stream-clear",
   "settings-transmission-read", "settings-transmission-write", "settings-camera-read", "settings-camera-write",
   "flight-request", "flight-confirm", "flight-cancel",
   "video-playback",
@@ -31,8 +30,4 @@ contextBridge.exposeInMainWorld("skyCommand", {
     return ipcRenderer.invoke(name, input);
   },
   selectRouteFile: () => ipcRenderer.invoke("route-select-file"),
-  onWhepSelect: (listener) => listen("webrtc-player-select", listener),
-  onWhepClear: (listener) => listen("webrtc-player-clear", listener),
-  whepReady: (generation) => ipcRenderer.send("webrtc-player-ready", { generation }),
-  whepFatal: (generation) => ipcRenderer.send("webrtc-player-fatal", { generation }),
 });

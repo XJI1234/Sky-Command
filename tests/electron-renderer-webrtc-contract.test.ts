@@ -6,37 +6,25 @@ const renderer = () => readFileSync(new URL("../src/production/operator-console/
 const deviceFactSummary = () => readFileSync(new URL("../src/production/operator-console/device-fact-summary/index.ts", import.meta.url), "utf8");
 const html = () => readFileSync(new URL("../src/production/operator-console/renderer/index.html", import.meta.url), "utf8");
 
-describe("Electron WHEP 播放链路", () => {
-  it("preload 只暴露低延迟播放器的固定事件桥", () => {
-    const source = preload();
-    for (const channel of ["webrtc-player-select", "webrtc-player-clear", "webrtc-player-ready", "webrtc-player-fatal"]) expect(source).toContain(channel);
-    expect(source).toContain("onWhepSelect");
-    expect(source).toContain("onWhepClear");
-    expect(source).toContain("whepReady");
-    expect(source).toContain("whepFatal");
-    expect(source).not.toContain("gateway-invoke");
+describe("Electron 生产图传渲染", () => {
+  it("preload 与渲染器不再暴露已封存的旁路", () => {
+    for (const source of [preload(), renderer()]) expect(source).not.toMatch(/\b(?:webrtc|whip|whep|lowLatency)\b/i);
+    expect(preload()).not.toContain("gateway-invoke");
   });
 
-  it("渲染器保留封存 WHEP 适配代码，但生产路径只刷新经典图传", () => {
+  it("渲染器仍只使用 HTTP-FLV 播放并保留恢复策略", () => {
     const source = renderer();
-    for (const fragment of ["RTCPeerConnection", "recvonly", "createOffer", "application/sdp", "setRemoteDescription", "ontrack", "loadeddata", "whepReady", "whepFatal"]) expect(source).toContain(fragment);
     expect(source).toContain('bridge().invoke("stream-refresh")');
-    expect(source).toContain("whepPeer !== null");
-    for (const method of ["webrtc-start", "webrtc-stop", "webrtc-stream-start", "webrtc-stream-stop", "webrtc-stream-select"]) expect(source).toContain(method);
-    expect(source).not.toContain('invoke("webrtc-refresh")');
-    expect(source).toContain("ANOTHER_VIDEO_TRANSPORT_ACTIVE");
-    expect(source).toContain("另一路图传正在使用，请先停止");
+    expect(source).toContain("flvjs.createPlayer");
+    expect(source).toContain("chaseLiveEdge");
+    expect(source).toContain("recoverStuckFlv");
     expect(source).toContain("DeviceFactSummary.format(connection)");
     expect(deviceFactSummary()).toContain("飞行状态尚未确认");
     expect(source).toContain("等待手机就绪");
-    expect(source).toContain('read(connection, "sdk") !== "ready"');
-    expect(source).not.toContain("value !== \"disconnected\" && read(connection, \"sdk\")");
-    expect(source).not.toContain("JSON.stringify(unwrap(");
-    expect(source).not.toContain("readyState=");
     expect(source).toContain("flightActionLabel");
   });
 
-  it("飞行页只暴露旧 RTMP 图传按钮，图传状态写在飞行页内", () => {
+  it("飞行页只暴露 RTMP 图传按钮，图传状态写在飞行页内", () => {
     const page = html();
     expect(page).not.toContain("video-dock");
     expect(renderer()).not.toContain("video-dock");
@@ -53,10 +41,7 @@ describe("Electron WHEP 播放链路", () => {
     expect(page).toContain('data-action="stream-stop"');
     expect(page).toContain('data-action="flight-takeoff"');
     expect(page).not.toContain('data-action="stream-select"');
-    expect(page).not.toContain("附着播放器");
     expect(page).not.toContain("启动低延迟");
-    expect(page).not.toContain("webrtc-stream-start");
-    expect(page).not.toContain("图传监看");
     expect(page).toContain("未就绪时「启动图传」不可点");
     expect(renderer()).toContain("playVideo");
     expect(renderer()).toContain("flvjs");
