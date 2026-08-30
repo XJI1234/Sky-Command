@@ -31,6 +31,7 @@ describe("DesktopUiGateway", () => {
         ] },
       }),
       checkHardwareReadiness: named("checkHardwareReadiness"),
+      refreshDeviceState: named("refreshDeviceState"),
       importRoute: named("importRoute"), getRoutePreview: named("getRoutePreview"), selectRoute: named("selectRoute"), removeRoute: named("removeRoute"),
       assignRoute: named("assignRoute"), clearAssignment: named("clearAssignment"),
       stage: named("stage"), upload: named("upload"), start: named("start"), pause: named("pause"), resume: named("resume"), stop: named("stop"),
@@ -47,6 +48,7 @@ describe("DesktopUiGateway", () => {
     });
 
     const commands: readonly Readonly<{ readonly method: string; readonly input: unknown }>[] = [
+      { method: "device.refresh", input: { deviceId: "device-a" } },
       { method: "hardware.readiness", input: { deviceId: "device-a" } },
       { method: "route.import", input: { fileName: "route.kmz", bytes: new Uint8Array([1, 2]) } },
       { method: "route.preview", input: { routeId: "route-a" } }, { method: "route.select", input: { routeId: "route-a" } }, { method: "route.remove", input: { routeId: "route-a" } },
@@ -63,7 +65,7 @@ describe("DesktopUiGateway", () => {
     await expect(gateway.invoke("video.playback", { deviceId: "device-a" })).resolves.toEqual({ ok: true, value: { deviceId: "device-a", url: "http://127.0.0.1:18080/live/stream-a.flv" } });
     await expect(gateway.invoke("video.playback", { deviceId: "device-b" })).resolves.toEqual({ ok: true, value: { ok: false, code: "VIDEO_NOT_READY" } });
     expect(calls.map((call) => call.name)).toEqual([
-      "checkHardwareReadiness", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",
+      "refreshDeviceState", "checkHardwareReadiness", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",
       "stage", "upload", "start", "pause", "resume", "stop", "startStream", "stopStream", "refreshMedia", "selectVideo", "clearVideo",
       "readTransmissionSettings", "writeTransmissionSettings", "readCameraSettings", "writeCameraSettings", "requestFlightAction", "confirmFlightAction", "cancelFlightAction",
     ]);
@@ -112,6 +114,7 @@ describe("DesktopUiGateway", () => {
     for (const id of invalidIds) {
       await expect(gateway.invoke("route.preview", { routeId: id })).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
       await expect(gateway.invoke("assignment.clear", { deviceId: id })).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
+      await expect(gateway.invoke("device.refresh", { deviceId: id })).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
       await expect(gateway.invoke("mission.start", { deviceId: id })).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
       await expect(gateway.invoke("stream.start", { deviceId: id })).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
       await expect(gateway.invoke("settings.camera.read", { deviceId: id })).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });

@@ -118,6 +118,10 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
         if (typeof options.relayHint !== "function") return success(freeze({ hints: [] }));
         try { return success(freeze({ hints: relayHints(options.relayHint()) })); } catch { return failure("DEPENDENCY_FAILURE"); }
       }
+      if (method === "device.refresh") {
+        const deviceId = one(input, "deviceId");
+        return deviceId === null ? failure("INVALID_INPUT") : call("refreshDeviceState", [deviceId]);
+      }
       if (method === "hardware.readiness") {
         const deviceId = one(input, "deviceId");
         return deviceId === null ? failure("INVALID_INPUT") : call("checkHardwareReadiness", [deviceId]);

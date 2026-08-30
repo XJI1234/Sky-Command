@@ -12,6 +12,7 @@
 
 ```ts
 PreflightCheck.evaluate(input, policy?) -> PreflightResult
+PreflightCheck.evaluateUpload(input) -> PreflightResult
 ```
 
 调用同步、确定、可重入，对不可信输入不抛异常。`policy.minimumBatteryPercent` 默认 `20`，只能是 `1..100` 的整数；无效策略返回 `INVALID_POLICY` 阻塞项。输入只读，返回对象和数组均为冻结副本。
@@ -39,6 +40,8 @@ interface PreflightInput {
 ```
 
 缺失或畸形的安全字段一律视为阻塞，不得采用“默认安全”。`missionPhase` 必须为 `uploaded`；本模块绝不推进状态机。
+
+`evaluateUpload(input)` 复用同一输入结构，但只评估中继、MSDK、遥控器、飞控、飞机与航线能力；它不读取任务阶段、电量、飞行状态或电机状态。它是航线从手机上传到飞机前的唯一纯门禁，避免把启动航线的地面条件错误施加到上传阶段。
 
 ## 4. 直接飞行动作接口
 
@@ -73,6 +76,8 @@ PreflightCheck.evaluateFlightAction(input, policy?) -> PreflightResult
 14. `MOTORS_RUNNING`
 15. `AIRCRAFT_ON_GROUND`（仅 `land` 与 `return-home`）
 
+`evaluateUpload` 仅可返回前七项中的 `RELAY_DISCONNECTED`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_DISCONNECTED`、`AIRCRAFT_DISCONNECTED`、`WAYPOINT_UNSUPPORTED`；它不产生 `MISSION_NOT_UPLOADED` 或任何动态飞行事实阻塞项。
+
 每项为 `{ code, message }`；消息短小、可显示，且不得泄露 payload、路径、设备 ID 或第三方错误。对频是连接新飞机或更换遥控器时的独立维护操作，不属于已上传航线的启动前置条件。电量缺失、非数值或不在 `0..100` 时为 `BATTERY_UNKNOWN`；仅有效电量低于策略下限时为 `BATTERY_LOW`。`isFlying` 与 `motorsOn` 都必须严格为布尔值 `false`；缺失、字符串、数值、null 或其他畸形值分别为未知状态，不能用任何默认值放行。
 
 ## 6. 结果
@@ -89,4 +94,4 @@ type PreflightResult =
 
 本模块只使用语言标准库。禁止导入平台、传输、航线、UI、文件系统和 DJI 实现。
 
-测试必须覆盖航线与三项直接动作的完全通过、每个阻塞项、组合阻塞顺序、电量边界、动作隔离（起飞不可在电机已开时放行，降落/返航不可被低/未知电量或电机状态拦截）、无效策略、缺失字段、抛错 getter、不可变性及重复评估；并纳入类型、覆盖率、性能、审计和模块范围 100% 变异测试。
+测试必须覆盖上传、航线启动与三项直接动作的完全通过、每个阻塞项、组合阻塞顺序、电量边界、动作隔离（上传不读取地面、电量或电机事实；起飞不可在电机已开时放行；降落/返航不可被低/未知电量或电机状态拦截）、无效策略、缺失字段、抛错 getter、不可变性及重复评估；并纳入类型、覆盖率、性能、审计和模块范围 100% 变异测试。

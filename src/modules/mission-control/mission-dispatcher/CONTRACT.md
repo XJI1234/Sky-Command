@@ -93,11 +93,11 @@ interface MissionDispatchSnapshot {
 
 ### 上传
 
-`upload` 仅允许从 `staged` 执行。它进入 `uploading`，发送 `{ name: "wayline.upload", fields: { confirm: true } }`，仅在中继确认成功后进入 `uploaded`。非成功结果为 `WAYLINE_UPLOAD_FAILED`。
+`upload` 仅允许从 `staged` 执行。在任何出站命令前，它读取当前控制遥测并调用 `PreflightCheck.evaluateUpload`；只有当前手机会话内显式读取的完整控制快照可传入这个门面。预检要求中继、MSDK、遥控器、飞控、飞机和航线能力均明确可用，但不以电量、起飞状态或电机状态阻塞上传。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `staged` 且不发送命令。通过后进入 `uploading`，发送 `{ name: "wayline.upload", fields: { confirm: true } }`，仅在中继确认成功后进入 `uploaded`。非成功结果为 `WAYLINE_UPLOAD_FAILED`。
 
 ### 启动
 
-`start` 仅允许从 `uploaded` 执行。在任何出站命令前，它读取当前遥测并调用 `PreflightCheck.evaluate`；仅有遥测快照时 `relayConnected` 才为真，绝不从 WebSocket 或会话对象推导飞机连接状态。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `uploaded` 且不发送命令。通过后进入 `starting`，发送 `wayline.start`。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到带任务身份的 `ROUTE_EXECUTION_STARTED` 后才进入 `running`。启动回执超时、断开或传输失败不能证明 DJI 未接受请求，必须保持 `starting` 并返回 `WAYLINE_START_UNCONFIRMED`；此时禁止重发启动，只允许停止。
+`start` 仅允许从 `uploaded` 执行。在任何出站命令前，它读取当前控制遥测并调用 `PreflightCheck.evaluate`；只有当前手机会话内显式读取的完整控制快照可传入这个门面，且仅有该快照时 `relayConnected` 才为真，绝不从 WebSocket 或会话对象推导飞机连接状态。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `uploaded` 且不发送命令。通过后进入 `starting`，发送 `wayline.start`。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到带任务身份的 `ROUTE_EXECUTION_STARTED` 后才进入 `running`。启动回执超时、断开或传输失败不能证明 DJI 未接受请求，必须保持 `starting` 并返回 `WAYLINE_START_UNCONFIRMED`；此时禁止重发启动，只允许停止。
 
 ### 暂停、恢复和停止
 

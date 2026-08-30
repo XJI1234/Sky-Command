@@ -77,6 +77,7 @@ export interface RelaySettingsGateway {
 }
 export interface RelayOperationsAdapterInstance {
   readonly telemetry: (deviceId: string) => DesktopRelayTelemetry | null;
+  readonly controlTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
   readonly devices: () => readonly DesktopRelayDevice[];
   readonly snapshot: () => RelayOperationsSnapshot;
   readonly subscribe: (listener: (snapshot: RelayOperationsSnapshot) => void) => () => void;
@@ -97,6 +98,11 @@ interface RelaySource {
   readonly sendMission?: (deviceId: string, payload: RelayMissionPayload) => Promise<unknown>;
   readonly sendCommand?: (deviceId: string, request: Readonly<{ readonly name: string; readonly fields: Readonly<Record<string, JsonValue>> }>) => Promise<unknown>;
   readonly subscribe?: (listener: (snapshot: unknown) => void) => () => void;
+}
+
+interface RelayOperationsAdapterOptions {
+  readonly relay: unknown;
+  readonly now?: () => number;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -236,12 +242,23 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   });
 }
 
-function create(options: Readonly<{ readonly relay: unknown }>): RelayOperationsAdapterInstance {
+const CONTROL_TELEMETRY_MAX_AGE_MS = 3_000;
+
+function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterInstance {
   const relay = options.relay as RelaySource;
   const listeners = new Set<(snapshot: RelayOperationsSnapshot) => void>();
   let rawSnapshot: unknown = null;
   let disposed = false;
-  const telemetry = (deviceId: string): DesktopRelayTelemetry | null => {
+  type CachedTelemetry = Readonly<{ readonly sessionId: string; readonly checkedAtMs: number; readonly telemetry: DesktopRelayTelemetry }>;
+  const displaySnapshots = new Map<string, CachedTelemetry>();
+  const controlSnapshots = new Map<string, CachedTelemetry>();
+  const now = (): number | null => {
+    try {
+      const value = options.now === undefined ? Date.now() : options.now();
+      return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+    } catch { return null; }
+  };
+  const rawTelemetry = (deviceId: string): DesktopRelayTelemetry | null => {
     if (disposed || !validId(deviceId) || typeof relay.latestTelemetry !== "function") return null;
     try { return project(deviceId, relay.latestTelemetry(deviceId)); } catch { return null; }
   };
@@ -259,6 +276,34 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
       }
       return freeze([...unique].sort(([left], [right]) => left.localeCompare(right)).map(([deviceId, sessionId]) => freeze(sessionId === undefined ? { deviceId } : { deviceId, sessionId })));
     } catch { return freeze([]); }
+  };
+  const activeSession = (deviceId: string): string | null => {
+    const device = devices().find((candidate) => candidate.deviceId === deviceId);
+    return device !== undefined && validId(device.sessionId) ? device.sessionId : null;
+  };
+  const discardStaleControlSnapshots = (): void => {
+    for (const [deviceId, cached] of displaySnapshots) if (activeSession(deviceId) !== cached.sessionId) displaySnapshots.delete(deviceId);
+    for (const [deviceId, cached] of controlSnapshots) if (activeSession(deviceId) !== cached.sessionId) controlSnapshots.delete(deviceId);
+  };
+  const displaySnapshot = (deviceId: string): DesktopRelayTelemetry | null => {
+    discardStaleControlSnapshots();
+    return displaySnapshots.get(deviceId)?.telemetry ?? null;
+  };
+  const telemetry = (deviceId: string): DesktopRelayTelemetry | null => {
+    const raw = rawTelemetry(deviceId);
+    const cached = displaySnapshot(deviceId);
+    if (raw === null) return cached;
+    if (cached === null) return raw;
+    if (raw.receivedAtMs === null || cached.receivedAtMs === null || cached.receivedAtMs >= raw.receivedAtMs) return cached;
+    return raw;
+  };
+  const controlTelemetry = (deviceId: string): DesktopRelayTelemetry | null => {
+    if (disposed || !validId(deviceId)) return null;
+    discardStaleControlSnapshots();
+    const cached = controlSnapshots.get(deviceId);
+    const checkedAtMs = now();
+    if (cached === undefined || checkedAtMs === null || checkedAtMs < cached.checkedAtMs || checkedAtMs - cached.checkedAtMs > CONTROL_TELEMETRY_MAX_AGE_MS) return null;
+    return cached.telemetry;
   };
   const ingressAddress = (deviceId: string): string | null => {
     if (disposed || !validId(deviceId) || typeof relay.ingressAddress !== "function" || !devices().some((device) => device.deviceId === deviceId)) return null;
@@ -283,7 +328,7 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
   const publish = (): void => { if (disposed) return; const value = snapshot(); for (const listener of [...listeners]) { try { listener(value); } catch { /* subscriber faults are isolated */ } } };
   let unsubscribeRelay = (): void => undefined;
   if (typeof relay.subscribe === "function") {
-    try { unsubscribeRelay = relay.subscribe((value) => { rawSnapshot = value; publish(); }); } catch { /* an unavailable relay leaves the adapter offline */ }
+    try { unsubscribeRelay = relay.subscribe((value) => { rawSnapshot = value; discardStaleControlSnapshots(); publish(); }); } catch { /* an unavailable relay leaves the adapter offline */ }
   }
   const send = async (deviceId: string, name: string, fields: Record<string, JsonValue>): Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>> => {
     if (disposed || !validId(deviceId) || typeof relay.sendCommand !== "function") return commandFailure();
@@ -304,7 +349,7 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
     } catch { return freeze({ status: "transport-failed" as const }); }
   };
   const missionGateway: MissionRelayGateway = freeze({
-    latestTelemetry: telemetry,
+    latestTelemetry: controlTelemetry,
     sendMission: async (deviceId, payload) => {
       if (disposed || !validId(deviceId) || typeof relay.sendMission !== "function") return freeze({ deviceId, missionId: payload.missionId, status: "rejected" as const, detail: "设备未连接" });
       try { const value = await relay.sendMission(deviceId, payload); return freeze({ deviceId, missionId: payload.missionId, status: status(value), detail: typeof read(value, "detail") === "string" ? read(value, "detail") as string : "中继器未确认任务" }); } catch { return freeze({ deviceId, missionId: payload.missionId, status: "transport-failed" as const, detail: "中继器通信失败" }); }
@@ -317,7 +362,7 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
     }
   });
   const streamGateway: StreamRelayGateway = freeze({
-    latestTelemetry: telemetry,
+    latestTelemetry: controlTelemetry,
     ingressAddress,
     sendCommand: async (deviceId, request) => {
       if (request.name === "live-stream.stop" && Object.keys(request.fields).length === 0) return sendVideo(deviceId, request.name, {});
@@ -326,7 +371,7 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
     }
   });
   const whipStreamGateway: WhipStreamRelayGateway = freeze({
-    latestTelemetry: telemetry,
+    latestTelemetry: controlTelemetry,
     sendCommand: async (deviceId, request) => {
       if (request.name === "live-stream-webrtc.stop" && Object.keys(request.fields).length === 0) return sendVideo(deviceId, request.name, {});
       if (request.name !== "live-stream-webrtc.start" || Object.keys(request.fields).length !== 1 || typeof request.fields.whipUrl !== "string" || request.fields.whipUrl.trim().length === 0 || /[\p{Cc}]/u.test(request.fields.whipUrl)) return commandFailure();
@@ -345,7 +390,7 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
     }
   });
   const flightGateway: AdapterFlightRelay = freeze({
-    latestTelemetry: telemetry,
+    latestTelemetry: controlTelemetry,
     sendCommand: async (deviceId, request) => (request.name === "flight.takeoff" || request.name === "flight.land" || request.name === "flight.return-home") && request.fields.confirm === true ? send(deviceId, request.name, { confirm: bool(true) }) : commandFailure()
   });
   const settingsGateway: RelaySettingsGateway = freeze({
@@ -362,8 +407,32 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
       } catch { return freeze({ status: "transport-failed" as const, detail: "中继器通信失败" }); }
     }
   });
+  const projectTelemetryRead = (deviceId: string, receivedAtMs: number, result: JsonValue): DesktopRelayTelemetry | null => {
+    const fields = fieldsOf(result);
+    if (fields === null || !Object.hasOwn(fields, "sdkAvailability") || !Object.hasOwn(fields, "remoteController") || !Object.hasOwn(fields, "flightController") || !Object.hasOwn(fields, "aircraft") || !Object.hasOwn(fields, "capabilities")) return null;
+    const capabilities = read(fields, "capabilities");
+    if (fieldsOf(capabilities) === null) return null;
+    const payload: UnknownRecord = {};
+    for (const [key, value] of Object.entries(fields)) if (key !== "capabilities") payload[key] = value;
+    return project(deviceId, freeze({ deviceId, receivedAtMs, payload: freeze({ kind: "object", fields: freeze(payload) }), capabilities }));
+  };
+  const refreshTelemetry = async (deviceId: string): Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>> => {
+    if (validId(deviceId)) controlSnapshots.delete(deviceId);
+    const sessionId = validId(deviceId) ? activeSession(deviceId) : null;
+    const outcome = await send(deviceId, "telemetry.read", {});
+    const receivedAtMs = now();
+    if (outcome.status !== "succeeded" || outcome.result === undefined || sessionId === null || receivedAtMs === null || activeSession(deviceId) !== sessionId) return outcome;
+    const projected = projectTelemetryRead(deviceId, receivedAtMs, outcome.result);
+    if (projected !== null) {
+      const cached = freeze({ sessionId, checkedAtMs: receivedAtMs, telemetry: projected });
+      displaySnapshots.set(deviceId, cached);
+      controlSnapshots.set(deviceId, cached);
+    }
+    return outcome;
+  };
   return freeze({
     telemetry,
+    controlTelemetry,
     devices,
     snapshot,
     subscribe: (listener) => { if (disposed) return () => undefined; listeners.add(listener); let active = true; return () => { if (active) { active = false; listeners.delete(listener); } }; },
@@ -373,8 +442,8 @@ function create(options: Readonly<{ readonly relay: unknown }>): RelayOperations
     pairingGateway: () => pairingGateway,
     flightGateway: () => flightGateway,
     settingsGateway: () => settingsGateway,
-    refreshTelemetry: (deviceId) => send(deviceId, "telemetry.read", {}),
-    dispose: () => { if (disposed) return; disposed = true; listeners.clear(); try { unsubscribeRelay(); } catch { /* adapter teardown is best effort */ } }
+    refreshTelemetry,
+    dispose: () => { if (disposed) return; disposed = true; listeners.clear(); displaySnapshots.clear(); controlSnapshots.clear(); try { unsubscribeRelay(); } catch { /* adapter teardown is best effort */ } }
   });
 }
 

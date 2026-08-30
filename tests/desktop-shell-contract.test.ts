@@ -19,6 +19,7 @@ describe("桌面外壳 IPC", () => {
         workflow: () => ({
           snapshot: () => ({}),
           start: async (deviceId: string) => { calls.push(deviceId); return { ok: true }; },
+          refreshDeviceState: async (deviceId: string) => { calls.push(`refresh:${deviceId}`); return { ok: true }; },
           checkHardwareReadiness: (deviceId: string) => { calls.push(`readiness:${deviceId}`); return { ok: true }; },
         }),
       },
@@ -27,12 +28,14 @@ describe("桌面外壳 IPC", () => {
     await shell.start();
 
     await expect(shell.invoke("mission-start", { deviceId: "phone-1" })).resolves.toMatchObject({ ok: true, value: { ok: true, value: { ok: true } } });
+    await expect(shell.invoke("device-refresh", { deviceId: "phone-1" })).resolves.toMatchObject({ ok: true, value: { ok: true, value: { ok: true } } });
     await expect(shell.invoke("hardware-readiness", { deviceId: "phone-1" })).resolves.toMatchObject({ ok: true, value: { ok: true, value: { ok: true } } });
     await expect(shell.invoke("webrtc-start", undefined)).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
     await expect(shell.invoke("state-snapshot", undefined)).resolves.toMatchObject({ ok: true, value: { ok: true, value: { phase: "running" } } });
     await expect(shell.invoke("gateway-invoke", { method: "mission.start", input: { deviceId: "phone-1" } })).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
-    expect(calls).toEqual(["phone-1", "readiness:phone-1"]);
+    expect(calls).toEqual(["phone-1", "refresh:phone-1", "readiness:phone-1"]);
     expect(shell.snapshot().ipcMethods).toContain("mission-start");
+    expect(shell.snapshot().ipcMethods).toContain("device-refresh");
     expect(shell.snapshot().ipcMethods).toContain("hardware-readiness");
     expect(shell.snapshot().ipcMethods).not.toContain("webrtc-start");
     expect(shell.snapshot().ipcMethods).not.toContain("webrtc-stream-start");

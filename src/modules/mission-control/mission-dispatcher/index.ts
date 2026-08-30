@@ -125,11 +125,11 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     publish();
     return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state });
   };
-  const blocked = (lane: Lane, blockers: readonly PreflightBlocker[]): DispatchResult => {
-    lane.lastResult = freeze({ operation: "start", ok: false, code: "PREFLIGHT_BLOCKED" });
+  const blocked = (lane: Lane, operation: "upload" | "start", blockers: readonly PreflightBlocker[]): DispatchResult => {
+    lane.lastResult = freeze({ operation, ok: false, code: "PREFLIGHT_BLOCKED" });
     const state = snapshot(lane);
     publish();
-    return freeze({ ok: false as const, operation: "start" as const, code: "PREFLIGHT_BLOCKED" as const, state, blockers: freeze(blockers.map((blocker) => freeze({ ...blocker }))) });
+    return freeze({ ok: false as const, operation, code: "PREFLIGHT_BLOCKED" as const, state, blockers: freeze(blockers.map((blocker) => freeze({ ...blocker }))) });
   };
   const rejected = (operation: DispatchOperation, code: DispatchErrorCode, lane: Lane | null): DispatchResult => lane === null ? freeze({ ok: false as const, operation, code, state: null }) : result(lane, operation, false, code);
   const get = (deviceId: string): MissionDispatchSnapshot => validId(deviceId) && lanes.has(deviceId) ? snapshot(lanes.get(deviceId)!) : idleSnapshot(typeof deviceId === "string" ? deviceId : "");
@@ -174,15 +174,18 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const lane = lanes.get(deviceId);
     if (!lane) return rejected(operation, "ILLEGAL_PHASE", null);
     if (lane.busy) return rejected(operation, "OPERATION_IN_PROGRESS", lane);
-    if (operation === "start") {
-      if (lane.machine.state().phase !== "uploaded") return rejected(operation, "ILLEGAL_PHASE", lane);
+    if (operation === "upload" || operation === "start") {
+      if (operation === "start" && lane.machine.state().phase !== "uploaded") return rejected(operation, "ILLEGAL_PHASE", lane);
       const telemetryAttempt = attempt(() => dependencies.relay.latestTelemetry(deviceId));
       if (!telemetryAttempt.ok) return rejected(operation, "DEPENDENCY_FAILURE", lane);
       const telemetry = telemetryAttempt.value;
-      const preflightAttempt = attempt(() => PreflightCheck.evaluate({ relayConnected: telemetry !== null, payload: telemetry?.payload ?? {}, capabilities: telemetry?.capabilities ?? {}, missionPhase: lane.machine.state().phase }));
+      const preflightAttempt = attempt(() => {
+        const input = { relayConnected: telemetry !== null, payload: telemetry?.payload ?? {}, capabilities: telemetry?.capabilities ?? {}, missionPhase: lane.machine.state().phase };
+        return operation === "upload" ? PreflightCheck.evaluateUpload(input) : PreflightCheck.evaluate(input);
+      });
       if (!preflightAttempt.ok) return rejected(operation, "DEPENDENCY_FAILURE", lane);
       const preflight = preflightAttempt.value;
-      if (!preflight.ok) return blocked(lane, preflight.blockers);
+      if (!preflight.ok) return blocked(lane, operation, preflight.blockers);
     }
     const requested = lane.machine.transition({ type: requestType });
     if (!requested.ok) return rejected(operation, "ILLEGAL_PHASE", lane);

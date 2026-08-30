@@ -23,7 +23,7 @@ instance.confirmFlight(deviceId, confirmationId) -> Promise<Result>
 instance.cancelFlight(deviceId, confirmationId) -> Result
 ```
 
-依赖必须只提供一级模块的公开方法，以及由父模块传入的 `online(deviceId)`、`assignedRoute(deviceId)` 与 `settingsAllowed(deviceId, domain)` 事实。任务操作只映射 `MissionControl` 的六个同名方法；图传只映射 `LiveStreamControl.start/stop`；设置只映射 `DeviceSettingsPanel` 四个方法；直接飞控只映射 `FlightControl.request/confirm/cancel`。所有依赖异常统一为稳定失败，且不得泄露内部错误。
+依赖必须只提供一级模块的公开方法，以及由父模块传入的 `online(deviceId)`、`assignedRoute(deviceId)` 与 `settingsAllowed(deviceId, domain)` 事实。任务操作只映射 `MissionControl` 的六个同名方法；图传只映射 `LiveStreamControl.start/stop`；设置只映射 `DeviceSettingsPanel` 四个方法；直接飞控只映射 `FlightControl.request/confirm/cancel`。控制遥测刷新与硬件预检属于父工作流的跨模块编排责任：本模块只在已通过该门禁后精确委托下游，绝不访问中继、协议或 DJI。所有依赖异常统一为稳定失败，且不得泄露内部错误。
 
 ## 验收
 

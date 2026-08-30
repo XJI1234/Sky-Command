@@ -340,6 +340,106 @@ describe("RelayOperationsAdapter", () => {
     expect(adapter.telemetry("relay-1")).toBeNull();
   });
 
+  it("只将当前会话 telemetry.read 的有效完整结果短时用作控制遥测", async () => {
+    let sessionId = "session-1";
+    const result = object({
+      sdkAvailability: text("READY"),
+      remoteController: text("CONNECTED"),
+      flightController: text("CONNECTED"),
+      aircraft: text("CONNECTED"),
+      isFlying: bool(false),
+      motorsOn: bool(false),
+      batteryPercent: numeric("80"),
+      capabilities: object({ waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") }),
+    });
+    const adapter = RelayOperationsAdapter.create({
+      relay: {
+        devices: () => [{ deviceId: "relay-1", sessionId }],
+        latestTelemetry: () => null,
+        sendCommand: async () => ({ status: "succeeded" as const, result }),
+      },
+      now: () => 1_000,
+    } as never);
+
+    await expect(adapter.refreshTelemetry("relay-1")).resolves.toMatchObject({ status: "succeeded" });
+    expect(adapter.controlTelemetry("relay-1")).toMatchObject({
+      deviceId: "relay-1",
+      receivedAtMs: 1_000,
+      payload: {
+        sdkRegistered: true,
+        remoteControllerConnected: true,
+        flightControllerConnected: true,
+        connected: true,
+        isFlying: false,
+        motorsOn: false,
+        batteryPercent: 80,
+      },
+      capabilities: { waypointMission: true, waypointMissionSupport: "supported" },
+    });
+
+    sessionId = "session-2";
+    expect(adapter.controlTelemetry("relay-1")).toBeNull();
+  });
+
+  it("本次 telemetry.read 结果畸形时作废旧控制快照", async () => {
+    let calls = 0;
+    const complete = object({
+      sdkAvailability: text("READY"),
+      remoteController: text("CONNECTED"),
+      flightController: text("CONNECTED"),
+      aircraft: text("CONNECTED"),
+      capabilities: object({ waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") }),
+    });
+    const incomplete = object({
+      sdkAvailability: text("READY"),
+      remoteController: text("CONNECTED"),
+      flightController: text("CONNECTED"),
+      capabilities: object({ waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") }),
+    });
+    const adapter = RelayOperationsAdapter.create({
+      relay: {
+        devices: () => [{ deviceId: "relay-1", sessionId: "session-1" }],
+        latestTelemetry: () => null,
+        sendCommand: async () => ({ status: "succeeded" as const, result: ++calls === 1 ? complete : incomplete }),
+      },
+      now: () => 1_000,
+    } as never);
+
+    await expect(adapter.refreshTelemetry("relay-1")).resolves.toMatchObject({ status: "succeeded" });
+    expect(adapter.controlTelemetry("relay-1")).not.toBeNull();
+    await expect(adapter.refreshTelemetry("relay-1")).resolves.toMatchObject({ status: "succeeded" });
+    expect(adapter.controlTelemetry("relay-1")).toBeNull();
+  });
+
+  it("丢弃 telemetry.read 返回前已经更换会话的迟到控制快照", async () => {
+    let sessionId = "session-1";
+    let resolve!: (value: unknown) => void;
+    const adapter = RelayOperationsAdapter.create({
+      relay: {
+        devices: () => [{ deviceId: "relay-1", sessionId }],
+        latestTelemetry: () => null,
+        sendCommand: async () => new Promise((done) => { resolve = done; }),
+      },
+      now: () => 1_000,
+    } as never);
+
+    const pending = adapter.refreshTelemetry("relay-1");
+    sessionId = "session-2";
+    resolve({
+      status: "succeeded",
+      result: object({
+        sdkAvailability: text("READY"),
+        remoteController: text("CONNECTED"),
+        flightController: text("CONNECTED"),
+        aircraft: text("CONNECTED"),
+        capabilities: object({ waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") }),
+      }),
+    });
+
+    await expect(pending).resolves.toMatchObject({ status: "succeeded" });
+    expect(adapter.controlTelemetry("relay-1")).toBeNull();
+  });
+
   it("保留经校验的任务终态和文件名，供任务控制安全对账", () => {
     const fixture = relayFixture();
     const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });

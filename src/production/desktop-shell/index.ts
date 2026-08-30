@@ -19,6 +19,7 @@ const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value)
 const gatewayMethods = freeze({
   "state-snapshot": "state.snapshot",
   "network-hint": "network.hint",
+  "device-refresh": "device.refresh",
   "hardware-readiness": "hardware.readiness",
   "route-import": "route.import",
   "route-preview": "route.preview",

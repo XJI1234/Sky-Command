@@ -63,6 +63,22 @@ describe("mission dispatcher contract", () => {
     expect(fixture.dispatcher.get("phone-1").lastResult).toEqual({ operation: "upload", ok: true, code: null });
   });
 
+  it("blocks upload before sending when the current control telemetry lacks hardware readiness", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    fixture.setTelemetry({
+      deviceId: "phone-1",
+      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: false, connected: true },
+      capabilities: { waypointMission: true, waypointMissionSupport: "supported" },
+    });
+
+    const result = await fixture.dispatcher.upload("phone-1");
+
+    expect(result).toMatchObject({ ok: false, operation: "upload", code: "PREFLIGHT_BLOCKED", state: { phase: "staged" } });
+    expect(result).toMatchObject({ blockers: [{ code: "AIRCRAFT_DISCONNECTED" }] });
+    expect(fixture.commands).toEqual([]);
+  });
+
   it("blocks start before sending when telemetry preflight is unsafe", async () => {
     const fixture = makeFixture();
     await stage(fixture.dispatcher);
@@ -427,12 +443,21 @@ describe("mission dispatcher contract", () => {
     telemetryFault.setTelemetry(new Proxy({}, { get() { throw new Error("telemetry fault"); } }));
     expect(await telemetryFault.dispatcher.start("phone-1")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE", state: { phase: "uploaded" } });
 
+    let readerThrows = false;
     const readerFault = MissionDispatcher.create({
       routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
-      relay: { sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "ok" }), sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "ok" }), latestTelemetry: () => { throw new Error("reader fault"); } }
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "ok" }),
+        sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "ok" }),
+        latestTelemetry: () => {
+          if (readerThrows) throw new Error("reader fault");
+          return { deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } };
+        },
+      }
     }, { createMissionId: () => "mission-1" });
     await stage(readerFault);
     await readerFault.upload("phone-1");
+    readerThrows = true;
     expect(await readerFault.start("phone-1")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE", state: { phase: "uploaded" } });
   });
 

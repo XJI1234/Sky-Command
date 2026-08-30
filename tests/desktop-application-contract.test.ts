@@ -214,7 +214,7 @@ describe("DesktopApplication", () => {
     if (!created.ok) return;
     const unsubscribe = created.value.subscribe(() => { throw new Error("observer"); });
     await expect(created.value.start()).resolves.toMatchObject({ ok: true });
-    expect(created.value.workflow().requestFlightAction("offline-device", "takeoff")).toMatchObject({ ok: false });
+    await expect(created.value.workflow().requestFlightAction("offline-device", "takeoff")).resolves.toMatchObject({ ok: false });
     unsubscribe();
     await created.value.dispose();
   });
@@ -282,14 +282,26 @@ describe("DesktopApplication", () => {
       if (!hello.ok) throw new Error("hello encoding failed");
       socket.send(hello.value);
       expect(RelayFrameCodec.decode(await nextMessage(socket))).toMatchObject({ kind: "decoded", frame: { type: "paired" } });
-      const telemetry = RelayFrameCodec.encode({ type: "telemetry", payload: object({
+      const telemetryPayload = object({
         sdkAvailability: text("READY"), remoteController: text("CONNECTED"), flightController: text("CONNECTED"), aircraft: text("CONNECTED"), connected: bool(true), isFlying: bool(false), motorsOn: bool(false), batteryPercent: { kind: "number" as const, value: "80" },
-      }) as never, capabilities: object({ liveVideo: bool(true), waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") }) as never });
+      });
+      const capabilities = object({ liveVideo: bool(true), waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") });
+      const telemetry = RelayFrameCodec.encode({ type: "telemetry", payload: telemetryPayload as never, capabilities: capabilities as never });
       if (!telemetry.ok) throw new Error("telemetry encoding failed");
       socket.send(telemetry.value);
       await new Promise((resolve) => setTimeout(resolve, 20));
       const workflow = created.value.workflow();
-      expect(workflow.requestFlightAction("settings-device", "takeoff")).toMatchObject({ ok: true, value: { ok: true, code: "CONFIRMATION_REQUIRED" } });
+      const respondCurrentTelemetry = async (): Promise<void> => {
+        const telemetryRead = RelayFrameCodec.decode(await nextMessage(socket));
+        expect(telemetryRead).toMatchObject({ kind: "decoded", frame: { type: "command", command: { name: "telemetry.read" } } });
+        if (telemetryRead.kind !== "decoded" || telemetryRead.frame.type !== "command") throw new Error("telemetry read decoding failed");
+        const telemetryReadResult = RelayFrameCodec.encode({ type: "command-result", id: telemetryRead.frame.id, ok: true, detail: "ok", result: object({ ...telemetryPayload.fields, capabilities }) as never });
+        if (!telemetryReadResult.ok) throw new Error("telemetry read result encoding failed");
+        socket.send(telemetryReadResult.value);
+      };
+      const flightRequest = workflow.requestFlightAction("settings-device", "takeoff");
+      await respondCurrentTelemetry();
+      await expect(flightRequest).resolves.toMatchObject({ ok: true, value: { ok: true, code: "CONFIRMATION_REQUIRED" } });
       const commands = [
         ["device.settings.camera.read", undefined],
         ["device.settings.camera.write", { focusMode: text("AUTO") }],
@@ -301,6 +313,7 @@ describe("DesktopApplication", () => {
           : name.endsWith("camera.write") ? workflow.writeCameraSettings("settings-device", { focusMode: "AUTO" })
           : name.endsWith("transmission.read") ? workflow.readTransmissionSettings("settings-device")
           : workflow.writeTransmissionSettings("settings-device", { bandwidth: "BANDWIDTH_20MHZ" });
+        await respondCurrentTelemetry();
         const command = RelayFrameCodec.decode(await nextMessage(socket));
         expect(command).toMatchObject({ kind: "decoded", frame: { type: "command", command: { name } } });
         if (command.kind !== "decoded" || command.frame.type !== "command") throw new Error("command decoding failed");

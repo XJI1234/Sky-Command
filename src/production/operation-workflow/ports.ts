@@ -6,8 +6,8 @@ import type { MissionControlInstance } from "../../modules/mission-control/index
 import type { RouteLibraryInstance } from "../../modules/route-library/index.js";
 import type { RelayOperationsAdapterInstance } from "../relay-operations-adapter/index.js";
 
-/** Supplies normalized phone sessions and telemetry for workflow projection and readiness checks. */
-export type RelayOperationsPort = Pick<RelayOperationsAdapterInstance, "devices" | "telemetry" | "subscribe">;
+/** Supplies display telemetry plus short-lived, session-bound control telemetry for workflow decisions. */
+export type RelayOperationsPort = Pick<RelayOperationsAdapterInstance, "devices" | "telemetry" | "controlTelemetry" | "refreshTelemetry" | "subscribe">;
 
 /** Owns route import, lookup, selection, and removal; the workflow does not access route storage directly. */
 export type RouteLibraryPort = Pick<RouteLibraryInstance, "importFile" | "list" | "getPreview" | "select" | "remove">;

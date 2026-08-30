@@ -172,6 +172,29 @@ describe("preflight check contract", () => {
     });
   });
 
+  it("checks upload hardware without applying launch-only telemetry constraints", () => {
+    const input: PreflightInput = {
+      relayConnected: true,
+      payload: {
+        sdkRegistered: true,
+        remoteControllerConnected: true,
+        flightControllerConnected: true,
+        connected: true,
+        isFlying: true,
+        motorsOn: true,
+        batteryPercent: 5,
+      },
+      capabilities: { waypointMission: true, waypointMissionSupport: "supported" },
+      missionPhase: "staged",
+    };
+
+    expect(PreflightCheck.evaluateUpload(input)).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluateUpload({ ...input, payload: { ...input.payload, remoteControllerConnected: false } })).toMatchObject({
+      ok: false,
+      blockers: [{ code: "REMOTE_CONTROLLER_DISCONNECTED" }],
+    });
+  });
+
   it("fails closed for malformed direct-flight actions and policies", () => {
     const action: FlightActionPreflightInput = {
       relayConnected: true,

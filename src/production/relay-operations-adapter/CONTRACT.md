@@ -28,6 +28,7 @@ RelayLink（协议 JSON、设备会话、命令/任务结果）
 RelayOperationsAdapter.create({ relay }) -> RelayOperationsAdapterInstance
 
 instance.telemetry(deviceId) -> DesktopRelayTelemetry | null
+instance.controlTelemetry(deviceId) -> DesktopRelayTelemetry | null
 instance.devices() -> readonly DesktopRelayDevice[]
 instance.snapshot() -> RelayOperationsSnapshot
 instance.subscribe(listener) -> unsubscribe
@@ -80,6 +81,8 @@ instance.dispose() -> void
 
 `liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。
 
+`telemetry(deviceId)` 是显示遥测：它可以保留最近一次成功接收的完整快照，用于向操作员说明最后已知事实和更新时间；它绝不单独授权任何命令。`controlTelemetry(deviceId)` 是控制遥测：只能返回本设备当前会话中一次 `telemetry.read` 成功结果解码出的完整快照，并且仅在该结果于桌面本地接收后的 3 秒内有效。每次刷新开始时都必须先作废本设备旧控制快照；结果缺失、畸形、会话未知、设备断开、同 ID 会话替换、时钟失效或超过时效时必须保持 `null`。这确保失败或畸形的本次读取绝不复用先前读数来授权新操作。这两个接口不能互相代替。
+
 ## 航线阶段快照投影
 
 `RelayOperationsSnapshot.missionPhases` 只保留可被 `mission-control` 直接消费的完整事实：`deviceId`、正安全整数 `missionRevision`、非负安全整数 `deviceGeneration`、正安全整数 `sequence`、`START_POINT_REACHED|ROUTE_EXECUTION_STARTED` 和安全 `.kmz` 基名。任一字段缺失、畸形或文件名不安全的条目必须被丢弃，绝不补零、复用上一次代际或猜测阶段。不得裁剪任务代际、设备代际或序号；否则桌面状态机无法辨别当前任务与迟到回调。
@@ -110,7 +113,7 @@ instance.dispose() -> void
 - 暂停、继续、停止在等待命令结果时必须保留“请求中”状态；命令成功后才进入对应已确认状态。
 - `live-stream.start` 成功只表示手机接受 RTMP 推流；播放成功只能由媒体管线确认本机 HTTP-FLV 已就绪并由播放器附着后产生。
 - `flight.*` 成功只表示 DJI 已完成该调用；飞行状态必须仍由后续遥测显示。
-- `telemetry.read` 成功只表示手机已发布当前快照；不得据此把链路标为 ready。
+- `telemetry.read` 成功只表示手机已返回当次完整快照；不得据此把链路标为 ready。每次读取开始时适配器先作废该设备旧控制遥测；仅当返回的结构化 `result` 可按本契约入站投影完整解码、且请求前后仍是同一 `deviceId + sessionId` 时，才可建立新的 3 秒控制遥测。读取失败、超时、畸形、会话变化或时钟失效必须保持该事实为空，不能回退至旧快照；调用方仍必须逐项执行各自的门禁，不能把读取成功视为 DJI、遥控器、飞机或飞控已就绪。
 - 设置读写成功必须携带可解码的 `command-result.result` 完整快照；缺失或畸形结果是 `invalid-result`，不得乐观更新。
 - `pairing.status` 仅在命令 `succeeded` 时携带根契约 §7.4 的结构化 `result`（`pairingState`、`aircraftConnected`、`flightControllerConnected`、`aircraftModel`、`motorsOn`、`sdkRegistered`）。失败、超时或 `pairing.start` / `pairing.stop` 不得附带该 `result`。实时配对显示仍以入站遥测的 `pairingState` 为准，命令成功不等于已配对。
 
@@ -122,9 +125,10 @@ instance.dispose() -> void
 
 1. 从公开设备列表移除旧设备；
 2. 使该设备的遥测与命令端口立即不可用；
-3. 让调用方可将任务、图传、设置和待确认飞控动作置为断连或删除；
-4. 丢弃旧会话的迟到命令结果、阶段事件和遥测；
-5. 不恢复旧任务上传、图传或飞控状态。
+3. 立即丢弃该设备的显示补充遥测与控制遥测；
+4. 让调用方可将任务、图传、设置和待确认飞控动作置为断连或删除；
+5. 丢弃旧会话的迟到命令结果、阶段事件和遥测；
+6. 不恢复旧任务上传、图传或飞控状态。
 
 订阅回调抛出异常不得阻断其他订阅者。`dispose()` 幂等，释放对 `RelayLink` 的订阅；释放后不再发布事件。
 
@@ -144,3 +148,4 @@ instance.dispose() -> void
 10. 位姿透传（高度不受 `0..100` 限制；坐标成对校验；JSON null 不得变成 `0`）；
 11. `pairing.status` 仅在成功时转发结构化 `result`，`pairing.start` / `pairing.stop` 与失败结果不得附带；
 12. `telemetry.read` 以空字段下发，成功不得推导为飞机已连接。
+13. `telemetry.read` 的有效完整结果只能为同会话建立短时控制遥测；过期、会话替换、断连和迟到结果均不得复活该事实。

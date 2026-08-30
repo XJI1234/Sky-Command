@@ -178,6 +178,19 @@ function evaluate(input: PreflightInput, policy: PreflightPolicy = DEFAULT_POLIC
   return result(codes);
 }
 
+function evaluateUpload(input: PreflightInput): PreflightResult {
+  const normalized = normalize(input);
+  if (normalized === null) return result(["INVALID_INPUT"]);
+
+  const codes: PreflightBlockerCode[] = [];
+  if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
+  if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
+  if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
+  if (normalized.flightControllerConnected !== true || normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+  if (normalized.waypointMission !== true || normalized.waypointMissionSupport !== "supported") codes.push("WAYPOINT_UNSUPPORTED");
+  return result(codes);
+}
+
 function evaluateFlightAction(input: FlightActionPreflightInput, policy: PreflightPolicy = DEFAULT_POLICY): PreflightResult {
   const normalized = normalize(input);
   const action = flightActionOf(input);
@@ -204,4 +217,4 @@ function evaluateFlightAction(input: FlightActionPreflightInput, policy: Preflig
   return result(codes);
 }
 
-export const PreflightCheck = Object.freeze({ evaluate, evaluateFlightAction });
+export const PreflightCheck = Object.freeze({ evaluate, evaluateUpload, evaluateFlightAction });
