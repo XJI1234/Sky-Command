@@ -15,6 +15,7 @@ const device = (overrides: Record<string, unknown> = {}) => ({
     aircraft: "connected",
     batteryPercent: 90,
     flightState: "grounded",
+    motorsOn: false,
     pairingState: "PAIRED",
     pose: { latitude: 30.2, longitude: 120.2, altitudeMeters: 48 },
   },
@@ -105,7 +106,7 @@ describe("操作台投影", () => {
     });
 
     expect(view.streamCanStart).toBe(false);
-    expect(view.missionActions.start).toEqual({ enabled: false, reason: "飞机飞控未连接，请确认飞机已开机" });
+    expect(view.missionActions.start).toEqual({ enabled: false, reason: "遥控器未连接" });
     expect(OperatorConsole.evaluate("stream-start", view)).toEqual({ ok: false, reason: "遥控器未连接，无法启动图传" });
   });
 
@@ -291,7 +292,33 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("mission-stage", noAircraft)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-upload", noAircraft)).toEqual({
       ok: false,
-      reason: "飞机尚未连接",
+      reason: "请先将航线传输到手机",
+    });
+
+    const sdkStarting = OperatorConsole.project({
+      snapshot: snapshot([device({
+        control: { sdk: "not-ready", remoteController: "connected", flightController: "connected", aircraft: "connected" },
+        mission: { phase: "staged", routeId: "route-1" },
+      })], { routes: [kmz], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("mission-upload", sdkStarting)).toEqual({
+      ok: false,
+      reason: "手机尚未就绪",
+    });
+
+    const capabilityUnknown = OperatorConsole.project({
+      snapshot: snapshot([device({
+        capabilities: { waypointMission: "unknown", liveVideo: "supported" },
+        mission: { phase: "staged", routeId: "route-1" },
+      })], { routes: [kmz], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("mission-upload", capabilityUnknown)).toEqual({
+      ok: false,
+      reason: "所选机型未上报航线能力",
     });
   });
 
@@ -357,6 +384,13 @@ describe("操作台工作区", () => {
     const resuming = flight({ mission: { phase: "resuming", routeId: "route-1" } });
     expect(OperatorConsole.evaluate("mission-stop", resuming)).toEqual({ ok: true });
 
+    const controlInterrupted = flight({
+      control: { sdk: "ready", remoteController: "connected", flightController: "disconnected", aircraft: "disconnected" },
+      mission: { phase: "running", routeId: "route-1" },
+    });
+    expect(OperatorConsole.evaluate("mission-pause", controlInterrupted)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("mission-stop", controlInterrupted)).toEqual({ ok: true });
+
     const reconnected = flight({ mission: { phase: "disconnected", routeId: "route-1" } });
     expect(OperatorConsole.evaluate("mission-stop", reconnected)).toEqual({ ok: true });
 
@@ -394,6 +428,26 @@ describe("操作台工作区", () => {
       reason: "飞机尚未连接",
     });
     expect(OperatorConsole.evaluate("stream-start", aircraftOnlyGone)).toEqual({ ok: true });
+  });
+
+  it("执行航线前必须确认电机尚未启动", () => {
+    const flight = (motorsOn: boolean | null) => OperatorConsole.project({
+      snapshot: snapshot([device({
+        connection: { ...device().connection, motorsOn },
+        mission: { phase: "uploaded", routeId: "route-1" },
+      })], { routes: [kmz], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(OperatorConsole.evaluate("mission-start", flight(true))).toEqual({
+      ok: false,
+      reason: "电机已启动，禁止启动航线",
+    });
+    expect(OperatorConsole.evaluate("mission-start", flight(null))).toEqual({
+      ok: false,
+      reason: "尚未确认电机是否关闭，禁止启动航线",
+    });
   });
 
   it("只有画面 ready 才算可播放，手机接受推流不得写成实时图传", () => {
@@ -528,6 +582,10 @@ describe("操作台工作区", () => {
       ok: false,
       reason: "尚未取得所选飞机的电池遥测",
     });
+    expect(OperatorConsole.evaluate("flight-takeoff", flight({ batteryPercent: 19 }))).toEqual({
+      ok: false,
+      reason: "电量低于 20%，不能起飞",
+    });
     expect(OperatorConsole.evaluate("flight-takeoff", flight({ flightState: "unknown" }))).toEqual({
       ok: false,
       reason: "尚未确认飞机是否在地面，不能起飞",
@@ -535,6 +593,14 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("flight-takeoff", flight({ flightState: "flying" }))).toEqual({
       ok: false,
       reason: "飞机已在空中，不能起飞",
+    });
+    expect(OperatorConsole.evaluate("flight-takeoff", flight({ motorsOn: true }))).toEqual({
+      ok: false,
+      reason: "电机已启动，不能起飞",
+    });
+    expect(OperatorConsole.evaluate("flight-takeoff", flight({ motorsOn: null }))).toEqual({
+      ok: false,
+      reason: "尚未确认电机是否关闭，不能起飞",
     });
     expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "flying" }))).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "unknown" }))).toEqual({
@@ -553,6 +619,13 @@ describe("操作台工作区", () => {
 });
 
 describe("航线操作台渲染契约", () => {
+  it("设备页提供只读状态刷新，不把读取成功写成飞机或图传已就绪", () => {
+    const source = renderer();
+    expect(page()).toContain('id="device-refresh"');
+    expect(source).toContain('bridge().invoke("device-refresh", { deviceId })');
+    expect(source).toContain("已读取当前手机状态，请查看各项状态");
+  });
+
   it("由任务投影禁用不合法按钮，并在执行前重新确认已上传任务身份", () => {
     const source = renderer();
     expect(source).toContain("view.missionActions[action]");

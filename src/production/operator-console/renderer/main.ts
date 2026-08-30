@@ -522,6 +522,9 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     return node;
   }));
   const inspected = devices.find((item) => item.deviceId === view.missionDeviceId);
+  const refresh = el("device-refresh") as HTMLButtonElement;
+  refresh.disabled = inspected === undefined;
+  refresh.title = inspected === undefined ? "请先选择已连接的手机" : "读取当前手机状态";
   const connection = inspected === undefined ? {} : inspected.connection as Record<string, unknown> ?? {};
   const msdk = msdkFact(connection);
   const pairing = pairingFact(connection);
@@ -623,7 +626,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
       : `${view.streamLabel}。要结束请点「停止图传」`;
     streamReady.classList.add("ok");
   } else if (view.streamCanStart) {
-    streamReady.textContent = "图传可启动：遥控器与飞机已连接，点下方「启动图传」";
+    streamReady.textContent = "图传可启动：手机 MSDK、遥控器与图传能力已确认，点下方「启动图传」";
     streamReady.classList.add("ok");
   } else {
     streamReady.textContent = view.streamLabel.startsWith("图传未就绪")
@@ -755,6 +758,22 @@ document.querySelectorAll("nav button").forEach((button) => {
     if (workspace === "devices" || workspace === "routes" || workspace === "flight") state.workspace = workspace;
     void render();
   });
+});
+
+el("device-refresh").addEventListener("click", async () => {
+  const view = await projectView();
+  const deviceId = view.missionDeviceId;
+  if (deviceId === null) { show("请先选择已连接的手机"); return; }
+  const button = el("device-refresh") as HTMLButtonElement;
+  button.disabled = true;
+  try {
+    const result = unwrap(await bridge().invoke("device-refresh", { deviceId }));
+    show(accepted(result) ? "已读取当前手机状态，请查看各项状态" : operatorNotice(result));
+  } catch {
+    show("状态刷新失败，请检查手机连接后重试");
+  } finally {
+    await render();
+  }
 });
 
 el("route-import").addEventListener("click", async () => {

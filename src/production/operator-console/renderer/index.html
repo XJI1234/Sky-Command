@@ -48,6 +48,9 @@
     section { padding: 16px; border-right: 1px solid var(--line); overflow: auto; }
     section:last-child { border-right: 0; }
     h2 { margin: 0 0 12px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .section-heading h2 { margin-bottom: 12px; }
+    .section-heading button { margin-bottom: 12px; }
     .device { padding: 12px; margin-bottom: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
     .device strong { word-break: break-all; }
     .muted, .notice, .guide { color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -164,7 +167,10 @@
       <div id="device-list"></div>
     </section>
     <section>
-      <h2>连接状态</h2>
+      <div class="section-heading">
+        <h2>连接状态</h2>
+        <button id="device-refresh" type="button">刷新状态</button>
+      </div>
       <div id="device-detail" class="muted">从左侧选择已连接的手机。</div>
       <p id="device-guide" class="guide"></p>
     </section>
