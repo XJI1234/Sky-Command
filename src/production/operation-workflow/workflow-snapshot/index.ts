@@ -3,6 +3,13 @@ const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value)
 const record = (value: unknown): RecordValue | null => value !== null && typeof value === "object" ? value as RecordValue : null;
 const read = (value: unknown, key: string): unknown => { try { return record(value)?.[key]; } catch { return undefined; } };
 const state = (value: unknown, yes: string, no: string): string => value === true ? yes : value === false ? no : "unknown";
+const msdkState = (value: unknown): "stopped" | "starting" | "ready" | "failed" | "unknown" => {
+  if (value === "STOPPED") return "stopped";
+  if (value === "STARTING") return "starting";
+  if (value === "READY") return "ready";
+  if (value === "FAILED") return "failed";
+  return "unknown";
+};
 const pairingStates = ["UNKNOWN", "IDLE", "PAIRING", "PAIRED", "STOPPING", "FAILED"] as const;
 const pairingState = (value: unknown): string => typeof value === "string" && pairingStates.includes(value as typeof pairingStates[number]) ? value : "unknown";
 const poseNumber = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -28,12 +35,14 @@ const live = (payload: unknown) => {
     rttMillis: boundedInteger(read(payload, "liveRttMillis"), 0, 60_000),
   });
 };
-const connection = (payload: unknown) => {
+const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
   const flightController = state(read(payload, "flightControllerConnected"), "connected", "disconnected");
   const flightFactsAvailable = flightController !== "disconnected";
   return freeze({
     relay: "online" as const,
+    telemetryReceivedAtMs: boundedInteger(telemetryReceivedAtMs, 0, Number.MAX_SAFE_INTEGER),
     sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"),
+    msdk: msdkState(read(payload, "sdkAvailability")),
     remoteController: state(read(payload, "remoteControllerConnected"), "connected", "disconnected"),
     flightController,
     aircraft: state(read(payload, "connected"), "connected", "disconnected"),
@@ -49,8 +58,14 @@ const connection = (payload: unknown) => {
     live: live(payload),
   });
 };
+const control = (payload: unknown) => freeze({
+  sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"),
+  remoteController: state(read(payload, "remoteControllerConnected"), "connected", "disconnected"),
+  flightController: state(read(payload, "flightControllerConnected"), "connected", "disconnected"),
+  aircraft: state(read(payload, "connected"), "connected", "disconnected"),
+});
 
-function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly telemetry: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
+function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
   const streams = read(input.media, "streams");
   const mediaStreams = Array.isArray(streams) ? streams : [];
   const devices = input.devices.map((device) => {
@@ -62,7 +77,8 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
     const videoPhase = mediaPhase === "awaiting-ingest" || mediaPhase === "awaiting-playback" || mediaPhase === "ready" || mediaPhase === "failed" ? mediaPhase : "unavailable";
     return freeze({
       deviceId: device.deviceId,
-      connection: connection(payload),
+      connection: connection(payload, read(telemetry, "receivedAtMs")),
+      control: control(read(record(device.controlTelemetry), "payload")),
       capabilities: freeze({ waypointMission: read(capabilities, "waypointMission") === true && read(capabilities, "waypointMissionSupport") === "supported" ? "supported" : read(capabilities, "waypointMission") === false || read(capabilities, "waypointMissionSupport") === "unsupported" ? "unsupported" : "unknown", liveVideo: read(capabilities, "liveVideo") === true ? "supported" : read(capabilities, "liveVideo") === false ? "unsupported" : "unknown" }),
       assignment: device.assignment,
       mission: device.mission,

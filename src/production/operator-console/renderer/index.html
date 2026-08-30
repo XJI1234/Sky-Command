@@ -4,14 +4,14 @@
   <meta charset="utf-8" />
   <title>Sky Command</title>
   <style>
-    :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; --bg: #0b0f12; --panel: #131c20; --line: #2e3c42; --text: #e8f0ef; --muted: #839397; --accent: #d7f16a; }
+    :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; --bg: #0b0f12; --panel: #131c20; --panel-strong: #10181c; --line: #2e3c42; --text: #e8f0ef; --muted: #839397; --accent: #d7f16a; --danger: #ff9d9d; }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column; overflow: hidden; }
     body > header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
     header h1 { margin: 0; font-size: 14px; letter-spacing: 0.12em; }
     nav { display: flex; gap: 8px; }
-    nav button, .row button, .actions button { background: #0d1519; color: var(--text); border: 1px solid #405057; min-height: 32px; padding: 0 12px; cursor: pointer; }
+    nav button, .row button, .actions button, .flight-controls button { background: #0d1519; color: var(--text); border: 1px solid #405057; min-height: 32px; padding: 0 12px; cursor: pointer; }
     nav button.active, .device.inspected { border-color: var(--accent); color: var(--accent); }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
     #stream-ready.ok, #stream-label.ok { color: var(--accent); }
@@ -20,7 +20,7 @@
     #workspace-devices { grid-template-columns: 280px 1fr; }
     #workspace-routes { grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
     #workspace-flight {
-      grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+      grid-template-columns: minmax(0, 1fr) minmax(390px, 460px);
       grid-template-rows: minmax(0, 1fr);
       overflow: hidden;
     }
@@ -34,7 +34,8 @@
     }
     #workspace-flight .flight-controls {
       overflow: auto;
-      padding: 16px;
+      padding: 0;
+      background: var(--panel-strong);
     }
     #workspace-flight video {
       width: 100%;
@@ -51,10 +52,15 @@
     .device strong { word-break: break-all; }
     .muted, .notice, .guide { color: var(--muted); font-size: 12px; line-height: 1.6; }
     .chain { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+    .connection-status-list { display: grid; margin: 12px 0; border-top: 1px solid var(--line); }
+    .connection-status-row { display: grid; grid-template-columns: minmax(96px, 132px) minmax(0, 1fr); gap: 16px; align-items: baseline; min-height: 34px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .connection-status-name { color: var(--muted); font-size: 12px; }
+    .connection-status-value { min-width: 0; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+    .device-status-heading { margin: 20px 0 0; color: var(--accent); font-size: 12px; letter-spacing: 0; }
     .ok { color: var(--accent); }
     .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
     .warn { color: #fc6; }
-    #confirm[hidden] { display: none; }
+    #confirm[hidden], #mission-confirm[hidden] { display: none; }
     #connection-count.online { color: var(--accent); }
     #workspace-routes > .route-preview-panel { padding: 0; overflow: hidden; border-right: 1px solid #263138; min-height: 0; height: 100%; }
     #workspace-routes > .route-mission-wrap { padding: 16px; overflow: auto; min-height: 0; }
@@ -86,6 +92,58 @@
     .focus-route { border: 1px solid #475948; background: #121a14; color: #d7f16a; }
     .remove-route { border: 1px solid #704044; background: #161013; color: #ff9d9d; }
     .route-mission-control > p { margin: 12px 0 0; color: #93a1a4; font: 11px/1.5 monospace; }
+    .flight-controls h2, .flight-controls h3, .flight-controls p { margin-top: 0; }
+    .control-heading { padding: 20px 20px 16px; border-bottom: 1px solid var(--line); }
+    .control-heading h2 { margin-bottom: 6px; color: var(--accent); }
+    .control-heading p { margin-bottom: 0; }
+    .control-block { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+    .control-block:last-of-type { border-bottom: 0; }
+    .control-block-header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+    .control-block-header h3 { margin-bottom: 4px; color: var(--text); font-size: 14px; font-weight: 600; }
+    .control-block-header p { margin-bottom: 0; }
+    .control-block-note { flex: 0 0 auto; margin: 1px 0 0; color: var(--muted); font: 10px/1.5 monospace; text-align: right; }
+    .device-select-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 14px; }
+    .device-select { display: grid; gap: 6px; color: var(--muted); font: 11px/1.4 monospace; }
+    .flight-controls select { width: 100%; min-width: 0; min-height: 36px; border: 1px solid #405057; background: #0a1013; color: var(--text); padding: 0 8px; font: 12px monospace; }
+    .flight-controls select:focus-visible, .flight-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .mission-status { margin: 14px 0 0; color: var(--text); font-size: 12px; line-height: 1.6; }
+    .mission-route { margin: 6px 0 0; color: var(--muted); font: 11px/1.55 monospace; overflow-wrap: anywhere; }
+    .mission-flow { display: grid; gap: 0; margin-top: 14px; border-top: 1px solid var(--line); }
+    .mission-step { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+    .mission-step-copy { min-width: 0; display: grid; gap: 3px; }
+    .mission-step-name { color: var(--text); font-size: 13px; font-weight: 600; }
+    .mission-step-detail { color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .mission-step button { min-width: 116px; }
+    .mission-step button:not(:disabled) { border-color: var(--accent); background: #1d2915; color: var(--accent); font-weight: 600; }
+    .mission-secondary-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+    .mission-secondary-actions button { min-width: 78px; }
+    .mission-secondary-actions button[data-action="mission-stop"] { border-color: #704044; color: var(--danger); }
+    .mission-confirmation, .flight-confirmation { margin-top: 12px; padding: 12px; border-left: 2px solid #d8b456; background: #1a1912; }
+    .mission-confirmation p, .flight-confirmation p { margin-bottom: 10px; color: #f3d58d; font-size: 12px; line-height: 1.55; }
+    .confirmation-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+    .mission-confirmation button:first-of-type, .flight-confirmation button:first-of-type { border-color: #d8b456; color: #f3d58d; }
+    .stream-controls { margin-top: 14px; }
+    .stream-controls .row, .flight-safety-controls .row { margin: 10px 0 0; }
+    .flight-safety-controls { margin-top: 14px; }
+    .flight-safety-controls > p { margin: 0; }
+    .direct-flight-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .direct-flight-actions button[data-action="flight-takeoff"] { border-color: #668661; }
+    .direct-flight-actions button[data-action="flight-land"], .direct-flight-actions button[data-action="flight-return-home"] { border-color: #704044; color: var(--danger); }
+    .operation-status { margin: 0; padding: 13px 20px 18px; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+    @media (max-width: 860px) {
+      body { overflow: auto; }
+      #workspace-flight { display: block; overflow: visible; }
+      #workspace-flight .flight-video { min-height: 420px; border-right: 0; border-bottom: 1px solid var(--line); }
+      #workspace-flight .flight-controls { overflow: visible; }
+    }
+    @media (max-width: 520px) {
+      .connection-status-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr); gap: 10px; }
+      .device-select-grid { grid-template-columns: minmax(0, 1fr); }
+      .mission-step { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+      .mission-step button { width: 100%; }
+      .control-block-header { display: block; }
+      .control-block-note { margin-top: 6px; text-align: left; }
+    }
   </style>
   <link rel="stylesheet" href="./cesium/Widgets/widgets.css" />
 </head>
@@ -154,46 +212,120 @@
       <p id="stream-label" class="notice"></p>
       <video id="video" controls muted autoplay playsinline></video>
     </section>
-    <section class="flight-controls">
-      <h2>任务与控制</h2>
-      <p id="stream-ready" class="notice"></p>
-      <p class="muted">先看上方图传是否可启动；未就绪时「启动图传」不可点。</p>
-      <label class="muted">任务飞机</label>
-      <select id="mission-select"></select>
-      <label class="muted">图传飞机</label>
-      <select id="stream-select"></select>
-      <p id="mission-label" class="notice"></p>
-      <p id="flight-route" class="notice"></p>
-      <div class="row">
-        <button data-action="mission-stage">传输到手机</button>
-        <button data-action="mission-upload">上传到飞机</button>
-        <button data-action="mission-start">开始</button>
-        <button data-action="mission-pause">暂停</button>
-        <button data-action="mission-resume">恢复</button>
-        <button data-action="mission-stop">停止</button>
+    <section class="flight-controls" aria-label="飞行操作">
+      <div class="control-heading">
+        <h2>飞行操作</h2>
+        <p class="notice">航线、图传与直接飞控分别操作，状态以手机的确认回报为准。</p>
       </div>
-      <div class="row">
-        <button data-action="stream-start">启动图传</button>
-        <button data-action="stream-stop">停止图传</button>
+
+      <div class="control-block">
+        <div class="control-block-header">
+          <div>
+            <h3>任务目标</h3>
+            <p class="muted">任务与图传可使用同一台或不同的已连接手机。</p>
+          </div>
+        </div>
+        <div class="device-select-grid">
+          <label class="device-select">
+            <span>任务飞机</span>
+            <select id="mission-select"></select>
+          </label>
+          <label class="device-select">
+            <span>图传飞机</span>
+            <select id="stream-select"></select>
+          </label>
+        </div>
       </div>
-      <div class="row">
-        <button data-action="hardware-readiness">实机预检</button>
+
+      <div class="control-block">
+        <div class="control-block-header">
+          <div>
+            <h3>航线任务</h3>
+            <p class="muted">每一步只在前一步得到确认后开放。</p>
+          </div>
+          <p class="control-block-note">不会自动上传或执行</p>
+        </div>
+        <p id="mission-label" class="mission-status"></p>
+        <p id="flight-route" class="mission-route"></p>
+        <div class="mission-flow">
+          <div class="mission-step" data-mission-step="prepare">
+            <div class="mission-step-copy">
+              <span class="mission-step-name">准备到手机</span>
+              <span class="mission-step-detail">仅传输到手机并校验文件</span>
+            </div>
+            <button data-action="mission-stage">准备航线</button>
+          </div>
+          <div class="mission-step" data-mission-step="upload">
+            <div class="mission-step-copy">
+              <span class="mission-step-name">上传至飞机</span>
+              <span class="mission-step-detail">手机将已校验文件交给飞机</span>
+            </div>
+            <button data-action="mission-upload">上传至飞机</button>
+          </div>
+          <div class="mission-step" data-mission-step="execute">
+            <div class="mission-step-copy">
+              <span class="mission-step-name">执行航线</span>
+              <span class="mission-step-detail">执行前会再次要求确认</span>
+            </div>
+            <button data-action="mission-start">执行航线</button>
+          </div>
+        </div>
+        <div class="mission-secondary-actions" aria-label="航线进行中控制">
+          <button data-action="mission-pause">暂停</button>
+          <button data-action="mission-resume">恢复</button>
+          <button data-action="mission-stop">停止航线</button>
+        </div>
+        <div id="mission-confirm" class="mission-confirmation" hidden>
+          <p id="mission-confirm-text"></p>
+          <div class="confirmation-actions">
+            <button id="mission-confirm-yes">确认执行</button>
+            <button id="mission-confirm-no">取消</button>
+          </div>
+        </div>
       </div>
-      <div class="row">
-        <button data-action="flight-takeoff">起飞</button>
-        <button data-action="flight-land">降落</button>
-        <button data-action="flight-return-home">返航</button>
+
+      <div class="control-block">
+        <div class="control-block-header">
+          <div>
+            <h3>图传控制</h3>
+            <p id="stream-ready" class="notice"></p>
+            <p class="muted">未就绪时「启动图传」不可点。</p>
+          </div>
+        </div>
+        <div class="row stream-controls">
+          <button data-action="stream-start">启动图传</button>
+          <button data-action="stream-stop">停止图传</button>
+        </div>
       </div>
-      <div id="confirm" class="warn" hidden>
-        <p id="confirm-text"></p>
-        <button id="confirm-yes">确认</button>
-        <button id="confirm-no">取消</button>
+
+      <div class="control-block flight-safety-controls">
+        <div class="control-block-header">
+          <div>
+            <h3>直接飞行控制</h3>
+            <p class="muted">先进行实机预检。起飞、降落和返航均需独立确认。</p>
+          </div>
+        </div>
+        <div class="row">
+          <button data-action="hardware-readiness">实机预检</button>
+        </div>
+        <div class="direct-flight-actions">
+          <button data-action="flight-takeoff">起飞</button>
+          <button data-action="flight-land">降落</button>
+          <button data-action="flight-return-home">返航</button>
+        </div>
+        <div id="confirm" class="flight-confirmation" hidden>
+          <p id="confirm-text"></p>
+          <div class="confirmation-actions">
+            <button id="confirm-yes">确认</button>
+            <button id="confirm-no">取消</button>
+          </div>
+        </div>
+        <p id="guidance" class="notice" style="margin: 12px 0 0;"></p>
       </div>
-      <p id="guidance" class="notice"></p>
+      <p id="status" class="operation-status" aria-live="polite"></p>
     </section>
   </main>
 
-  <p id="status" class="notice" style="position: fixed; left: 16px; bottom: 8px; margin: 0;"></p>
   <script>window.CESIUM_BASE_URL = "./cesium/";</script>
   <script src="./cesium/Cesium.js"></script>
   <script src="./console.js"></script>

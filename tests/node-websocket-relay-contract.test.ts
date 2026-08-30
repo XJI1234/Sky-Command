@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NodeWebSocketRelayTransport, type WebSocketLike, type WebSocketServerLike } from "../src/adapters/node-websocket-relay/index.js";
 
 type Listener = (...args: any[]) => void;
@@ -299,5 +299,57 @@ describe("node websocket relay adapter contract", () => {
     expect(socket.readyState).toBe(3);
     expect(reasons).toEqual(["peer-closed"]);
     await listener.close();
+  });
+
+  it("clears keepalive timers, accepts pongs, and handles both supported timer handle shapes", async () => {
+    class PingSocket extends Socket {
+      pings = 0;
+      ping(): void { this.pings += 1; }
+    }
+    const timers: Array<() => void> = [];
+    const cleared: unknown[] = [];
+    const server = new Server();
+    const transport = NodeWebSocketRelayTransport.create({
+      factory: { openState: 1, create: () => server },
+      pingIntervalMs: 1,
+      scheduler: {
+        setInterval: (callback: () => void) => { timers.push(callback); return timers.length; },
+        clearInterval: (handle: unknown) => { cleared.push(handle); },
+      },
+    });
+    const listening = transport.listen({ host: "127.0.0.1", port: 16 }, () => undefined);
+    server.emit("listening");
+    const listener = await listening;
+    const socket = new PingSocket();
+    server.sockets.push(socket);
+    server.emit("connection", socket);
+
+    timers[0]!();
+    socket.emit("pong");
+    timers[0]!();
+    expect(socket.pings).toBe(2);
+    socket.close();
+    timers[0]!();
+    expect(cleared).toEqual([1]);
+    await listener.close();
+
+    const numericServer = new Server();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockReturnValue(1 as unknown as NodeJS.Timeout);
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => undefined);
+    try {
+      const numericTransport = NodeWebSocketRelayTransport.create({ factory: { openState: 1, create: () => numericServer } });
+      const numericListening = numericTransport.listen({ host: "127.0.0.1", port: 17 }, () => undefined);
+      numericServer.emit("listening");
+      const numericListener = await numericListening;
+      const numericSocket = new PingSocket();
+      numericServer.sockets.push(numericSocket);
+      numericServer.emit("connection", numericSocket);
+      numericSocket.close();
+      expect(clearIntervalSpy).toHaveBeenCalledWith(1);
+      await numericListener.close();
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 });

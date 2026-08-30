@@ -206,6 +206,15 @@ describe("QualifiedRoute", () => {
     expect(toDetail(asset(value)).warnings[0]?.code).toBe("WPML_MISSING");
   });
 
+  it("creates a WPML preview route only when DJI_TEMPLATE_MISSING is present", () => {
+    const value = unwrap(qualified({
+      classification: "preview-only",
+      sourceDocument: "waylines.wpml",
+      warnings: [{ code: "DJI_TEMPLATE_MISSING", message: "缺少 DJI 模板" }]
+    }));
+    expect(toDetail(asset(value)).warnings[0]?.code).toBe("DJI_TEMPLATE_MISSING");
+  });
+
   it("normalizes both warning codes into their fixed order", () => {
     const route = unwrap(qualified({
       classification: "preview-only",
@@ -266,6 +275,7 @@ describe("QualifiedRoute", () => {
     ["kml", "upload-candidate", "route.kml", "route.kml", []],
     ["kmz", "upload-candidate", "route.kmz", "doc.kml", []],
     ["kmz", "upload-candidate", "route.kmz", "waylines.wpml", [{ code: "WPML_MISSING", message: "x" }]],
+    ["kmz", "upload-candidate", "route.kmz", "waylines.wpml", [{ code: "DJI_TEMPLATE_MISSING", message: "x" }]],
     ["kmz", "preview-only", "route.kmz", "doc.kml", []]
   ] as [RouteFileFormat, RouteClassification, string, string, RouteWarning[]][]) (
     "rejects inconsistent classification %s/%s",

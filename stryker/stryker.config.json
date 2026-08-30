@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
   "testRunner": "vitest",
+  "ignorePatterns": [".worktrees"],
   "mutate": [
     "src/modules/desktop-settings/index.ts",
     "src/modules/route-library/index.ts",

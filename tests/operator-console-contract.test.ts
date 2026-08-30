@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { OperatorConsole } from "../src/production/operator-console/index.js";
+
+const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8");
+const page = () => readFileSync(new URL("../src/production/operator-console/renderer/index.html", import.meta.url), "utf8");
 
 const device = (overrides: Record<string, unknown> = {}) => ({
   deviceId: "phone-1",
@@ -35,6 +39,76 @@ const snapshot = (devices: readonly unknown[], extra: Record<string, unknown> = 
 });
 
 describe("操作台投影", () => {
+  it("设备页以独立标签显示精确 MSDK 生命周期", () => {
+    const source = renderer();
+    expect(source).toContain('case "ready": return { label: "MSDK 已就绪", ok: true }');
+    expect(source).toContain('case "starting": return { label: "MSDK 正在初始化", ok: false }');
+    expect(source).toContain('case "failed": return { label: "MSDK 初始化失败", ok: false }');
+    expect(source).toContain('case "stopped": return { label: "MSDK 已停止", ok: false }');
+    expect(source).toContain('MSDK 状态未知');
+  });
+
+  it("设备页分别呈现飞控和飞机的连接事实", () => {
+    const source = renderer();
+    expect(source).toContain('connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")');
+    expect(source).toContain('connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知")');
+  });
+
+  it("设备详情以六个具名独立行呈现连接事实", () => {
+    const source = renderer();
+    expect(source).toContain('class="connection-status-list"');
+    expect(source).toContain('statusRow("电脑到手机中继", "中继在线", true)');
+    expect(source).toContain('statusRow("MSDK", msdk.label, msdk.ok)');
+    expect(source).toContain('statusRow("遥控器", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))');
+    expect(source).toContain('statusRow("对频", pairing.label, pairing.ok)');
+    expect(source).toContain('statusRow("飞控", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))');
+    expect(source).toContain('statusRow("飞机", connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知"), connected(connection, "aircraft"))');
+  });
+
+  it("设备详情将动态事实、任务、手机推流和桌面播放逐行分开呈现", () => {
+    const source = renderer();
+    expect(source).toContain("deviceFactRows(connection)");
+    expect(source).toContain("runtimeStatusRows(inspected)");
+    expect(source).toContain('statusRow("状态更新时间", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection))');
+    expect(source).toContain('statusRow("任务", missionRuntimeLabel(read(device, "mission")), false)');
+    expect(source).toContain('statusRow("手机推流", streamRuntimeLabel(device), false)');
+    expect(source).toContain('statusRow("桌面播放", playbackRuntimeLabel(read(device, "video")), false)');
+  });
+
+  it("飞控状态未知时把保留的动态事实明确标为上次更新且当前未确认", () => {
+    const source = renderer();
+    expect(source).toContain('read(connection, "flightController") === "unknown"');
+    expect(source).toContain("飞控状态当前未确认");
+    expect(source).toContain("上次更新于");
+  });
+
+  it("设备页将对频限定为新增设备的维护操作", () => {
+    const source = renderer();
+    expect(source).toContain("对频仅用于新增飞机或更换遥控器");
+    expect(source).toContain("只有新增飞机或更换遥控器时，才在手机上开始对频");
+    expect(source).not.toContain("遥控器连上后，请在手机上开始对频，再等飞机连上");
+  });
+
+  it("连接显示处于保持期时，操作台必须按控制事实禁用新操作", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        control: {
+          sdk: "ready",
+          remoteController: "disconnected",
+          flightController: "disconnected",
+          aircraft: "disconnected",
+        },
+        mission: { phase: "uploaded", routeId: "route-1" },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(view.streamCanStart).toBe(false);
+    expect(view.missionActions.start).toEqual({ enabled: false, reason: "飞机飞控未连接，请确认飞机已开机" });
+    expect(OperatorConsole.evaluate("stream-start", view)).toEqual({ ok: false, reason: "遥控器未连接，无法启动图传" });
+  });
+
   it("多机时不自动改选任务机或图传机", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device(), device({ deviceId: "phone-2", connection: { ...device().connection, pose: { latitude: 30.3, longitude: 120.3, altitudeMeters: 12 } } })]),
@@ -174,7 +248,7 @@ describe("操作台工作区", () => {
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(notUploaded.missionLabel).toBe("已传输到手机（飞机尚未收到）");
+    expect(notUploaded.missionLabel).toBe("航线已准备到手机（飞机尚未收到）。下一步：上传至飞机");
     expect(OperatorConsole.evaluate("mission-upload", notUploaded)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-start", notUploaded)).toEqual({
       ok: false,
@@ -199,7 +273,7 @@ describe("操作台工作区", () => {
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(starting.missionLabel).toBe("启动中（等待航线阶段回报）");
+    expect(starting.missionLabel).toBe("启动已受理，等待飞机实际进入航线");
     expect(starting.missionLabel).not.toContain("正在执行");
     expect(OperatorConsole.evaluate("mission-upload", starting)).toEqual({
       ok: false,
@@ -209,6 +283,7 @@ describe("操作台工作区", () => {
     const noAircraft = OperatorConsole.project({
       snapshot: snapshot([device({
         connection: { ...device().connection, aircraft: "disconnected" },
+        mission: { phase: "idle" },
       })], { routes: [kmz], selectedRouteId: "route-1" }),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
@@ -217,6 +292,35 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("mission-upload", noAircraft)).toEqual({
       ok: false,
       reason: "飞机尚未连接",
+    });
+  });
+
+  it("飞行页始终投影已准备任务的航线，并给出阶段允许的下一步", () => {
+    const second = { routeId: "route-2", displayName: "canal.kmz", format: "kmz", classification: "upload-candidate" };
+    const staged = OperatorConsole.project({
+      snapshot: snapshot([device({ mission: { phase: "staged", routeId: "route-1" } })], { routes: [kmz, second], selectedRouteId: "route-2" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(staged).toMatchObject({
+      missionRoute: { routeId: "route-1", displayName: "survey.kmz" },
+      missionActions: {
+        stage: { enabled: false },
+        upload: { enabled: true, reason: null },
+        start: { enabled: false, reason: "请先将当前航线上传到所选飞机" },
+      },
+    });
+
+    const uploaded = OperatorConsole.project({
+      snapshot: snapshot([device({ mission: { phase: "uploaded", routeId: "route-1" } })], { routes: [kmz, second], selectedRouteId: "route-2" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(uploaded).toMatchObject({
+      missionRoute: { routeId: "route-1", displayName: "survey.kmz" },
+      missionLabel: "航线已上传至飞机。下一步：执行航线",
+      missionActions: { start: { enabled: true, reason: null } },
     });
   });
 
@@ -247,6 +351,15 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("mission-stop", starting)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-pause", starting)).toEqual({ ok: false, reason: "当前阶段不能暂停" });
 
+    const pausing = flight({ mission: { phase: "pausing", routeId: "route-1" } });
+    expect(OperatorConsole.evaluate("mission-stop", pausing)).toEqual({ ok: true });
+
+    const resuming = flight({ mission: { phase: "resuming", routeId: "route-1" } });
+    expect(OperatorConsole.evaluate("mission-stop", resuming)).toEqual({ ok: true });
+
+    const reconnected = flight({ mission: { phase: "disconnected", routeId: "route-1" } });
+    expect(OperatorConsole.evaluate("mission-stop", reconnected)).toEqual({ ok: true });
+
     const flying = flight({ connection: { ...device().connection, flightState: "flying" } });
     expect(OperatorConsole.evaluate("mission-start", flying)).toEqual({
       ok: false,
@@ -260,10 +373,7 @@ describe("操作台工作区", () => {
     });
 
     const unpaired = flight({ connection: { ...device().connection, pairingState: "IDLE" } });
-    expect(OperatorConsole.evaluate("mission-start", unpaired)).toEqual({
-      ok: false,
-      reason: "飞机尚未完成对频，请先在手机上完成对频",
-    });
+    expect(OperatorConsole.evaluate("mission-start", unpaired)).toEqual({ ok: true });
 
     const noFc = flight({ connection: { ...device().connection, flightController: "disconnected" } });
     expect(OperatorConsole.evaluate("mission-start", noFc)).toEqual({
@@ -273,10 +383,7 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("stream-start", noFc)).toEqual({ ok: true });
 
     const noAircraft = flight({ connection: { ...device().connection, aircraft: "disconnected", flightController: "disconnected" } });
-    expect(OperatorConsole.evaluate("stream-start", noAircraft)).toEqual({
-      ok: false,
-      reason: "飞机未连接，无法启动图传",
-    });
+    expect(OperatorConsole.evaluate("stream-start", noAircraft)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-start", noAircraft)).toEqual({
       ok: false,
       reason: "飞机飞控未连接，请确认飞机已开机",
@@ -286,10 +393,7 @@ describe("操作台工作区", () => {
       ok: false,
       reason: "飞机尚未连接",
     });
-    expect(OperatorConsole.evaluate("stream-start", aircraftOnlyGone)).toEqual({
-      ok: false,
-      reason: "飞机未连接，无法启动图传",
-    });
+    expect(OperatorConsole.evaluate("stream-start", aircraftOnlyGone)).toEqual({ ok: true });
   });
 
   it("只有画面 ready 才算可播放，手机接受推流不得写成实时图传", () => {
@@ -341,13 +445,31 @@ describe("操作台工作区", () => {
     expect(noRc.streamLabel).toBe("图传未就绪：遥控器未连接");
     expect(noRc.streamCanStart).toBe(false);
 
+    const noSdk = OperatorConsole.project({
+      snapshot: snapshot([device({ control: { ...device().connection, sdk: "not-ready" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(noSdk.streamCanStart).toBe(false);
+    expect(OperatorConsole.evaluate("stream-start", noSdk)).toEqual({ ok: false, reason: "手机尚未就绪，无法启动图传" });
+
+    const unknownCapability = OperatorConsole.project({
+      snapshot: snapshot([device({ capabilities: { waypointMission: "supported", liveVideo: "unknown" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(unknownCapability.streamLabel).toBe("图传未就绪：等待图传能力确认");
+    expect(unknownCapability.streamCanStart).toBe(false);
+    expect(OperatorConsole.evaluate("stream-start", unknownCapability)).toEqual({ ok: false, reason: "尚未确认当前机是否支持图传" });
+
     const noAircraft = OperatorConsole.project({
       snapshot: snapshot([device({ connection: { ...device().connection, aircraft: "disconnected" } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(noAircraft.streamLabel).toBe("图传未就绪：飞机未连接");
-    expect(noAircraft.streamCanStart).toBe(false);
+    expect(noAircraft.streamLabel).toBe("图传可启动");
+    expect(noAircraft.streamCanStart).toBe(true);
+    expect(OperatorConsole.evaluate("stream-start", noAircraft)).toEqual({ ok: true });
   });
 
   it("封存低延迟图传后，生产图传不受归档状态影响", () => {
@@ -427,5 +549,32 @@ describe("操作台工作区", () => {
       ok: false,
       reason: "飞机已在地面，不能返航",
     });
+  });
+});
+
+describe("航线操作台渲染契约", () => {
+  it("由任务投影禁用不合法按钮，并在执行前重新确认已上传任务身份", () => {
+    const source = renderer();
+    expect(source).toContain("view.missionActions[action]");
+    expect(source).toContain("pendingMissionStart");
+    expect(source).toContain("confirmMissionStart");
+    expect(source).toContain("intent.missionId");
+    expect(page()).toContain('id="mission-confirm"');
+    expect(page()).toContain('id="mission-confirm-yes"');
+    expect(page()).toContain('id="mission-confirm-no"');
+  });
+
+  it("将航线操作呈现为准备、上传、执行三个不可混淆的阶段", () => {
+    const source = page();
+    expect(source).toContain('class="mission-flow"');
+    expect(source).toContain('data-mission-step="prepare"');
+    expect(source).toContain('data-mission-step="upload"');
+    expect(source).toContain('data-mission-step="execute"');
+    expect(source).toContain('仅传输到手机并校验文件');
+    expect(source).toContain('手机将已校验文件交给飞机');
+    expect(source).toContain('执行前会再次要求确认');
+    expect(source).toContain("flight-safety-controls");
+    expect(source).not.toContain('>传输到手机<');
+    expect(source).not.toContain('>开始<');
   });
 });

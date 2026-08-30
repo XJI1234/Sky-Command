@@ -157,4 +157,14 @@ describe("FlightControl", () => {
     expect(control.get("phone-1")).toBeNull();
     await expect(control.confirm("phone-1", "confirm")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
   });
+
+  it("clears a valid pending confirmation and rejects clear after disposal", () => {
+    const value = fixture();
+    expect(value.control.clear("phone-1")).toBe(false);
+    expect(value.control.request("phone-1", "takeoff")).toMatchObject({ ok: true });
+    expect(value.control.clear("phone-1")).toBe(true);
+    expect(value.control.get("phone-1")).toBeNull();
+    value.control.dispose();
+    expect(value.control.clear("phone-1")).toBe(false);
+  });
 });

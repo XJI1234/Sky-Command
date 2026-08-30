@@ -11,7 +11,7 @@ const rounded = (value: number, decimals: number): string => {
   const normalized = Math.round(value * factor) / factor;
   return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(decimals);
 };
-const duration = (seconds: number): string => `预计可飞 ${Math.floor(seconds / 60)}分${seconds % 60}秒`;
+const duration = (seconds: number): string => `低电量返航预估 ${Math.floor(seconds / 60)}分${seconds % 60}秒`;
 
 function format(connection: unknown): string {
   const parts: string[] = [];

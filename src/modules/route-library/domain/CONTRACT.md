@@ -265,8 +265,9 @@ RouteClassification =
 - KML 只能是 `preview-only`。
 - `upload-candidate` 必须是 KMZ。
 - `upload-candidate` 的 sourceDocument 必须以 `.wpml` 结尾。
-- `upload-candidate` 不得包含 `WPML_MISSING` 警告。
+- `upload-candidate` 不得包含 `WPML_MISSING` 或 `DJI_TEMPLATE_MISSING` 警告。
 - 缺少 WPML 的 KMZ 必须是 `preview-only`，并包含 `WPML_MISSING`。
+- WPML 缺少同目录 DJI 模板的 KMZ 必须是 `preview-only`，并包含 `DJI_TEMPLATE_MISSING`。
 - D3.1 不自行推断分类；它验证 D3.3 给出的分类是否自洽。
 - 分类组合不一致返回 `DOMAIN_INVARIANT_VIOLATION`。
 
@@ -275,6 +276,7 @@ RouteClassification =
 ```text
 RouteWarningCode =
   | "WPML_MISSING"
+  | "DJI_TEMPLATE_MISSING"
   | "ALTITUDE_MISSING"
 
 RouteWarning {
@@ -288,7 +290,7 @@ RouteWarning {
 
 - 警告码是封闭集合。
 - 同一警告码最多出现一次。
-- 警告按固定顺序输出：`WPML_MISSING`，然后 `ALTITUDE_MISSING`。
+- 警告按固定顺序输出：`WPML_MISSING`、`DJI_TEMPLATE_MISSING`，然后 `ALTITUDE_MISSING`；前两者互斥。
 - 任意航点 altitude 为 null 时必须包含 `ALTITUDE_MISSING`。
 - 所有航点高度存在时不得包含 `ALTITUDE_MISSING`。
 - message 是面向人的中文说明；业务判断只能依赖 code。
@@ -585,8 +587,9 @@ copyA 的内容等于 copyB
 - KML preview-only。
 - KML upload-candidate 被拒绝。
 - KMZ preview-only + WPML_MISSING。
+- KMZ preview-only + DJI_TEMPLATE_MISSING。
 - KMZ upload-candidate + WPML sourceDocument。
-- upload-candidate 包含 WPML_MISSING 被拒绝。
+- upload-candidate 包含 WPML_MISSING 或 DJI_TEMPLATE_MISSING 被拒绝。
 - 任意缺失高度对应 ALTITUDE_MISSING。
 - 高度完整时错误携带 ALTITUDE_MISSING 被拒绝。
 - 重复警告、未知警告和警告顺序规范化。
@@ -693,7 +696,7 @@ D3.1 只有同时满足以下条件才算完成：
 6. originalBytes 在构造和读取时都执行防御性复制。
 7. importedAt 必须由外部 Clock 提供规范 UTC ISO 字符串。
 8. SHA-256 只验证格式，内容计算和一致性由 D3.2 与集成测试负责。
-9. RouteWarning 只包含 WPML_MISSING 和 ALTITUDE_MISSING；地图警告属于一级模块 `geo-map`。
+9. RouteWarning 只包含 WPML_MISSING、DJI_TEMPLATE_MISSING 和 ALTITUDE_MISSING；地图警告属于一级模块 `geo-map`。
 10. D3.1 生产代码不使用任何第三方运行时依赖。
 11. D3.1 不再拆成正式三级模块，多个实现文件仍共享一个公开入口和契约。
 

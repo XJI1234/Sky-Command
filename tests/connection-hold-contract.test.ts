@@ -10,6 +10,7 @@ describe("connection-hold", () => {
     expect(hold.hold("phone-1", "connected", false, 1_100)).toBe(false);
     expect(hold.hold("phone-1", "connected", true, 1_200)).toBe(true);
     expect(hold.hold("phone-1", "connected", undefined, 1_300)).toBeUndefined();
+    expect(hold.hold("phone-1", "connected", false, 1_400)).toBe(false);
   });
 
   it("forget 清除设备滞回状态", () => {

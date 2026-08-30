@@ -57,8 +57,8 @@ function create(dependencies: OperationWorkflowDependencies) {
   const task = (deviceId: string): unknown => { try { return dependencies.missionControl.get(deviceId); } catch { return freeze({ deviceId, phase: "idle" }); } };
   const stream = (deviceId: string): unknown => { try { return dependencies.liveStreamControl.get(deviceId); } catch { return freeze({ deviceId, phase: "idle" }); } };
   const telemetryRaw = (deviceId: string): unknown => { try { return dependencies.relayOperations.telemetry(deviceId); } catch { return null; } };
-  const telemetry = (deviceId: string): unknown => {
-    const raw = telemetryRaw(deviceId);
+  // UI-only projection: connection drops are briefly held to avoid visible flicker.
+  const telemetryForDisplay = (deviceId: string, raw: unknown = telemetryRaw(deviceId)): unknown => {
     const now = clock();
     const source = record(raw);
     const payload = source === null ? null : record(read(source, "payload"));
@@ -83,7 +83,10 @@ function create(dependencies: OperationWorkflowDependencies) {
   };
   const pendingFlightAction = (deviceId: string): unknown => { try { return dependencies.flightControl.get(deviceId); } catch { return null; } };
   const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
-  const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => freeze({ deviceId, telemetry: telemetry(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId) })), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
+  const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => {
+    const rawTelemetry = telemetryRaw(deviceId);
+    return freeze({ deviceId, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: rawTelemetry, assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId) });
+  }), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
   const publish = (): void => { revision += 1; const current = snapshot(); for (const listener of [...listeners]) { try { listener(current); } catch { /* listener faults are isolated */ } } };
   const forgetVideo = (deviceId: string): void => {
     try { dependencies.liveStreamControl.recordDisconnected(deviceId); } catch { /* downstream retains its own failure state */ }
@@ -127,7 +130,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   };
   const stableTask = (deviceId: string): boolean => ["idle", "completed", "failed", "disconnected"].includes(read(task(deviceId), "phase") as string);
   const settingsAllowed = (deviceId: string, operation: "transmission-settings" | "camera-settings"): boolean => {
-    const value = telemetry(deviceId);
+    const value = telemetryRaw(deviceId);
     const payload = read(value, "payload");
     const capabilities = read(value, "capabilities");
     const decision = CapabilityGate.evaluate({ operation, relayConnected: value !== null, sdkRegistered: read(payload, "sdkRegistered"), remoteControllerConnected: read(payload, "remoteControllerConnected"), flightControllerConnected: read(payload, "flightControllerConnected"), aircraftConnected: read(payload, "connected"), capabilities });
@@ -140,7 +143,7 @@ function create(dependencies: OperationWorkflowDependencies) {
     const observedAt = clock();
     const connectedAt = connectedSince.get(deviceId);
     const waited = observedAt !== null && connectedAt !== undefined && typeof configuredDelay === "number" && Number.isFinite(configuredDelay) && configuredDelay >= 0 && observedAt - connectedAt >= configuredDelay;
-    const payload = record(read(telemetry(deviceId), "payload")) ?? freeze({});
+    const payload = record(read(telemetryRaw(deviceId), "payload")) ?? freeze({});
     const payloadFacts: Record<string, boolean> = {};
     for (const key of ["sdkRegistered", "remoteControllerConnected", "flightControllerConnected", "connected"]) {
       const value = read(payload, key);

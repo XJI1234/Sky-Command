@@ -26,6 +26,7 @@ function document(overrides: Record<string, unknown> = {}): ParsedRouteDocument 
     format: "kml",
     sourceDocument: "route.kml",
     sourceKind: "kml",
+    hasCompanionTemplate: false,
     wpmlNamespace: null,
     waypointCandidates: Object.freeze([
       candidate(),
@@ -95,6 +96,15 @@ describe("D3.3 route qualification defensive contract", () => {
     }
     expect(errorCode(document({ waypointCandidates: Object.freeze([candidate(), candidate({ documentOrder: 1 }), candidate({ documentOrder: 2 }), candidate({ documentOrder: 3 }), candidate({ documentOrder: 4 })]) }))).toMatchObject({
       code: "TOO_MANY_WAYPOINTS", details: { count: 5, maxWaypoints: 4 }
+    });
+  });
+
+  it("requires an explicit companion-template fact and only permits it for DJI WPML KMZ sources", () => {
+    expect(errorCode(document({ hasCompanionTemplate: undefined }))).toMatchObject({
+      code: "DOMAIN_INVARIANT_VIOLATION", details: { field: "hasCompanionTemplate", reason: "not-boolean" }
+    });
+    expect(errorCode(document({ hasCompanionTemplate: true }))).toMatchObject({
+      code: "DOMAIN_INVARIANT_VIOLATION", details: { field: "hasCompanionTemplate", reason: "invalid-source-combination" }
     });
   });
 

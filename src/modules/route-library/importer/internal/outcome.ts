@@ -21,6 +21,7 @@ export function parsedOutcome(input: ParsedOutcomeInput): RouteIngestOutcome {
     format: input.format,
     sourceDocument: input.sourceDocument,
     sourceKind: input.sourceKind,
+    hasCompanionTemplate: input.hasCompanionTemplate,
     wpmlNamespace: input.wpmlNamespace,
     waypointCandidates: candidates,
     sha256: input.sha256,

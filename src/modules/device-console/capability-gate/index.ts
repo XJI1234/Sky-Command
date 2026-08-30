@@ -1,5 +1,5 @@
 export type DeviceOperation = "pairing" | "live-stream" | "waypoint-mission" | "transmission-settings" | "camera-settings" | "direct-flight";
-export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "AIRCRAFT_NOT_CONNECTED" | "PAIRING_NOT_NEEDED" | "CAPABILITY_UNKNOWN" | "LIVE_VIDEO_UNSUPPORTED" | "WAYPOINT_UNSUPPORTED";
+export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "AIRCRAFT_NOT_CONNECTED" | "AIRCRAFT_CONNECTION_UNKNOWN" | "PAIRING_NOT_NEEDED" | "CAPABILITY_UNKNOWN" | "LIVE_VIDEO_UNSUPPORTED" | "WAYPOINT_UNSUPPORTED";
 export interface CapabilityDecision { readonly operation: DeviceOperation; readonly enabled: boolean; readonly reason: CapabilityReason | null; }
 export type CapabilityDecisionResult<T> = Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false; readonly error: Readonly<{ readonly code: "INVALID_INPUT"; readonly details: Readonly<{ readonly field: string; readonly reason: "invalid-value" | "unreadable" }> }> }>;
 
@@ -49,7 +49,12 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
   if (capabilities === "invalid-value" || capabilities === "unreadable") return failure("capabilities.liveVideo", capabilities);
   if (input.relayConnected !== true) return decision(operation, false, "RELAY_OFFLINE");
   if (input.sdkRegistered !== true) return decision(operation, false, "SDK_NOT_READY");
-  if (operation === "pairing") return input.aircraftConnected === true ? decision(operation, false, "PAIRING_NOT_NEEDED") : decision(operation, true, null);
+  if (operation === "pairing") {
+    if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
+    if (input.aircraftConnected === true) return decision(operation, false, "PAIRING_NOT_NEEDED");
+    if (input.aircraftConnected !== false || input.flightControllerConnected !== false) return decision(operation, false, "AIRCRAFT_CONNECTION_UNKNOWN");
+    return decision(operation, true, null);
+  }
   // 旧 RTMP 图传只要求 SDK 与 liveVideo 能力；飞机/飞控未连时由 DJI 启动失败回报，不得在桌面误拦推流命令。
   if (operation === "live-stream") {
     if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");

@@ -19,6 +19,7 @@ interface NormalizedEntry {
 export interface SelectedRouteDocument {
   readonly sourceDocument: string;
   readonly sourceKind: "kml" | "waylines-wpml";
+  readonly hasCompanionTemplate: boolean;
   readonly xmlBytes: Uint8Array;
 }
 
@@ -200,6 +201,13 @@ function selectDocument(entries: readonly NormalizedEntry[]): NormalizedEntry | 
   return uniqueOrAmbiguous(entries, (path) => path.endsWith(".kml"));
 }
 
+function hasCompanionTemplate(entries: readonly NormalizedEntry[], selected: NormalizedEntry): boolean {
+  if (!foldAsciiCase(selected.path).endsWith("waylines.wpml")) return false;
+  const slash = selected.path.lastIndexOf("/");
+  const expected = foldAsciiCase(`${slash < 0 ? "" : selected.path.slice(0, slash + 1)}template.kml`);
+  return entries.some((item) => !item.entry.directory && foldAsciiCase(item.path) === expected);
+}
+
 function convertError(error: unknown): RouteLibraryError {
   if (error instanceof ImporterPhaseError) return createError(error.code, error.details);
   return createError("CORRUPT_KMZ", { phase: "archive-read" });
@@ -302,6 +310,7 @@ export async function readKmz(
         value: Object.freeze({
           sourceDocument: selected.path,
           sourceKind: foldAsciiCase(selected.path).endsWith("waylines.wpml") ? "waylines-wpml" : "kml",
+          hasCompanionTemplate: hasCompanionTemplate(normalized, selected),
           xmlBytes: selectedBytes!
         })
       });

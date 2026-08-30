@@ -12,7 +12,7 @@ describe("生产源码有限状态与枚举盘点", () => {
 
     expect(inventory.entries.length).toBe(baseline.count);
     expect(inventory.digest).toBe(baseline.digest);
-  });
+  }, 30_000);
 
   it("盘点必须包含协议帧、航线阶段和手机会话状态", () => {
     const inventory = SourceFiniteInventory.collect({

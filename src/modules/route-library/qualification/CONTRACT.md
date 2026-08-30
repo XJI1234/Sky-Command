@@ -58,6 +58,7 @@ RouteQualificationLimits {
 | `format` | 作为原始文档元数据传入 D3.1；D3.1 原子构造时强制仅为 `kml` 或 `kmz`，并验证文件名扩展名一致性 | `DOMAIN_INVARIANT_VIOLATION` |
 | `sourceDocument` | 非空安全逻辑相对路径，无盘符、绝对路径、控制字符或 `..` | `DOMAIN_INVARIANT_VIOLATION` |
 | `sourceKind` | 仅为 `kml` 或 `waylines-wpml` | `DOMAIN_INVARIANT_VIOLATION` |
+| `hasCompanionTemplate` | boolean；仅 `kmz` 的 `waylines-wpml` 来源可以为 `true` | `DOMAIN_INVARIANT_VIOLATION` |
 | `sha256` | 作为原始文档元数据传入 D3.1；D3.1 原子构造时强制为 64 位小写十六进制 | `DOMAIN_INVARIANT_VIOLATION` |
 | `sizeBytes` | 作为原始文档元数据传入 D3.1；D3.1 原子构造时强制为正安全整数且等于 `originalBytes.byteLength` | `DOMAIN_INVARIANT_VIOLATION` |
 | `originalBytes` | 作为原始文档元数据传入 D3.1；D3.1 原子构造时强制为非空 `Uint8Array`。D3.3 不在模块状态中保留它 | `DOMAIN_INVARIANT_VIOLATION` |
@@ -68,6 +69,7 @@ RouteQualificationLimits {
 - `format = "kml"` 时必须 `sourceKind = "kml"`，且 `sourceDocument` 以 `.kml` 结尾。
 - `format = "kmz"`、`sourceKind = "waylines-wpml"` 时 `sourceDocument` 必须以 `.wpml` 结尾，且 `wpmlNamespace` 必须是 D3.2 已识别的 DJI WPML URI。
 - `format = "kmz"`、`sourceKind = "kml"` 时 `sourceDocument` 必须以 `.kml` 结尾；它代表归档中没有被选中的 `waylines.wpml`。
+- `hasCompanionTemplate = true` 时必须是 `format = "kmz"`、`sourceKind = "waylines-wpml"`；`false` 不表示文件无效，而是会参与第 6 节的确定分类。
 - 其他组合均为内部契约破坏，不应伪装为用户文件错误。
 
 DJI WPML URI 的有效形式为以 `http://www.dji.com/wpmz/` 或 `https://www.dji.com/wpmz/` 开头且前缀后至少还有一个字符的 URI。D3.3 不解释具体版本号，只验证 D3.2 的识别结果未被伪造。
@@ -119,20 +121,22 @@ DJI WPML URI 的有效形式为以 `http://www.dji.com/wpmz/` 或 `https://www.d
 
 分类只能通过以下真值表得到：
 
-| format | sourceKind | classification | warnings |
+| format | sourceKind | hasCompanionTemplate | classification | warnings |
 |---|---|---|---|
-| `kml` | `kml` | `preview-only` | 高度缺失时仅 `ALTITUDE_MISSING` |
-| `kmz` | `kml` | `preview-only` | 始终 `WPML_MISSING`；高度缺失时再加 `ALTITUDE_MISSING` |
-| `kmz` | `waylines-wpml` | `upload-candidate` | 高度缺失时仅 `ALTITUDE_MISSING` |
+| `kml` | `kml` | `false` | `preview-only` | 高度缺失时仅 `ALTITUDE_MISSING` |
+| `kmz` | `kml` | `false` | `preview-only` | 始终 `WPML_MISSING`；高度缺失时再加 `ALTITUDE_MISSING` |
+| `kmz` | `waylines-wpml` | `false` | `preview-only` | 始终 `DJI_TEMPLATE_MISSING`；高度缺失时再加 `ALTITUDE_MISSING` |
+| `kmz` | `waylines-wpml` | `true` | `upload-candidate` | 高度缺失时仅 `ALTITUDE_MISSING` |
 
 固定警告定义：
 
 ```text
 WPML_MISSING: "KMZ 中未找到可提交的 waylines.wpml，仅可预览。"
+DJI_TEMPLATE_MISSING: "KMZ 缺少与 waylines.wpml 配套的 template.kml，仅可预览。"
 ALTITUDE_MISSING: "部分航点未提供高度，将按文件缺失状态预览。"
 ```
 
-- 警告顺序永远是 `WPML_MISSING` 后 `ALTITUDE_MISSING`。
+- 警告顺序永远是 `WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`ALTITUDE_MISSING`；前两者互斥。
 - 每种警告最多一次，警告 `details` 不存在。
 - `upload-candidate` 仅表示桌面侧已具备把原始 KMZ 交给任务模块的条件，绝不表示 DJI 校验、上传或飞行一定成功。
 

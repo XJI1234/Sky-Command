@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts", "src/modules/cross-runtime-e2e/**/*.test.ts"],
+    globalSetup: ["./tests/cross-runtime-e2e.global-setup.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov", "json-summary"],

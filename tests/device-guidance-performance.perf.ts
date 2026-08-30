@@ -14,7 +14,7 @@ it("设备连接引导可在界面交互预算内连续评估一万台设备", (
         remoteControllerToAircraft: "disconnected"
       },
       pairingState: "IDLE"
-    })).toMatchObject({ ok: true, value: { code: "START_PAIRING" } });
+    })).toMatchObject({ ok: true, value: { code: "CONNECT_AIRCRAFT" } });
   }
   expect(performance.now() - started).toBeLessThan(1_000);
 });

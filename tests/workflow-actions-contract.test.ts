@@ -88,6 +88,7 @@ describe("工作流动作模块契约", () => {
 
     await expect(actions.mission("upload", "")).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
     await expect(actions.startStream("relay-a")).resolves.toEqual({ ok: false, code: "DEVICE_OFFLINE" });
+    await expect(actions.stopStream("relay-a")).resolves.toEqual({ ok: false, code: "DEVICE_OFFLINE" });
     await expect(actions.readCamera("fault")).resolves.toEqual({ ok: false, code: "DEVICE_OFFLINE" });
     expect(actions.requestFlight("relay-a", "takeoff")).toEqual({ ok: false, code: "DEVICE_OFFLINE" });
     expect(calls).toEqual([]);

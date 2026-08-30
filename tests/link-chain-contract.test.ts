@@ -2,20 +2,31 @@ import { describe, expect, it } from "vitest";
 import { LinkChain } from "../src/modules/device-console/link-chain/index.js";
 
 describe("设备链路状态契约", () => {
-  it("飞机已连接但未对频时整体仍为降级", () => {
+  it("三段物理链路已连接时不受对频状态影响", () => {
     expect(LinkChain.evaluate({
       deviceId: "phone-1",
       relayConnected: true,
       telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, pairingState: "IDLE" },
     })).toEqual({
       ok: true,
-      value: { deviceId: "phone-1", overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "connected" },
+      value: { deviceId: "phone-1", overall: "ready", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "connected" },
     });
     expect(LinkChain.evaluate({
       deviceId: "phone-1",
       relayConnected: true,
       telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, pairingState: "PAIRED" },
     })).toMatchObject({ ok: true, value: { overall: "ready" } });
+  });
+
+  it("SDK 已就绪但遥控器连接尚未观察时保留未知状态", () => {
+    expect(LinkChain.evaluate({
+      deviceId: "phone-1",
+      relayConnected: true,
+      telemetry: { sdkRegistered: true, flightControllerConnected: true, connected: true },
+    })).toEqual({
+      ok: true,
+      value: { deviceId: "phone-1", overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "unknown", remoteControllerToAircraft: "unknown" },
+    });
   });
 
   it.each([
@@ -62,5 +73,33 @@ describe("设备链路状态契约", () => {
     expect(LinkChain.evaluate({ deviceId: "x".repeat(128), relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true } })).toMatchObject({ ok: true });
     expect(LinkChain.evaluate({ deviceId: "x".repeat(129), relayConnected: true, telemetry: null })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "deviceId", reason: "invalid-id" } } });
     expect(LinkChain.evaluate({ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: false, connected: true } })).toEqual({ ok: true, value: { deviceId: "phone-1", overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "disconnected" } });
+  });
+
+  it("飞控存在但飞机明确断开时保留飞行器段的明确断开事实", () => {
+    expect(LinkChain.evaluate({
+      deviceId: "phone-1",
+      relayConnected: true,
+      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: false }
+    })).toEqual({
+      ok: true,
+      value: {
+        deviceId: "phone-1",
+        overall: "degraded",
+        computerToPhone: "connected",
+        phoneToRemoteController: "connected",
+        remoteControllerToAircraft: "disconnected"
+      }
+    });
+  });
+
+  it("飞控明确断开时不从同一帧的飞机字段虚构已连接结论", () => {
+    expect(LinkChain.evaluate({
+      deviceId: "phone-1",
+      relayConnected: true,
+      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: false, connected: true }
+    })).toMatchObject({
+      ok: true,
+      value: { overall: "degraded", phoneToRemoteController: "connected", remoteControllerToAircraft: "disconnected" }
+    });
   });
 });

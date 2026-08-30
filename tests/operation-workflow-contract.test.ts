@@ -21,6 +21,121 @@ const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkf
 } as never);
 
 describe("飞行作业工作流模块契约", () => {
+  it("将精确 MSDK 生命周期作为只读事实投影，且不改变既有 SDK 门禁", () => {
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a" }],
+        telemetry: () => ({
+          payload: {
+            sdkAvailability: "STARTING",
+            sdkRegistered: false,
+            remoteControllerConnected: false,
+            flightControllerConnected: false,
+            connected: false,
+          },
+          capabilities: {},
+        }),
+        subscribe: () => () => undefined,
+      },
+    });
+
+    expect(workflow.snapshot().devices[0]?.connection).toMatchObject({
+      sdk: "not-ready",
+      msdk: "starting",
+    });
+  });
+
+  it("将桌面验证遥测的接收时间仅投影到显示连接事实", () => {
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a" }],
+        telemetry: () => ({
+          receivedAtMs: 1_725_000_000_000,
+          payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true },
+          capabilities: {},
+        }),
+        subscribe: () => () => undefined,
+      },
+    });
+
+    expect(workflow.snapshot().devices[0]).toMatchObject({
+      connection: { telemetryReceivedAtMs: 1_725_000_000_000 },
+      control: { sdk: "ready", remoteController: "connected", flightController: "connected", aircraft: "connected" },
+    });
+  });
+
+  it("连接显示仍处于保持期时，所有新控制必须按原始断开事实拒绝", async () => {
+    let now = 0;
+    let payload: Record<string, unknown> = {
+      sdkRegistered: true,
+      remoteControllerConnected: true,
+      flightControllerConnected: true,
+      connected: true,
+    };
+    let streamStarts = 0;
+    let flightRequests = 0;
+    let settingsWrites = 0;
+    const workflow = workflowWith({
+      now: () => now,
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a" }],
+        telemetry: () => ({ payload, capabilities: { liveVideo: true } }),
+        subscribe: () => () => undefined,
+      },
+      liveStreamControl: {
+        start: async () => { streamStarts += 1; return { ok: true }; },
+        stop: async () => ({ ok: true }),
+        get: () => ({ phase: "idle" }),
+        list: () => [],
+        recordDisconnected: () => undefined,
+        forget: () => false,
+        subscribe: () => () => undefined,
+      },
+      flightControl: {
+        request: () => { flightRequests += 1; return { ok: true, confirmation: { confirmationId: "confirm-a" } }; },
+        confirm: async () => ({ ok: true }),
+        cancel: () => ({ ok: true }),
+        get: () => null,
+        subscribe: () => () => undefined,
+        dispose: () => undefined,
+      },
+      deviceSettings: {
+        snapshot: () => ({}),
+        readTransmission: async () => ({ ok: true }),
+        writeTransmission: async () => { settingsWrites += 1; return { ok: true }; },
+        readCamera: async () => ({ ok: true }),
+        writeCamera: async () => ({ ok: true }),
+      },
+    });
+
+    workflow.snapshot();
+    now = 1;
+    payload = {
+      sdkRegistered: true,
+      remoteControllerConnected: false,
+      flightControllerConnected: false,
+      connected: false,
+    };
+
+    expect(workflow.snapshot().devices[0]?.connection).toMatchObject({
+      remoteController: "connected",
+      flightController: "connected",
+      aircraft: "connected",
+    });
+    expect(workflow.snapshot().devices[0]?.control).toEqual({
+      sdk: "ready",
+      remoteController: "disconnected",
+      flightController: "disconnected",
+      aircraft: "disconnected",
+    });
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
+    expect(workflow.requestFlightAction("relay-a", "takeoff")).toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
+    await expect(workflow.writeTransmissionSettings("relay-a", { bandwidth: "20" })).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED" });
+    expect(streamStarts).toBe(0);
+    expect(flightRequests).toBe(0);
+    expect(settingsWrites).toBe(0);
+  });
+
   it("内部模块契约反映已实施的公开接口", () => {
     const contract = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
     const workflow = contract("src/production/operation-workflow/CONTRACT.md");

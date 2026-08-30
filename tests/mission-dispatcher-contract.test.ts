@@ -12,8 +12,8 @@ const routePayload = () => ({
 const makeFixture = () => {
   const commands: Array<{ deviceId: string; name: string; fields: unknown }> = [];
   const missions: unknown[] = [];
-  let commandStatus: "succeeded" | "rejected" = "succeeded";
-  let telemetry: unknown = { deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } };
+  let commandStatus: "succeeded" | "rejected" | "timed-out" = "succeeded";
+  let telemetry: unknown = { deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } };
   const dispatcher = MissionDispatcher.create({
     routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
     relay: {
@@ -22,7 +22,7 @@ const makeFixture = () => {
       latestTelemetry: () => telemetry as never
     }
   }, { createMissionId: () => "mission-1" });
-  return { dispatcher, commands, missions, setCommandStatus: (status: "succeeded" | "rejected") => { commandStatus = status; }, setTelemetry: (value: unknown) => { telemetry = value; } };
+  return { dispatcher, commands, missions, setCommandStatus: (status: "succeeded" | "rejected" | "timed-out") => { commandStatus = status; }, setTelemetry: (value: unknown) => { telemetry = value; } };
 };
 
 const stage = async (dispatcher: ReturnType<typeof MissionDispatcher.create>) => {
@@ -86,12 +86,27 @@ describe("mission dispatcher contract", () => {
 
     expect(result).toMatchObject({ ok: true, operation: "start", state: { phase: "starting" } });
     expect(fixture.commands.at(-1)).toEqual({ deviceId: "phone-1", name: "wayline.start", fields: { confirm: true } });
-    expect(fixture.dispatcher.recordExecutionStarted(" ", routePayload().fileName)).toBeNull();
-    expect(fixture.dispatcher.recordExecutionStarted("missing-phone", routePayload().fileName)).toBeNull();
-    expect(fixture.dispatcher.recordExecutionStarted("phone-1", "../route.kmz")).toBeNull();
-    expect(fixture.dispatcher.recordExecutionStarted("phone-1", "other.kmz")).toBeNull();
-    expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName)).toMatchObject({ phase: "running" });
-    expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName)).toBeNull();
+    expect(fixture.dispatcher.recordExecutionStarted(" ", routePayload().fileName, 1, 0)).toBeNull();
+    expect(fixture.dispatcher.recordExecutionStarted("missing-phone", routePayload().fileName, 1, 0)).toBeNull();
+    expect(fixture.dispatcher.recordExecutionStarted("phone-1", "../route.kmz", 1, 0)).toBeNull();
+    expect(fixture.dispatcher.recordExecutionStarted("phone-1", "other.kmz", 1, 0)).toBeNull();
+    expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toMatchObject({ phase: "running" });
+    expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toBeNull();
+  });
+
+  it("keeps an unconfirmed start stoppable and forbids a retry after transport uncertainty", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    fixture.setCommandStatus("timed-out");
+
+    const first = await fixture.dispatcher.start("phone-1");
+
+    expect(first).toMatchObject({ ok: false, operation: "start", code: "WAYLINE_START_UNCONFIRMED", state: { phase: "starting" } });
+    expect(await fixture.dispatcher.start("phone-1")).toMatchObject({ ok: false, operation: "start", code: "ILLEGAL_PHASE", state: { phase: "starting" } });
+
+    fixture.setCommandStatus("succeeded");
+    expect(await fixture.dispatcher.stop("phone-1")).toMatchObject({ ok: true, operation: "stop", state: { phase: "idle" } });
   });
 
   it("accepts a matching DJI terminal fact without inventing a running phase", async () => {
@@ -100,20 +115,22 @@ describe("mission dispatcher contract", () => {
     await fixture.dispatcher.upload("phone-1");
     await fixture.dispatcher.start("phone-1");
 
-    expect(fixture.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "completed")).toMatchObject({ phase: "completed" });
+    expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toMatchObject({ phase: "running" });
+    expect(fixture.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "completed", 1, 0)).toMatchObject({ phase: "completed" });
     expect(fixture.dispatcher.get("phone-1")).toMatchObject({ phase: "completed", lastResult: { operation: "start", ok: true, code: null } });
-    expect(fixture.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "completed")).toBeNull();
+    expect(fixture.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "completed", 1, 0)).toBeNull();
 
     const failed = makeFixture();
     await stage(failed.dispatcher);
     await failed.dispatcher.upload("phone-1");
     await failed.dispatcher.start("phone-1");
-    expect(failed.dispatcher.recordExecutionTerminal("phone-1", "other.kmz", "failed")).toBeNull();
+    expect(failed.dispatcher.recordExecutionTerminal("phone-1", "other.kmz", "failed", 1, 0)).toBeNull();
     expect(failed.dispatcher.get("phone-1").phase).toBe("starting");
-    expect(failed.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "failed")).toMatchObject({ phase: "failed", failureCode: "MISSION_EXECUTION_FAILED" });
-    expect(failed.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "failed")).toBeNull();
-    expect(failed.dispatcher.recordExecutionTerminal("phone-1", "../survey.kmz", "completed")).toBeNull();
-    expect(failed.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "unknown" as never)).toBeNull();
+    expect(failed.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toMatchObject({ phase: "running" });
+    expect(failed.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "failed", 1, 0)).toMatchObject({ phase: "failed", failureCode: "MISSION_EXECUTION_FAILED" });
+    expect(failed.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "failed", 1, 0)).toBeNull();
+    expect(failed.dispatcher.recordExecutionTerminal("phone-1", "../survey.kmz", "completed", 1, 0)).toBeNull();
+    expect(failed.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "unknown" as never, 1, 0)).toBeNull();
   });
 
   it("supports pause, resume, and stop as independent confirmed operations", async () => {
@@ -121,7 +138,7 @@ describe("mission dispatcher contract", () => {
     await stage(fixture.dispatcher);
     await fixture.dispatcher.upload("phone-1");
     await fixture.dispatcher.start("phone-1");
-    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName);
+    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
 
     expect((await fixture.dispatcher.pause("phone-1"))).toMatchObject({ ok: true, state: { phase: "paused" } });
     expect((await fixture.dispatcher.resume("phone-1"))).toMatchObject({ ok: true, state: { phase: "running" } });
@@ -136,13 +153,13 @@ describe("mission dispatcher contract", () => {
       relay: {
         sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
         sendCommand: async () => new Promise((resolve) => { resolvers.push(resolve); }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
       }
     }, { createMissionId: () => "mission-1" });
     await stage(dispatcher);
     const upload = dispatcher.upload("phone-1"); resolvers.shift()!({ status: "succeeded" }); await upload;
     const start = dispatcher.start("phone-1"); resolvers.shift()!({ status: "succeeded" }); await start;
-    dispatcher.recordExecutionStarted("phone-1", routePayload().fileName);
+    dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
 
     const pause = dispatcher.pause("phone-1");
     expect(dispatcher.get("phone-1").phase).toBe("pausing");
@@ -153,6 +170,84 @@ describe("mission dispatcher contract", () => {
     expect(dispatcher.get("phone-1").phase).toBe("resuming");
     resolvers.shift()!({ status: "succeeded" });
     await expect(resume).resolves.toMatchObject({ ok: true, state: { phase: "running" } });
+  });
+
+  it("keeps an unconfirmed pause non-repeatable while still allowing one stop", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    fixture.setCommandStatus("timed-out");
+
+    expect(await fixture.dispatcher.pause("phone-1")).toMatchObject({
+      ok: false,
+      operation: "pause",
+      code: "WAYLINE_PAUSE_UNCONFIRMED",
+      state: { phase: "pausing" },
+    });
+    expect(await fixture.dispatcher.pause("phone-1")).toMatchObject({
+      ok: false,
+      code: "ILLEGAL_PHASE",
+      state: { phase: "pausing" },
+    });
+
+    fixture.setCommandStatus("succeeded");
+    expect(await fixture.dispatcher.stop("phone-1")).toMatchObject({ ok: true, state: { phase: "idle" } });
+    expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload", "wayline.start", "wayline.pause", "wayline.stop"]);
+  });
+
+  it("keeps an unconfirmed resume non-repeatable while still allowing one stop", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    await fixture.dispatcher.pause("phone-1");
+    fixture.setCommandStatus("timed-out");
+
+    expect(await fixture.dispatcher.resume("phone-1")).toMatchObject({
+      ok: false,
+      operation: "resume",
+      code: "WAYLINE_RESUME_UNCONFIRMED",
+      state: { phase: "resuming" },
+    });
+    expect(await fixture.dispatcher.resume("phone-1")).toMatchObject({
+      ok: false,
+      code: "ILLEGAL_PHASE",
+      state: { phase: "resuming" },
+    });
+
+    fixture.setCommandStatus("succeeded");
+    expect(await fixture.dispatcher.stop("phone-1")).toMatchObject({ ok: true, state: { phase: "idle" } });
+    expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload", "wayline.start", "wayline.pause", "wayline.resume", "wayline.stop"]);
+  });
+
+  it("keeps an unconfirmed stop non-repeatable and blocks replacement staging", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    fixture.setCommandStatus("timed-out");
+
+    expect(await fixture.dispatcher.stop("phone-1")).toMatchObject({
+      ok: false,
+      operation: "stop",
+      code: "WAYLINE_STOP_UNCONFIRMED",
+      state: { phase: "stopping" },
+    });
+    expect(await fixture.dispatcher.stop("phone-1")).toMatchObject({
+      ok: false,
+      code: "ILLEGAL_PHASE",
+      state: { phase: "stopping" },
+    });
+    expect(await fixture.dispatcher.stage("phone-1", "route-2")).toMatchObject({
+      ok: false,
+      code: "ILLEGAL_PHASE",
+      state: { phase: "stopping" },
+    });
+    expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload", "wayline.start", "wayline.stop"]);
   });
 
   it("moves the lane to failed when an aircraft command is rejected", async () => {
@@ -373,6 +468,56 @@ describe("mission dispatcher contract", () => {
     await expect(fixture.dispatcher.stage("phone-1", "route-2")).resolves.toMatchObject({ ok: true, state: { phase: "staged", routeId: "route-2" } });
   });
 
+  it("sends one explicit stop after a reconnected phone was marked disconnected", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    fixture.dispatcher.recordDisconnected("phone-1");
+
+    expect(await fixture.dispatcher.stop("phone-1")).toMatchObject({
+      ok: true,
+      operation: "stop",
+      state: { phase: "idle" },
+    });
+    expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload", "wayline.start", "wayline.stop"]);
+  });
+
+  it("settles a disconnected task only when the reconnected terminal fact matches its identity", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    fixture.dispatcher.recordDisconnected("phone-1");
+
+    expect(fixture.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "completed", 1, 0)).toMatchObject({ phase: "completed" });
+
+    const mismatched = makeFixture();
+    await stage(mismatched.dispatcher);
+    await mismatched.dispatcher.upload("phone-1");
+    await mismatched.dispatcher.start("phone-1");
+    mismatched.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    mismatched.dispatcher.recordDisconnected("phone-1");
+    expect(mismatched.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "failed", 2, 0)).toBeNull();
+    expect(mismatched.dispatcher.get("phone-1").phase).toBe("disconnected");
+  });
+
+  it("settles a disconnected task as failed only when the reconnected DJI failure matches its identity", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    fixture.dispatcher.recordDisconnected("phone-1");
+
+    expect(fixture.dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "failed", 1, 0)).toMatchObject({
+      phase: "failed",
+      failureCode: "MISSION_EXECUTION_FAILED",
+    });
+  });
+
   it("rejects a second command on a busy lane", async () => {
     const fixture = makeFixture();
     await stage(fixture.dispatcher);
@@ -386,7 +531,7 @@ describe("mission dispatcher contract", () => {
         sendCommand: (deviceId, request) => request.name === "wayline.upload"
           ? Promise.resolve({ deviceId, commandId: "command-upload", status: "succeeded" as const, detail: "ok" })
           : new Promise((resolve) => { resolveCommand = resolve; }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
       }
     }, { createMissionId: () => "mission-1" });
     await stage(busy);
@@ -418,14 +563,14 @@ describe("mission dispatcher contract", () => {
         sendCommand: (deviceId, request) => request.name === "wayline.upload"
           ? Promise.resolve({ deviceId, commandId: "command-upload", status: "succeeded" as const, detail: "ok" })
           : new Promise((resolve) => { resolveCommand = resolve; }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
       }
     }, { createMissionId: () => "mission-1" });
     await stage(dispatcher);
     await dispatcher.upload("phone-1");
     const pending = dispatcher.start("phone-1");
     expect(dispatcher.get("phone-1").phase).toBe("starting");
-    expect(dispatcher.recordExecutionStarted("phone-1", routePayload().fileName)).toMatchObject({ phase: "running" });
+    expect(dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toMatchObject({ phase: "running" });
     resolveCommand({ deviceId: "phone-1", commandId: "command-1", status: "succeeded", detail: "ok" });
     await expect(pending).resolves.toMatchObject({ ok: true, state: { phase: "running" } });
   });
@@ -439,13 +584,13 @@ describe("mission dispatcher contract", () => {
         sendCommand: (deviceId, request) => request.name === "wayline.upload"
           ? Promise.resolve({ deviceId, commandId: "command-upload", status: "succeeded" as const, detail: "ok" })
           : new Promise((resolve) => { resolveCommand = resolve; }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
       }
     }, { createMissionId: () => "mission-1" });
     await stage(dispatcher);
     await dispatcher.upload("phone-1");
     const pending = dispatcher.start("phone-1");
-    expect(dispatcher.recordExecutionStarted("phone-1", routePayload().fileName)).toMatchObject({ phase: "running" });
+    expect(dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toMatchObject({ phase: "running" });
     resolveCommand({ deviceId: "phone-1", commandId: "command-1", status: "rejected", detail: "late" });
     await expect(pending).resolves.toMatchObject({ ok: true, state: { phase: "running" } });
   });

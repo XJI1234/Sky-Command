@@ -96,10 +96,16 @@ function linkForMethod(method: string): IncidentLink {
   return "uplink";
 }
 
+function nestedFailureCode(value: Record<string, unknown> | null): string | null {
+  const nested = asRecord(value?.value);
+  return nested?.ok === false && typeof nested.code === "string" ? nested.code : null;
+}
+
 function invokeLevel(result: GatewayResult): IncidentLevel {
   if (!result.ok) return "ERROR";
   const value = asRecord(result.value);
   if (value?.ok === false) return "WARN";
+  if (nestedFailureCode(value) !== null) return "WARN";
   const nested = asRecord(value?.value);
   const status = nested?.status ?? value?.status;
   if (status === "timed-out" || status === "rejected" || status === "disconnected" || status === "transport-failed") return "WARN";
@@ -111,6 +117,8 @@ function invokeEvent(method: string, result: GatewayResult): string {
   if (!result.ok) return `${name}_GATEWAY_${result.code}`;
   const value = asRecord(result.value);
   if (value?.ok === false && typeof value.code === "string") return `${name}_${sanitizeDetail(value.code).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+  const failureCode = nestedFailureCode(value);
+  if (failureCode !== null) return `${name}_${sanitizeDetail(failureCode).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
   const nested = asRecord(value?.value);
   const status = nested?.status ?? value?.status;
   if (typeof status === "string") return `${name}_${status.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
@@ -130,6 +138,8 @@ function invokeDetail(method: string, input: unknown, result: GatewayResult): st
   else {
     const value = asRecord(result.value);
     if (typeof value?.code === "string") parts.push(value.code);
+    const failureCode = nestedFailureCode(value);
+    if (failureCode !== null) parts.push(failureCode);
     const nested = asRecord(value?.value);
     const status = nested?.status ?? value?.status;
     if (typeof status === "string") parts.push(status);

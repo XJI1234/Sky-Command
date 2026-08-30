@@ -12,6 +12,8 @@ export interface RelayMissionTerminalState {
   readonly deviceId: string;
   readonly fileName: string;
   readonly outcome: "completed" | "failed";
+  readonly missionRevision: number;
+  readonly deviceGeneration: number;
 }
 
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
@@ -28,6 +30,15 @@ const jsonText = (value: unknown): string | undefined => {
     return typeof text === "string" ? text : undefined;
   } catch { return undefined; }
 };
+const jsonInteger = (value: unknown): number | undefined => {
+  const source = record(value);
+  if (source === null) return undefined;
+  try {
+    if (source.kind !== "number" || typeof source.value !== "string" || !/^-?(?:0|[1-9][0-9]*)$/u.test(source.value)) return undefined;
+    const number = Number(source.value);
+    return Number.isSafeInteger(number) ? number : undefined;
+  } catch { return undefined; }
+};
 const payloadText = (payload: unknown, field: string): string | undefined => {
   const source = record(payload);
   if (source === null) return undefined;
@@ -38,6 +49,18 @@ const payloadText = (payload: unknown, field: string): string | undefined => {
     }
     const text = source[field];
     return typeof text === "string" ? text : undefined;
+  } catch { return undefined; }
+};
+const payloadInteger = (payload: unknown, field: string): number | undefined => {
+  const source = record(payload);
+  if (source === null) return undefined;
+  try {
+    if (source.kind === "object") {
+      const fields = record(source.fields);
+      return fields === null ? undefined : jsonInteger(fields[field]);
+    }
+    const number = source[field];
+    return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
   } catch { return undefined; }
 };
 
@@ -77,8 +100,10 @@ function readTerminalStates(value: unknown): readonly RelayMissionTerminalState[
       const execution = payloadText(entry.payload, "missionExecution");
       if (execution !== "FINISHED" && execution !== "FAILED") continue;
       const fileName = payloadText(entry.payload, "missionFileName");
-      if (!validFileName(fileName)) return null;
-      facts.push(Object.freeze({ deviceId: entry.deviceId, fileName, outcome: execution === "FINISHED" ? "completed" as const : "failed" as const }));
+      const missionRevision = payloadInteger(entry.payload, "missionRevision");
+      const deviceGeneration = payloadInteger(entry.payload, "missionDeviceGeneration");
+      if (!validFileName(fileName) || !positiveInteger(missionRevision) || deviceGeneration === undefined || deviceGeneration < 0) return null;
+      facts.push(Object.freeze({ deviceId: entry.deviceId, fileName, outcome: execution === "FINISHED" ? "completed" as const : "failed" as const, missionRevision, deviceGeneration }));
     }
     return Object.freeze(facts);
   } catch {

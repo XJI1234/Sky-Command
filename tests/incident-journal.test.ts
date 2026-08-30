@@ -69,6 +69,30 @@ describe("事故日志", () => {
     expect(log).not.toContain("VIDEO_PLAYBACK");
   });
 
+  it("把嵌套的任务失败记为上行 WARN，而不是成功", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    const gateway = wrapGateway({
+      invoke: async () => ({
+        ok: true as const,
+        value: {
+          ok: true,
+          value: { ok: false, operation: "upload", code: "WAYLINE_UPLOAD_FAILED", state: null },
+        },
+      }),
+      snapshot: () => ({}),
+      subscribe: () => () => undefined,
+      dispose: () => undefined,
+    }, journal);
+
+    await gateway.invoke("mission.upload", { deviceId: "phone-1" });
+
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/WARN uplink MISSION_UPLOAD_WAYLINE_UPLOAD_FAILED/);
+    expect(log).toContain("WAYLINE_UPLOAD_FAILED");
+  });
+
   it("把低延迟控制记为下行，并忽略低延迟周期刷新", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);

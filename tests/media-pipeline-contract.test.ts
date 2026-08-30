@@ -13,6 +13,7 @@ function fixture(options: {
   readonly httpFlvStop?: () => void;
   readonly rtmpStop?: () => void;
   readonly endpointHost?: () => unknown;
+  readonly useDefaultClock?: boolean;
   readonly player?: { readonly setSource?: (input: Readonly<{ readonly deviceId: string; readonly url: string }>, onFatal: (error: unknown) => void) => void; readonly clear?: () => void };
 } = {}) {
   let clock = 100;
@@ -21,7 +22,7 @@ function fixture(options: {
     rtmp: { listen: (port, events) => { rtmpEvents = events; options.rtmpStart?.(port, events); }, close: () => options.rtmpStop?.() },
     httpFlv: { listen: () => options.httpFlvStart?.(), close: () => options.httpFlvStop?.() },
     player: { setSource: (value, onFatal) => options.player?.setSource?.(value, onFatal), clear: () => options.player?.clear?.() },
-    clock: () => clock,
+    ...(options.useDefaultClock ? {} : { clock: () => clock }),
     ...(options.endpointHost === undefined ? {} : { resolveEndpointHost: options.endpointHost }),
   }, { rtmpPort: 19500, httpFlvPort: 18080, health: { ingestTimeoutMs: 1_000, playbackTimeoutMs: 1_000 } });
   return { pipeline, events: () => rtmpEvents!, setClock: (value: number) => { clock = value; } };
@@ -162,6 +163,57 @@ describe("media-pipeline 一级组合根契约", () => {
   it("拒绝非法启动输入", () => {
     const { pipeline } = fixture();
     expect(pipeline.start(null)).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(pipeline.start({ ...input, interfaces: "not-an-array" })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(pipeline.start({ ...input, ffmpegCandidates: "not-an-array" })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(pipeline.start({ ...input, httpFlvRootDirectory: null })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
     expect(pipeline.start({ ...input, httpFlvRootDirectory: " " })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+  });
+
+  it("keeps every media failure recoverable and exposes only deliberate player operations", () => {
+    for (const endpointHost of [() => "172.31.255.1", () => "192.168.1.99"]) {
+      const { pipeline } = fixture({ endpointHost });
+      expect(pipeline.start(input)).toMatchObject({ ok: true, value: { endpoint: { host: endpointHost(), port: 19500, source: "automatic" } } });
+    }
+
+    const defaultClock = fixture({ useDefaultClock: true });
+    defaultClock.pipeline.start(input);
+    defaultClock.events().onPublished("/live/phone-a");
+    expect(defaultClock.pipeline.evaluate(Date.now())).toMatchObject({ ok: true });
+    expect(defaultClock.pipeline.notifyPlaybackReady("missing")).toMatchObject({ ok: false, code: "UNKNOWN_DEVICE" });
+    expect(defaultClock.pipeline.notifyPlaybackReady("phone-a")).toMatchObject({ ok: true });
+    expect(defaultClock.pipeline.selectPlayer("missing")).toMatchObject({ ok: false, code: "UNKNOWN_DEVICE" });
+    expect(defaultClock.pipeline.clearPlayer()).toMatchObject({ ok: true });
+    expect(defaultClock.pipeline.start(input)).toMatchObject({ ok: false, code: "ALREADY_RUNNING" });
+    defaultClock.pipeline.dispose();
+    defaultClock.pipeline.dispose();
+    expect(defaultClock.pipeline.stop()).toMatchObject({ ok: false, code: "DISPOSED" });
+    expect(defaultClock.pipeline.evaluate(1)).toMatchObject({ ok: false, code: "DISPOSED" });
+    expect(defaultClock.pipeline.selectPlayer("phone-a")).toMatchObject({ ok: false, code: "DISPOSED" });
+    expect(defaultClock.pipeline.clearPlayer()).toMatchObject({ ok: false, code: "DISPOSED" });
+
+    const idle = fixture();
+    expect(idle.pipeline.stop()).toMatchObject({ ok: false, code: "NOT_STARTED" });
+    expect(idle.pipeline.evaluate(1)).toMatchObject({ ok: false, code: "NOT_STARTED" });
+    expect(idle.pipeline.evaluate(Number.NaN)).toMatchObject({ ok: false, code: "NOT_STARTED" });
+    const invalidEndpoint = fixture();
+    expect(invalidEndpoint.pipeline.start({ ...input, interfaces: [{ ...input.interfaces[0], ipv4: "8.8.8.8" }] })).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+
+    const rtmpStopFailure = fixture({ rtmpStop: () => { throw new Error("rtmp stop"); } });
+    rtmpStopFailure.pipeline.start(input);
+    expect(rtmpStopFailure.pipeline.stop()).toMatchObject({ ok: false, code: "RTMP_STOP_FAILED" });
+    const rtmpStartFailureWithUnstoppedHttpFlv = fixture({ rtmpStart: () => { throw new Error("rtmp start"); }, httpFlvStop: () => { throw new Error("http flv stop"); } });
+    expect(rtmpStartFailureWithUnstoppedHttpFlv.pipeline.start(input)).toMatchObject({ ok: false, code: "RTMP_START_FAILED" });
+    expect(rtmpStartFailureWithUnstoppedHttpFlv.pipeline.start(input)).toMatchObject({ ok: false, code: "ALREADY_RUNNING" });
+    const httpFlvStopFailure = fixture({ httpFlvStop: () => { throw new Error("http flv stop"); } });
+    httpFlvStopFailure.pipeline.start(input);
+    expect(httpFlvStopFailure.pipeline.stop()).toMatchObject({ ok: false, code: "HTTP_FLV_STOP_FAILED" });
+    const playerFailure = fixture({ player: { clear: () => { throw new Error("player clear"); } } });
+    playerFailure.pipeline.start(input);
+    expect(playerFailure.pipeline.clearPlayer()).toMatchObject({ ok: false, code: "PLAYER_FAILED" });
+    expect(playerFailure.pipeline.stop()).toMatchObject({ ok: false, code: "PLAYER_FAILED" });
+
+    const invalidTime = fixture();
+    invalidTime.pipeline.start(input);
+    expect(invalidTime.pipeline.evaluate(Number.NaN)).toMatchObject({ ok: false, code: "INVALID_INPUT" });
   });
 });

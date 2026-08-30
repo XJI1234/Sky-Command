@@ -15,7 +15,7 @@ export interface RelayDiagnosticSink {
   persist(input: Readonly<{ readonly deviceId: string; readonly runId: string; readonly events: readonly DiagnosticEventFrame[] }>): boolean;
 }
 export interface RelayDeviceSnapshot { readonly deviceId: string; readonly sessionId: string; }
-export interface RelayTelemetrySnapshot { readonly deviceId: string; readonly payload: JsonObject; readonly capabilities: JsonObject; }
+export interface RelayTelemetrySnapshot { readonly deviceId: string; readonly payload: JsonObject; readonly capabilities: JsonObject; readonly receivedAtMs: number | null; }
 export interface RelayMissionPhaseSnapshot {
   readonly deviceId: string;
   readonly missionRevision: number;
@@ -47,6 +47,8 @@ export interface RelayLinkOptions {
   readonly maxConnections: number;
   readonly commandTimeoutMs: number;
   readonly missionTimeoutMs: number;
+  /** Optional desktop wall clock used only to mark successful telemetry receipt for display. */
+  readonly now?: () => number;
   readonly diagnosticSink?: RelayDiagnosticSink;
   readonly createConnectionId: () => string;
   readonly createSessionId: (deviceId: string) => string;
@@ -79,7 +81,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
   });
   const registry = DeviceRegistry.create();
   const tracker = CommandTracker.create({ scheduler: options.scheduler, timeoutMs: options.commandTimeoutMs });
-  const intake = TelemetryIntake.create();
+  const intake = TelemetryIntake.create(options.now === undefined ? {} : { now: options.now });
   const missionPhases = MissionPhaseIntake.create();
   const missions = MissionSender.create({ scheduler: options.scheduler, timeoutMs: options.missionTimeoutMs });
   const listeners = new Set<(snapshot: RelayLinkSnapshot) => void>();
@@ -99,7 +101,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       // The close route removes this child state before the registry mapping.
       const device = deviceForConnection(value.connectionId);
       /* c8 ignore next -- a snapshot cannot retain telemetry for a removed registry entry. */
-      return device ? [frozen({ deviceId: device.deviceId, payload: value.payload, capabilities: value.capabilities })] : [];
+      return device ? [frozen({ deviceId: device.deviceId, payload: value.payload, capabilities: value.capabilities, receivedAtMs: value.receivedAtMs })] : [];
     }));
     const phaseFacts = Object.freeze(missionPhases.snapshot().flatMap((value) => {
       const device = deviceForConnection(value.connectionId);
@@ -212,7 +214,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     latestTelemetry: (deviceId: string): RelayTelemetrySnapshot | null => {
       if (!validId(deviceId)) return null;
       const device = registry.getByDevice(deviceId); if (!device) return null;
-      const value = intake.get(device.connectionId); return value ? frozen({ deviceId, payload: value.payload, capabilities: value.capabilities }) : null;
+      const value = intake.get(device.connectionId); return value ? frozen({ deviceId, payload: value.payload, capabilities: value.capabilities, receivedAtMs: value.receivedAtMs }) : null;
     },
     ingressAddress: (deviceId: string): string | null => {
       if (!validId(deviceId)) return null;

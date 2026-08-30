@@ -27,6 +27,7 @@ function parsedDocument(overrides: Partial<ParsedRouteDocument> = {}): ParsedRou
     format: "kml" as const,
     sourceDocument: "route.kml",
     sourceKind: "kml" as const,
+    hasCompanionTemplate: false,
     wpmlNamespace: null,
     waypointCandidates: Object.freeze([
       candidate(),
@@ -79,6 +80,7 @@ describe("D3.3 route qualification public contract", () => {
       format: "kmz",
       sourceDocument: "wpmz/waylines.wpml",
       sourceKind: "waylines-wpml",
+      hasCompanionTemplate: true,
       wpmlNamespace: "http://www.dji.com/wpmz/1.0.6/",
       waypointCandidates: Object.freeze([
         candidate({ declaredSequenceText: "0" }),

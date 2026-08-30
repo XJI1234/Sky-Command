@@ -59,6 +59,22 @@ describe("飞行作业工作流内部模块", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
   });
 
+  it("投影 MSDK 的已停止与注册失败状态，而不把它们归并为未知", () => {
+    const device = (sdkAvailability: string) => ({
+      deviceId: `relay-${sdkAvailability.toLowerCase()}`,
+      telemetry: { payload: { sdkAvailability }, capabilities: {} },
+      assignment: null, mission: null, stream: null, settings: null, pendingFlightAction: null,
+    });
+    const snapshot = WorkflowSnapshot.create({
+      devices: [device("STOPPED"), device("FAILED")],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0, media: { streams: [] }, disposed: false,
+    });
+    expect(snapshot.devices).toMatchObject([
+      { connection: { msdk: "failed", sdk: "unknown" } },
+      { connection: { msdk: "stopped", sdk: "unknown" } },
+    ]);
+  });
+
   it("在没有媒体流、读取异常和已释放时仍投影安全快照", () => {
     const unreadable = Object.defineProperty({}, "streams", { get: () => { throw new Error("unreadable"); } });
     const snapshot = WorkflowSnapshot.create({

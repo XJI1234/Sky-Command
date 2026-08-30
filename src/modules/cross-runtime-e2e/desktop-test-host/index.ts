@@ -73,6 +73,8 @@ interface HarnessProcess {
 
 const execFileAsync = promisify(execFile);
 const distributions = new Map<string, Promise<void>>();
+const harnessDistributionExists = (root: string): boolean =>
+  existsSync(join(root, "src", "modules", "cross-runtime-e2e", "relay-test-harness", "build", "install", "relay-test-harness", "bin", "relay-test-harness.bat"));
 
 const validDeviceId = (value: string): boolean =>
   value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
@@ -99,7 +101,7 @@ const reserveLoopbackPort = async (): Promise<number> => new Promise((resolvePor
   });
 });
 
-const ensureDistribution = (root: string): Promise<void> => {
+const buildDistribution = (root: string): Promise<void> => {
   const known = distributions.get(root);
   if (known !== undefined) return known;
   const build = execFileAsync(process.env.ComSpec ?? "cmd.exe", [
@@ -110,6 +112,15 @@ const ensureDistribution = (root: string): Promise<void> => {
     distributions.delete(root);
     throw new Error(`Harness distribution build failed: ${failure instanceof Error ? failure.name : "unknown"}`);
   });
+};
+
+const ensureDistribution = (root: string): Promise<void> =>
+  harnessDistributionExists(root) ? Promise.resolve() : buildDistribution(root);
+
+const prepare = async (mobileProjectRoot: string): Promise<void> => {
+  const root = resolve(mobileProjectRoot);
+  if (!existsSync(join(root, "gradlew.bat"))) throw new Error("Invalid test host configuration");
+  await buildDistribution(root);
 };
 
 const pushOutput = (target: string[], chunk: Buffer): void => {
@@ -343,4 +354,4 @@ const start = async (options: DesktopTestHostOptions): Promise<DesktopTestHostIn
   });
 };
 
-export const DesktopTestHost = Object.freeze({ start });
+export const DesktopTestHost = Object.freeze({ prepare, start });

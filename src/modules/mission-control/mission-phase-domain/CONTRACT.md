@@ -31,12 +31,12 @@ machine.reset() -> MissionPhaseState
 | `staged` | 手机已接收并保存任务文件。 |
 | `uploading` | 手机正在把任务上传到飞机。 |
 | `uploaded` | 飞机已接收任务，可以启动。 |
-| `starting` | 已确认启动请求，等待进入执行状态。 |
+| `starting` | 启动命令已发出或其回执不确定，等待可信的进入执行状态或人工停止。 |
 | `running` | 任务正在执行。 |
-| `pausing` | 暂停请求已发送，等待手机端确认 DJI 调用完成。 |
+| `pausing` | 暂停请求已发送且尚未获得确定回执；不能重发暂停，但可以停止。 |
 | `paused` | 任务已暂停，可以恢复或停止。 |
-| `resuming` | 继续请求已发送，等待手机端确认 DJI 调用完成。 |
-| `stopping` | 已确认停止请求，等待结束。 |
+| `resuming` | 继续请求已发送且尚未获得确定回执；不能重发继续，但可以停止。 |
+| `stopping` | 停止请求已发送且尚未获得确定回执；不能重发或暂存替换。 |
 | `completed` | 飞机正常完成任务。 |
 | `failed` | 某项已尝试操作失败。 |
 | `disconnected` | 活动任务期间手机或飞机链路消失。 |
@@ -53,13 +53,13 @@ machine.reset() -> MissionPhaseState
 | `start-requested` / `start-succeeded` | `uploaded` / `starting` | `starting` / `running` |
 | `pause-requested` / `pause-succeeded` | `running` / `pausing` | `pausing` / `paused` |
 | `resume-requested` / `resume-succeeded` | `paused` / `resuming` | `resuming` / `running` |
-| `stop-requested` / `stop-succeeded` | `starting`、`running`、`paused` / `stopping` | `stopping` / `idle` |
-| `mission-completed` | `starting`、`running` | `completed` |
-| `operation-failed { code }` | `staging`、`uploading`、`starting`、`running`、`pausing`、`paused`、`resuming`、`stopping` | `failed` |
+| `stop-requested` / `stop-succeeded` | `starting`、`running`、`pausing`、`paused`、`resuming`、`disconnected` / `stopping` | `stopping` / `idle` |
+| `mission-completed` | `starting`、`running`、`disconnected` | `completed` |
+| `operation-failed { code }` | `staging`、`uploading`、`starting`、`running`、`pausing`、`paused`、`resuming`、`stopping`、`disconnected` | `failed` |
 | `connection-lost` | 任一活动阶段 | `disconnected` |
 | `reset` | 任意阶段 | `idle` |
 
-`pausing` 与 `resuming` 都表示命令请求中，界面不得把它们显示成已完成。暂停或继续的命令结果成功后，调度器才发送对应的 `*-succeeded` 事件。停止失败必须通过 `operation-failed` 表示，绝不能悄悄回到 `idle`。`mission-completed` 与 `stop-succeeded` 不同：前者表示飞机完成任务，后者表示操作者终止任务。允许从 `starting` 进入 `completed`，用于 DJI 已确认完成但中继链路遗漏正向阶段帧的保守补偿；它不伪造 `running`。
+`pausing` 与 `resuming` 都表示命令请求中，界面不得把它们显示成已完成。暂停或继续的命令结果成功后，调度器才发送对应的 `*-succeeded` 事件。对于已经发出的启动、暂停、继续或停止，非成功传输结果不能证明 DJI 动作未生效，调度器必须保留该中间阶段而非发送 `operation-failed`；这些阶段仅允许一次 `stop-requested` 作为保守处置。`disconnected` 不能自动恢复、上传或启动；手机已重新在线时，它只允许操作者显式发送一次停止，或接收带完全匹配任务身份的 DJI 终态。`mission-completed` 与 `stop-succeeded` 不同：前者表示飞机完成任务，后者表示操作者终止任务。允许从 `starting` 或 `disconnected` 进入 `completed` 仅适用于已经绑定同一手机任务身份的终态遥测；它不伪造 `running`。
 
 带其他任务标识的事件返回 `MISSION_ID_MISMATCH`；没有标识的事件作用于当前任务。只有 `reset` 可以清除任务标识。
 

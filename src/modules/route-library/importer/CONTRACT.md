@@ -158,6 +158,7 @@ ParsedRouteDocument {
   readonly format: "kml" | "kmz"
   readonly sourceDocument: string
   readonly sourceKind: "kml" | "waylines-wpml"
+  readonly hasCompanionTemplate: boolean
   readonly wpmlNamespace: string | null
   readonly waypointCandidates: readonly RawWaypointCandidate[]
   readonly sha256: string
@@ -172,6 +173,7 @@ ParsedRouteDocument {
 - `fileName` 是去除首尾空白后的安全 basename，不改变中间字符或 Unicode 正规形式。
 - `sourceDocument` 不得是绝对路径，也不得包含 `..`、NUL 或反斜杠。
 - `sourceKind` 只描述实际解析的文档种类，不是最终航线分类。
+- `hasCompanionTemplate` 只在 `format = "kmz"`、`sourceKind = "waylines-wpml"` 且归档中存在与 `sourceDocument` 同一逻辑目录的 `template.kml` 时为 `true`；大小写只按 ASCII 折叠比较。其他所有情况必须为 `false`。它是 D3.3 分类所需的归档结构事实，不代表 DJI 已校验文件内容。
 - `wpmlNamespace` 只在源文档实际声明并使用受支持的 DJI WPML namespace 时保存其完整 URI，否则为 `null`；D3.3 必须同时依据它和 `sourceKind` 判断 WPML 是否可识别。
 - `sha256` 是对文件快照全部字节计算的 64 位小写十六进制字符串。
 - `sizeBytes` 等于文件快照的字节数。
@@ -397,6 +399,8 @@ KMZ 解析必须分两阶段：
 
 同一层级有多个候选时返回 `CORRUPT_KMZ`，不得任意选择。选中后 `sourceKind` 为 `waylines-wpml`。
 
+选中 WPML 后，D3.2 必须独立记录同一逻辑目录内是否存在唯一的 `template.kml`，作为 `hasCompanionTemplate`。该事实不改变源文档选择，也不在 D3.2 决定最终分类。
+
 ### 16.2 KML fallback 优先级
 
 只有归档中不存在任何可识别 `waylines.wpml` 时才执行 fallback：
@@ -534,6 +538,7 @@ errors       第三方异常到稳定错误的局部映射
 - 高度存在、缺失及高度来源优先级。
 - DJI canonical `wpmz/template.kml` + `wpmz/waylines.wpml`。
 - 当前 Wayline 项目根目录 `template.kml` + `waylines.wpml`。
+- WPML 缺少同目录 `template.kml` 时仍返回可预览的解析结果，并明确 `hasCompanionTemplate = false`。
 - 大小写扩展名、中文和空格文件名。
 - 原始字节、SHA-256 和源文档路径一致性。
 

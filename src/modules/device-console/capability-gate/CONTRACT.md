@@ -37,13 +37,13 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
 }
 ```
 
-输出为冻结对象 `{ operation, enabled, reason }`。`enabled: true` 时 `reason` 固定为 `null`；否则为以下之一：`RELAY_OFFLINE`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_OFFLINE`、`AIRCRAFT_NOT_CONNECTED`、`PAIRING_NOT_NEEDED`、`CAPABILITY_UNKNOWN`、`LIVE_VIDEO_UNSUPPORTED`、`WAYPOINT_UNSUPPORTED`。
+输出为冻结对象 `{ operation, enabled, reason }`。`enabled: true` 时 `reason` 固定为 `null`；否则为以下之一：`RELAY_OFFLINE`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_OFFLINE`、`AIRCRAFT_NOT_CONNECTED`、`AIRCRAFT_CONNECTION_UNKNOWN`、`PAIRING_NOT_NEEDED`、`CAPABILITY_UNKNOWN`、`LIVE_VIDEO_UNSUPPORTED`、`WAYPOINT_UNSUPPORTED`。
 
 ## 判定规则
 
 - 中继离线时全部拒绝 `RELAY_OFFLINE`。
 - SDK 不是 `true` 时全部拒绝 `SDK_NOT_READY`。
-- `pairing` 仅在 SDK 就绪且飞行器未连接时允许；飞行器已连接时拒绝 `PAIRING_NOT_NEEDED`。飞控已连接但飞行器未连接时仍允许对频。对频不要求遥控器。
+- `pairing` 是连接新飞机或更换遥控器时的低频维护操作，不是常规连接、图传、航线或直接控制前置条件。它要求遥控器明确已连接且飞行器明确未连接；飞行器已连接时拒绝 `PAIRING_NOT_NEEDED`，飞行器状态未知时拒绝 `AIRCRAFT_CONNECTION_UNKNOWN`。飞控已连接但飞行器未连接属于不一致事实，必须拒绝。
 - `live-stream` 要求遥控器已连接，并要求 `capabilities.liveVideo === true`。能力对象缺失或字段缺失为 `CAPABILITY_UNKNOWN`，显式 false 为 `LIVE_VIDEO_UNSUPPORTED`。`live-stream` 不因飞控/飞机遥测未连而拒绝（由 DJI 启动结果判定）。
 - 其余操作要求遥控器、飞控和飞行器均为 true，否则拒绝 `REMOTE_CONTROLLER_OFFLINE` 或 `AIRCRAFT_NOT_CONNECTED`。
 - `waypoint-mission` 还要求 `waypointMission === true` 且 `waypointMissionSupport === "supported"`。字段缺失为 `CAPABILITY_UNKNOWN`，其他情况为 `WAYPOINT_UNSUPPORTED`。

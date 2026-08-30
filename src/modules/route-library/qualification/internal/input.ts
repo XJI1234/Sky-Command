@@ -67,6 +67,7 @@ export function readDocument(value: unknown, limits: RouteQualificationLimits): 
     const format = record.format;
     const sourceDocument = record.sourceDocument;
     const sourceKind = record.sourceKind;
+    const hasCompanionTemplate = record.hasCompanionTemplate;
     const wpmlNamespace = record.wpmlNamespace;
     const candidates = record.waypointCandidates;
     const sha256 = record.sha256;
@@ -97,6 +98,10 @@ export function readDocument(value: unknown, limits: RouteQualificationLimits): 
         return invariant("sourceKind", "invalid-wpml-combination");
       }
     }
+    if (typeof hasCompanionTemplate !== "boolean") return invariant("hasCompanionTemplate", "not-boolean");
+    if (hasCompanionTemplate && (format !== "kmz" || sourceKind !== "waylines-wpml")) {
+      return invariant("hasCompanionTemplate", "invalid-source-combination");
+    }
 
     return Object.freeze({
       ok: true as const,
@@ -105,6 +110,7 @@ export function readDocument(value: unknown, limits: RouteQualificationLimits): 
         format: format as "kml" | "kmz",
         sourceDocument,
         sourceKind,
+        hasCompanionTemplate,
         wpmlNamespace,
         candidates: Object.freeze([...candidates]),
         // D3.1 owns final immutable route metadata validation.

@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
   "testRunner": "vitest",
+  "ignorePatterns": [".worktrees"],
   "mutate": [
     "src/modules/cross-runtime-e2e/workflow-model.ts",
     "src/modules/cross-runtime-e2e/verification-evidence.ts"
@@ -17,6 +18,7 @@
     "break": 100
   },
   "vitest": {
+    "configFile": "vitest.mutation.config.ts",
     "related": true
   }
 }

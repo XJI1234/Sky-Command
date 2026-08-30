@@ -59,8 +59,8 @@ describe("跨运行时独立工作流模型", () => {
   it("审计精确报告合法和非法转换数量", () => {
     expect(WorkflowModel.mission.audit()).toMatchObject({
       total: 224,
-      accepted: 51,
-      rejected: 173,
+      accepted: 56,
+      rejected: 168,
       reachableStates: 14,
     });
   });

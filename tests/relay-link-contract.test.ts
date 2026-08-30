@@ -69,6 +69,24 @@ describe("relay-link root contract", () => {
     expect(Object.isFrozen(link.devices())).toBe(true);
   });
 
+  it("projects the desktop receipt time with telemetry without trusting a phone clock", async () => {
+    let now = 1_725_000_000_000;
+    const fixture = options({ now: () => now } as never);
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    phone.emit({ type: "telemetry", payload: object({}), capabilities: object({}) });
+    await flush();
+    expect(link.latestTelemetry("phone-1")).toMatchObject({ receivedAtMs: 1_725_000_000_000 });
+    now += 800;
+    phone.emit({ type: "telemetry", payload: object({}), capabilities: object({}) });
+    await flush();
+    expect(link.latestTelemetry("phone-1")).toMatchObject({ receivedAtMs: 1_725_000_000_800 });
+  });
+
   it("keeps each paired device's relay ingress address private to the command path", async () => {
     const fixture = options();
     const link = RelayLink.create(fixture.options);
@@ -347,5 +365,12 @@ describe("relay-link root contract", () => {
     phone.emit({ type: "diagnostic-report", runId: "run-1", events: [{ sequence: 1, timestampMillis: 1, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }] });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(writes).toBe(4_098);
+  });
+
+  it("将非法的中继入口设备标识稳定视为不存在", () => {
+    const fixture = options();
+    const link = RelayLink.create(fixture.options);
+    expect(link.ingressAddress("")).toBeNull();
+    expect(link.ingressAddress("invalid\u0000device")).toBeNull();
   });
 });

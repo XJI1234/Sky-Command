@@ -12,6 +12,7 @@ type CommandStatus = "succeeded" | "rejected" | "timed-out" | "disconnected" | "
 
 export interface DesktopRelayTelemetryPayload {
   readonly [key: string]: unknown;
+  readonly sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED";
   readonly sdkRegistered?: boolean;
   readonly remoteControllerConnected?: boolean;
   readonly flightControllerConnected?: boolean;
@@ -32,12 +33,16 @@ export interface DesktopRelayTelemetryPayload {
   readonly liveFps?: number;
   readonly liveVideoBitrateKbps?: number;
   readonly liveRttMillis?: number;
+  readonly missionRevision?: number;
+  readonly missionDeviceGeneration?: number;
   readonly missionExecution?: "NOT_STARTED" | "STARTING" | "EXECUTING" | "PAUSED" | "STOPPING" | "FINISHED" | "FAILED";
   readonly missionFileName?: string;
 }
 
 export interface DesktopRelayTelemetry {
   readonly deviceId: string;
+  /** Desktop-local receipt time of the latest protocol-validated telemetry, never a DJI fact. */
+  readonly receivedAtMs: number | null;
   readonly payload: DesktopRelayTelemetryPayload;
   readonly capabilities: Readonly<{
     readonly liveVideo?: boolean;
@@ -139,6 +144,14 @@ const boundedInteger = (value: unknown, minimum: number, maximum: number): numbe
   const parsed = boundedNumber(value, minimum, maximum);
   return parsed !== undefined && Number.isSafeInteger(parsed) ? parsed : undefined;
 };
+const positiveIntegerValue = (value: unknown): number | undefined => {
+  const parsed = finiteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+const nonNegativeIntegerValue = (value: unknown): number | undefined => {
+  const parsed = finiteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+};
 const latitude = (value: unknown): number | undefined => {
   const parsed = finiteNumber(value);
   return parsed !== undefined && parsed >= -90 && parsed <= 90 ? parsed : undefined;
@@ -150,6 +163,10 @@ const longitude = (value: unknown): number | undefined => {
 const pairingState = (value: unknown): "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED" | undefined => {
   const current = string(value);
   return current === "UNKNOWN" || current === "IDLE" || current === "PAIRING" || current === "PAIRED" || current === "STOPPING" || current === "FAILED" ? current : undefined;
+};
+const sdkAvailability = (value: unknown): "STOPPED" | "STARTING" | "READY" | "FAILED" | undefined => {
+  const current = string(value);
+  return current === "STOPPED" || current === "STARTING" || current === "READY" || current === "FAILED" ? current : undefined;
 };
 const status = (value: unknown): CommandStatus => {
   const current = read(value, "status");
@@ -169,7 +186,11 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   if (payload === null || capabilities === null) return null;
   const outputPayload: MutableDesktopRelayTelemetryPayload = {};
   const outputCapabilities: { liveVideo?: boolean; waypointMission?: boolean; waypointMissionSupport?: "supported" | "unsupported" } = {};
-  const sdk = string(payload.sdkAvailability); if (sdk === "READY") outputPayload.sdkRegistered = true; else if (sdk === "STARTING" || sdk === "STOPPED" || sdk === "FAILED") outputPayload.sdkRegistered = false;
+  const sdk = sdkAvailability(payload.sdkAvailability);
+  if (sdk !== undefined) {
+    outputPayload.sdkAvailability = sdk;
+    outputPayload.sdkRegistered = sdk === "READY";
+  }
   const remote = string(payload.remoteController); if (remote === "CONNECTED") outputPayload.remoteControllerConnected = true; else if (remote === "DISCONNECTED") outputPayload.remoteControllerConnected = false;
   const flight = string(payload.flightController); if (flight === "CONNECTED") outputPayload.flightControllerConnected = true; else if (flight === "DISCONNECTED") outputPayload.flightControllerConnected = false;
   const aircraft = string(payload.aircraft); if (aircraft === "CONNECTED") outputPayload.connected = true; else if (aircraft === "DISCONNECTED") outputPayload.connected = false;
@@ -201,10 +222,18 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   const missionExecution = string(payload.missionExecution);
   if (missionExecution === "NOT_STARTED" || missionExecution === "STARTING" || missionExecution === "EXECUTING" || missionExecution === "PAUSED" || missionExecution === "STOPPING" || missionExecution === "FINISHED" || missionExecution === "FAILED") outputPayload.missionExecution = missionExecution;
   const missionFileName = string(payload.missionFileName); if (validMissionFileName(missionFileName)) outputPayload.missionFileName = missionFileName;
+  const missionRevision = positiveIntegerValue(payload.missionRevision); if (missionRevision !== undefined) outputPayload.missionRevision = missionRevision;
+  const missionDeviceGeneration = nonNegativeIntegerValue(payload.missionDeviceGeneration); if (missionDeviceGeneration !== undefined) outputPayload.missionDeviceGeneration = missionDeviceGeneration;
   const liveVideo = boolean(capabilities.liveVideo); if (liveVideo !== undefined) outputCapabilities.liveVideo = liveVideo;
   const waypointMission = boolean(capabilities.waypointMission); if (waypointMission !== undefined) outputCapabilities.waypointMission = waypointMission;
   const support = string(capabilities.waypointMissionSupport); if (support === "SUPPORTED") outputCapabilities.waypointMissionSupport = "supported"; else if (support === "UNSUPPORTED") outputCapabilities.waypointMissionSupport = "unsupported";
-  return freeze({ deviceId, payload: freeze(outputPayload), capabilities: freeze(outputCapabilities) });
+  const receivedAtMs = read(raw, "receivedAtMs");
+  return freeze({
+    deviceId,
+    receivedAtMs: typeof receivedAtMs === "number" && Number.isFinite(receivedAtMs) && receivedAtMs >= 0 ? receivedAtMs : null,
+    payload: freeze(outputPayload),
+    capabilities: freeze(outputCapabilities),
+  });
 }
 
 function create(options: Readonly<{ readonly relay: unknown }>): RelayOperationsAdapterInstance {

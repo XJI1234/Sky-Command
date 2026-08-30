@@ -67,14 +67,14 @@ D3 不负责：
 
 可以从文件中提取至少两个有效航点，但不能由 D3 提交给飞行任务模块上传。
 
-所有 KML 都属于这一分类。缺少 `waylines.wpml` 但仍能提取航点的 KMZ 也属于这一分类。
+所有 KML 都属于这一分类。缺少 `waylines.wpml`，或 `waylines.wpml` 缺少同目录 `template.kml`，但仍能提取航点的 KMZ 也属于这一分类。
 
 ### 4.5 可上传候选 Upload Candidate
 
 满足以下桌面侧条件的 KMZ：
 
 - ZIP 容器安全且可读取；
-- 包含可识别的 `waylines.wpml`；
+- 包含可识别的 `waylines.wpml` 和同目录 `template.kml`；
 - 能提取至少两个有效航点；
 - 文件大小、条目数和解压大小未超过限制。
 
@@ -251,8 +251,8 @@ MissionPayload {
 2. 拒绝加密归档和不安全路径。
 3. 查找 `waylines.wpml`，优先使用 `wpmz/waylines.wpml`。
 4. 如果没有 WPML，再查找 `template.kml` 或其他 KML 作为预览来源。
-5. `waylines.wpml` 可安全解析且包含至少两个有效航点时，分类为 `upload-candidate`；这仍不代表通过 DJI WPMZ 校验。
-6. 不存在 WPML但存在有效预览航迹时分类为 `preview-only`，并产生 `WPML_MISSING` 警告。
+5. `waylines.wpml` 可安全解析、存在同目录 `template.kml` 且包含至少两个有效航点时，分类为 `upload-candidate`；这仍不代表通过 DJI WPMZ 校验。
+6. 不存在 WPML但存在有效预览航迹时分类为 `preview-only`，并产生 `WPML_MISSING` 警告；WPML 缺少同目录模板时同样为 `preview-only`，并产生 `DJI_TEMPLATE_MISSING` 警告。
 7. 归档检查和内容解析必须在内存中完成，不得把 ZIP 条目解压到任何磁盘目录。
 
 ### 9.3 航点数量
@@ -433,6 +433,7 @@ RouteLibraryError {
 警告不是失败。本模块只定义以下警告：
 
 - `route-domain` `RouteWarningCode.WPML_MISSING`：KMZ 可以预览但不能作为上传候选。
+- `route-domain` `RouteWarningCode.DJI_TEMPLATE_MISSING`：KMZ 含有 WPML，但缺少与其同目录的 DJI `template.kml`，可以预览但不能作为上传候选。
 - `route-domain` `RouteWarningCode.ALTITUDE_MISSING`：部分或全部航点没有高度。
 
 地图侧警告（当前使用备用底图、三维白模不可用）由 `geo-map` 定义，本模块不产生也不转发。
@@ -571,8 +572,8 @@ D3.3 负责：
 
 - 使用 D3.1 构造并验证每个 RouteWaypoint。
 - 检查航点数量、sequence 连续性和整条航线结构。
-- 根据源格式、WPML存在性和解析结果确定分类。
-- 生成 `WPML_MISSING`、`ALTITUDE_MISSING` 等领域警告。
+- 根据源格式、WPML 与同目录模板存在性和解析结果确定分类。
+- 生成 `WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`ALTITUDE_MISSING` 等领域警告。
 - 失败时返回稳定错误，不产生部分 QualifiedRoute。
 
 D3.3 不读取 ZIP/XML，不计算摘要，不决定 routeId，不管理目录，不访问地图或 UI。

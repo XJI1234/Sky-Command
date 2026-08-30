@@ -64,6 +64,7 @@ describe("D3.2 KMZ archive safety and selection", () => {
         format: "kmz",
         sourceDocument: "wpmz/waylines.wpml",
         sourceKind: "waylines-wpml",
+        hasCompanionTemplate: true,
         wpmlNamespace: "http://www.dji.com/wpmz/1.0.6"
       });
       expect(result.document.waypointCandidates).toHaveLength(2);
@@ -73,6 +74,16 @@ describe("D3.2 KMZ archive safety and selection", () => {
         altitudeSource: "execute-height"
       });
     }
+  });
+
+  it("reports a same-directory template requirement for a selected WPML document", async () => {
+    const root = await ingest({ "template.kml": template, "waylines.wpml": wpml });
+    const missing = await ingest({ "wpmz/waylines.wpml": wpml });
+    const separateDirectory = await ingest({ "template.kml": template, "wpmz/waylines.wpml": wpml });
+
+    expect(root).toMatchObject({ status: "parsed", document: { hasCompanionTemplate: true } });
+    expect(missing).toMatchObject({ status: "parsed", document: { hasCompanionTemplate: false } });
+    expect(separateDirectory).toMatchObject({ status: "parsed", document: { hasCompanionTemplate: false } });
   });
 
   it("supports Wayline root layout and canonical entries outrank root entries", async () => {

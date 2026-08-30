@@ -265,7 +265,7 @@ function instance(dependencies: Readonly<{
               const deviceId = typeof (lane as { deviceId?: unknown }).deviceId === "string" ? (lane as { deviceId: string }).deviceId : null;
               const phase = typeof (lane as { phase?: unknown }).phase === "string" ? (lane as { phase: string }).phase : "";
               if (deviceId === null) return;
-              if (!["starting", "running", "pausing", "paused", "resuming", "stopping", "staging", "staged", "uploading", "uploaded"].includes(phase)) return;
+              if (!["starting", "running", "pausing", "paused", "resuming", "stopping", "staging", "staged", "uploading", "uploaded", "disconnected"].includes(phase)) return;
               try { await dependencies.missionControl.stop(deviceId); } catch { /* best-effort stop on desktop shutdown */ }
             }));
           }

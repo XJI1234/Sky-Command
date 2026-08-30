@@ -46,6 +46,31 @@ describe("mission phase domain contract", () => {
     }
   });
 
+  it("allows one explicit stop after the desktop loses and regains session knowledge", () => {
+    const machine = MissionPhaseDomain.create();
+    stageAndUpload(machine);
+    transition(machine, { type: "start-requested" });
+    expect(transition(machine, { type: "connection-lost" }).phase).toBe("disconnected");
+
+    expect(transition(machine, { type: "stop-requested" }).phase).toBe("stopping");
+  });
+
+  it("allows a matching terminal fact to settle a task that ended while the desktop was disconnected", () => {
+    const completed = MissionPhaseDomain.create();
+    stageAndUpload(completed);
+    transition(completed, { type: "start-requested" });
+    transition(completed, { type: "start-succeeded" });
+    transition(completed, { type: "connection-lost" });
+    expect(transition(completed, { type: "mission-completed" }).phase).toBe("completed");
+
+    const failed = MissionPhaseDomain.create();
+    stageAndUpload(failed);
+    transition(failed, { type: "start-requested" });
+    transition(failed, { type: "start-succeeded" });
+    transition(failed, { type: "connection-lost" });
+    expect(transition(failed, { type: "operation-failed", code: "MISSION_EXECUTION_FAILED" }).phase).toBe("failed");
+  });
+
   it("preserves a failure reason and allows a new mission after reset or terminal state", () => {
     const machine = MissionPhaseDomain.create();
     stageAndUpload(machine);

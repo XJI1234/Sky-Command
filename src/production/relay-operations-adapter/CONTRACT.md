@@ -51,7 +51,7 @@ instance.dispose() -> void
 
 | Android 协议字段 | 桌面投影字段 | 转换规则 |
 | --- | --- | --- |
-| `sdkAvailability` | `sdkRegistered` | 仅 `READY` 为 `true`；`STARTING`、`STOPPED`、`FAILED` 为 `false`；缺失或未知为 `undefined` |
+| `sdkAvailability` | `sdkAvailability`、`sdkRegistered` | 仅原始封闭枚举 `STOPPED`、`STARTING`、`READY`、`FAILED` 可作为 `sdkAvailability` 保留；同时仅 `READY` 派生为 `sdkRegistered=true`，其余三态派生为 `false`；缺失或未知均为 `undefined` |
 | `remoteController` | `remoteControllerConnected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
 | `flightController` | `flightControllerConnected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
 | `aircraft` | `connected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
@@ -59,7 +59,7 @@ instance.dispose() -> void
 | `isFlying`、`motorsOn` | 同名字段 | 仅保留布尔值 |
 | `flightMode` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
 | `batteryPercent` | 同名字段 | 仅保留 `0..100` 的有限数值 |
-| `remainingFlightTimeSeconds` | 同名字段 | 仅保留 `0..86,400` 的非负安全整数 |
+| `remainingFlightTimeSeconds` | 同名字段 | 仅保留 `0..86,400` 的非负安全整数；只表示 DJI 低电量返航策略预估，不能作为通用预计飞行时间或安全门禁 |
 | `pairing` | `pairingState` | 仅保留 `UNKNOWN`、`IDLE`、`PAIRING`、`PAIRED`、`STOPPING`、`FAILED` |
 | `latitude` / `longitude` | 同名字段 | 仅在两者都是有限数值且分别落在 `[-90,90]`、`[-180,180]` 时成对保留；缺一、越界、JSON null 均省略，不得写成 `0` |
 | `altitudeMeters` | 同名字段 | 仅保留有限数值，不受电池 `0..100` 范围限制 |
@@ -70,11 +70,13 @@ instance.dispose() -> void
 | `liveRttMillis` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..60,000` 的非负安全整数 |
 | `missionExecution` | 同名封闭枚举 | 仅保留 `NOT_STARTED`、`STARTING`、`EXECUTING`、`PAUSED`、`STOPPING`、`FINISHED`、`FAILED` |
 | `missionFileName` | 同名字段 | 仅保留安全 `.kmz` 基名；缺失或 null 为 `undefined` |
+| `missionRevision` | 同名字段 | 仅保留正安全整数；它与文件名共同标识任务代际 |
+| `missionDeviceGeneration` | 同名字段 | 仅保留非负安全整数；它标识手机端设备运行代际 |
 | `capabilities.liveVideo` | 同名字段 | 仅保留布尔值；字段名不得改写 |
 | `capabilities.waypointMission` | 同名字段 | 仅保留布尔值；字段名不得改写 |
 | `capabilities.waypointMissionSupport` | 同名字段 | 线协议 `SUPPORTED` / `UNSUPPORTED` 归一为桌面门禁词表 `supported` / `unsupported`；其他值为 `undefined`。这不是改字段名。 |
 
-投影还必须保留用于设备页显示的安全原始枚举值，但不得公开协议 JSON 或任意未知字段。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
+投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability` 是设备页的只读 MSDK 生命周期事实；`sdkRegistered` 是保留给既有安全门禁的兼容布尔投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
 
 `liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。
 
@@ -104,7 +106,7 @@ instance.dispose() -> void
 - `mission-result.ok` 只表示手机已暂存 KMZ。
 - `wayline.upload` 成功才表示飞机端上传完成。
 - `wayline.start` 成功只表示 DJI 接受启动请求；只有有效且属于当前任务代际的 `ROUTE_EXECUTION_STARTED` 才能使任务状态进入执行中。
-- DJI `missionExecution=FINISHED` 或 `FAILED` 只在文件名和当前任务匹配时才能使桌面任务进入终态；它们不补造 `ROUTE_EXECUTION_STARTED`。
+- DJI `missionExecution=FINISHED` 或 `FAILED` 只在文件名、`missionRevision`、`missionDeviceGeneration` 和当前任务身份均匹配时才能使桌面任务进入终态；它们不补造 `ROUTE_EXECUTION_STARTED`。
 - 暂停、继续、停止在等待命令结果时必须保留“请求中”状态；命令成功后才进入对应已确认状态。
 - `live-stream.start` 成功只表示手机接受 RTMP 推流；播放成功只能由媒体管线确认本机 HTTP-FLV 已就绪并由播放器附着后产生。
 - `flight.*` 成功只表示 DJI 已完成该调用；飞行状态必须仍由后续遥测显示。

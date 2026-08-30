@@ -89,7 +89,10 @@ function create(dependencies: MissionControlDependencies, options: MissionDispat
     if (previousDevices !== null) {
       for (const deviceId of previousDevices) {
         const sessionChanged = previousSessions.has(deviceId) && currentSessions.has(deviceId) && previousSessions.get(deviceId) !== currentSessions.get(deviceId);
-        if (!currentDevices.has(deviceId) || sessionChanged) dispatcher.recordDisconnected(deviceId);
+        if (!currentDevices.has(deviceId) || sessionChanged) {
+          appliedPhases.delete(deviceId);
+          dispatcher.recordDisconnected(deviceId);
+        }
       }
     }
     previousDevices = currentDevices;
@@ -100,13 +103,13 @@ function create(dependencies: MissionControlDependencies, options: MissionDispat
     for (const phase of missionPhases) {
       if (stalePhase(phase.deviceId, phase)) continue;
       if (phase.phase === "ROUTE_EXECUTION_STARTED") {
-        const applied = dispatcher.recordExecutionStarted(phase.deviceId, phase.fileName);
+        const applied = dispatcher.recordExecutionStarted(phase.deviceId, phase.fileName, phase.missionRevision, phase.deviceGeneration);
         if (applied !== null) appliedPhases.set(phase.deviceId, freeze({ deviceGeneration: phase.deviceGeneration, missionRevision: phase.missionRevision, sequence: phase.sequence }));
       }
     }
     const terminals = RelayMissionPhaseSnapshotReader.readTerminalStates(snapshot);
     if (terminals === null) return;
-    for (const terminal of terminals) dispatcher.recordExecutionTerminal(terminal.deviceId, terminal.fileName, terminal.outcome);
+    for (const terminal of terminals) dispatcher.recordExecutionTerminal(terminal.deviceId, terminal.fileName, terminal.outcome, terminal.missionRevision, terminal.deviceGeneration);
   };
   const relaySubscription = subscribeSafely(dependencies.relay, receiveRelaySnapshot);
   return freeze({

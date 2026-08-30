@@ -9,21 +9,20 @@ import { DesktopShell } from "../desktop-shell/index.js";
 import { NodeDiagnosticStore } from "../../adapters/node-diagnostic-store/index.js";
 import { createMediaPorts } from "./media-ports.js";
 import { IncidentJournal, mediaLogger, watchApplication, wrapGateway, wrapPhoneDiagnostics } from "./incident-journal.js";
+import { runtimeDataPaths } from "./runtime-paths.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = [here, join(here, ".."), join(here, "..", "..", "..")].find((dir) => existsSync(join(dir, "package.json"))) ?? join(here, "..");
 const rendererFile = [join(projectRoot, "dist/renderer/index.html"), join(projectRoot, "src/production/operator-console/renderer/index.html")].find((path) => existsSync(path)) ?? join(projectRoot, "dist/renderer/index.html");
 const rendererEntry = pathToFileURL(rendererFile).href;
 const preloadPath = [join(projectRoot, "electron/preload.cjs"), join(projectRoot, "src/production/electron-host/preload.cjs")].find((path) => existsSync(path)) ?? join(projectRoot, "electron/preload.cjs");
-const httpFlvRoot = join(projectRoot, "tmp-http-flv");
-const logPath = join(projectRoot, "tmp", "desktop-launch.log");
 const relayPort = 8_080;
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
-const log = (message: string): void => {
+const log = (path: string, message: string): void => {
   try {
-    mkdirSync(dirname(logPath), { recursive: true });
-    appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${new Date().toISOString()} ${message}\n`);
   } catch { /* 启动日志失败不得挡住窗口 */ }
 };
 
@@ -74,9 +73,11 @@ const lanCards = (): readonly { readonly name: string; readonly enabled: true; r
 
 async function launch(): Promise<void> {
   delete process.env.NODE_OPTIONS;
-  log("launch begin");
+  const { httpFlvRoot, logPath } = runtimeDataPaths(app.getPath("userData"));
+  const launchLog = (message: string): void => log(logPath, message);
+  launchLog("launch begin");
   const journal = IncidentJournal.create();
-  log(`incident ${journal.logPath}`);
+  launchLog(`incident ${journal.logPath}`);
   journal.record({ link: "phone-pc", level: "INFO", event: "DESKTOP_LAUNCH", detail: "Sky Command starting" });
   mkdirSync(httpFlvRoot, { recursive: true });
   const interfaces = lanCards();
@@ -197,16 +198,16 @@ async function launch(): Promise<void> {
   });
   const started = await shell.start();
   if (!started.ok) throw new Error(started.code);
-  log("window ready");
+  launchLog("window ready");
   app.on("window-all-closed", () => { void shell.dispose(); app.quit(); });
 }
 
 if (!app.requestSingleInstanceLock()) {
-  log("second instance exit");
   app.quit();
 } else {
   app.whenReady().then(() => launch()).catch((error: unknown) => {
-    log(error instanceof Error ? error.stack ?? error.message : String(error));
+    const { logPath } = runtimeDataPaths(app.getPath("userData"));
+    log(logPath, error instanceof Error ? error.stack ?? error.message : String(error));
     console.error(error);
     app.exit(1);
   });

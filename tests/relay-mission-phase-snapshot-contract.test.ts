@@ -33,17 +33,18 @@ describe("中继航线阶段快照解析模块契约", () => {
   it("只从受限遥测中读取匹配文件名的已确认终态", () => {
     const raw = {
       telemetry: [
-        { deviceId: "phone-1", payload: { kind: "object", fields: { missionExecution: { kind: "string", value: "FINISHED" }, missionFileName: { kind: "string", value: "survey.kmz" } } } },
-        { deviceId: "phone-2", payload: { missionExecution: "FAILED", missionFileName: "failed.kmz" } },
+        { deviceId: "phone-1", payload: { kind: "object", fields: { missionExecution: { kind: "string", value: "FINISHED" }, missionFileName: { kind: "string", value: "survey.kmz" }, missionRevision: { kind: "number", value: "1" }, missionDeviceGeneration: { kind: "number", value: "0" } } } },
+        { deviceId: "phone-2", payload: { missionExecution: "FAILED", missionFileName: "failed.kmz", missionRevision: 2, missionDeviceGeneration: 1 } },
         { deviceId: "phone-3", payload: { missionExecution: "EXECUTING", missionFileName: "active.kmz" } },
       ],
     };
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates(raw)).toEqual([
-      { deviceId: "phone-1", fileName: "survey.kmz", outcome: "completed" },
-      { deviceId: "phone-2", fileName: "failed.kmz", outcome: "failed" },
+      { deviceId: "phone-1", fileName: "survey.kmz", outcome: "completed", missionRevision: 1, deviceGeneration: 0 },
+      { deviceId: "phone-2", fileName: "failed.kmz", outcome: "failed", missionRevision: 2, deviceGeneration: 1 },
     ]);
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [] })).toEqual([]);
-    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: "phone-1", payload: { missionExecution: "FINISHED", missionFileName: "../unsafe.kmz" } }] })).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: "phone-1", payload: { missionExecution: "FINISHED", missionFileName: "../unsafe.kmz", missionRevision: 1, missionDeviceGeneration: 0 } }] })).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: "phone-1", payload: { missionExecution: "FINISHED", missionFileName: "survey.kmz" } }] })).toBeNull();
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: "phone-1", payload: null }] })).toEqual([]);
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: " ", payload: {} }] })).toBeNull();
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates({})).toBeNull();
@@ -63,6 +64,8 @@ describe("中继航线阶段快照解析模块契约", () => {
     const inconsistentPlainProjection = new Proxy({}, {
       get(_target, key) {
         if (key === "missionFileName") return "plain.kmz";
+        if (key === "missionRevision") return 1;
+        if (key === "missionDeviceGeneration") return 0;
         if (key !== "missionExecution") return undefined;
         plainReads += 1;
         if (plainReads === 1) return "FINISHED";
@@ -80,13 +83,38 @@ describe("中继航线阶段快照解析模块契约", () => {
         { deviceId: "phone-kind-throws", payload: throwingKind },
         { deviceId: "phone-plain-number", payload: { missionExecution: 1 } },
         { deviceId: "phone-plain-throws", payload: inconsistentPlainProjection },
-        { deviceId: "phone-plain", payload: { missionExecution: "FINISHED", missionFileName: "plain.kmz" } },
+        { deviceId: "phone-plain", payload: { missionExecution: "FINISHED", missionFileName: "plain.kmz", missionRevision: 1, missionDeviceGeneration: 0 } },
       ],
     });
 
     expect(result).toEqual([
-      { deviceId: "phone-plain-throws", fileName: "plain.kmz", outcome: "completed" },
-      { deviceId: "phone-plain", fileName: "plain.kmz", outcome: "completed" },
+      { deviceId: "phone-plain-throws", fileName: "plain.kmz", outcome: "completed", missionRevision: 1, deviceGeneration: 0 },
+      { deviceId: "phone-plain", fileName: "plain.kmz", outcome: "completed", missionRevision: 1, deviceGeneration: 0 },
     ]);
+  });
+
+  it("严格隔离异常、超限和畸形的任务代际数字", () => {
+    const numberValueThrows = new Proxy({ kind: "number" }, { get(target, key) {
+      if (key === "value") throw new Error("secret");
+      return target[key as keyof typeof target];
+    } });
+    const plainIntegerThrows = new Proxy({ missionExecution: "FINISHED", missionFileName: "survey.kmz", missionDeviceGeneration: 0 }, { get(target, key) {
+      if (key === "missionRevision") throw new Error("secret");
+      return target[key as keyof typeof target];
+    } });
+    const terminal = (revision: unknown, generation: unknown = 0) => ({
+      deviceId: "phone-1",
+      payload: {
+        missionExecution: "FINISHED",
+        missionFileName: "survey.kmz",
+        missionRevision: revision,
+        missionDeviceGeneration: generation,
+      },
+    });
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [terminal(null)] })).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [terminal({ kind: "number", value: 1 })] })).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [terminal({ kind: "number", value: "9007199254740992" })] })).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [terminal(numberValueThrows)] })).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: "phone-1", payload: plainIntegerThrows }] })).toBeNull();
   });
 });

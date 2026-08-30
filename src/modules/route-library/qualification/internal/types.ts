@@ -14,10 +14,10 @@ export interface QualificationDocument {
   readonly format: "kml" | "kmz";
   readonly sourceDocument: string;
   readonly sourceKind: "kml" | "waylines-wpml";
+  readonly hasCompanionTemplate: boolean;
   readonly wpmlNamespace: string | null;
   readonly candidates: readonly unknown[];
   readonly sha256: string;
   readonly sizeBytes: number;
   readonly originalBytes: Uint8Array;
 }
-

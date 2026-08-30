@@ -25,6 +25,7 @@ function createRelay(options: NodeRelayOptions): RelayLinkInstance {
     ...options,
     transport: NodeWebSocketRelayTransport.create(),
     scheduler,
+    now: () => Date.now(),
     createConnectionId: randomUUID,
     createSessionId: () => randomUUID(),
     createCommandId: randomUUID,

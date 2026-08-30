@@ -25,7 +25,6 @@ LinkChain.evaluate(input: unknown) -> LinkChainResult<LinkChainSnapshot>
     remoteControllerConnected?: boolean;
     flightControllerConnected?: boolean;
     connected?: boolean;
-    pairingState?: string;
   };
 }
 ```
@@ -49,9 +48,9 @@ LinkChain.evaluate(input: unknown) -> LinkChainResult<LinkChainSnapshot>
 - `relayConnected: false` 时，`computerToPhone` 为 `disconnected`，后两段均为 `unknown`，`overall` 为 `offline`；遥测值不得覆盖这一事实。
 - 中继在线而没有遥测时，电脑到手机为 `connected`，后两段为 `unknown`，`overall` 为 `degraded`。
 - 有遥测但 `sdkRegistered !== true` 时，后两段为 `unknown`，`overall` 为 `degraded`。
-- SDK 已注册后，`phoneToRemoteController` 直接由 `remoteControllerConnected === true` 判定；缺失或 false 都是 `disconnected`。
+- SDK 已注册后，`phoneToRemoteController` 由明确的连接事实判定：true 为 `connected`，false 为 `disconnected`，缺失为 `unknown`。
 - 只有遥控器为 `connected` 时，才读取 `flightControllerConnected` 与 `connected`。两者均为 true 才得到 `remoteControllerToAircraft: connected`，否则为 `disconnected`。遥控器断开时飞机段为 `unknown`，不能显示为断开，因为手机无法确认该段事实。
-- 只有三段均为 `connected` 时 `overall` 才可能为 `ready`。若遥测提供了 `pairingState` 且不是 `PAIRED`，即使三段已连接也仍为 `degraded`。未提供 `pairingState` 时保持原语义，不把缺失对频当成已对频失败。
+- 只有三段均为 `connected` 时 `overall` 才为 `ready`。对频是独立的低频维护状态，绝不参与三段链路判定或降低已连接链路的就绪状态。
 
 ## 错误与不可变性
 

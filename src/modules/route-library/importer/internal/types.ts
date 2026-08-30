@@ -34,6 +34,8 @@ export interface ParsedRouteDocument {
   readonly format: RouteFileFormat;
   readonly sourceDocument: string;
   readonly sourceKind: "kml" | "waylines-wpml";
+  /** True only when the selected WPML has a sibling template.kml in the same KMZ directory. */
+  readonly hasCompanionTemplate: boolean;
   readonly wpmlNamespace: string | null;
   readonly waypointCandidates: readonly RawWaypointCandidate[];
   readonly sha256: string;

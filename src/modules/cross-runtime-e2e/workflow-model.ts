@@ -35,12 +35,12 @@ const direct: Readonly<Partial<Record<MissionModelEvent, Readonly<Partial<Record
   "pause-succeeded": Object.freeze({ pausing: "paused" }),
   "resume-requested": Object.freeze({ paused: "resuming" }),
   "resume-succeeded": Object.freeze({ resuming: "running" }),
-  "stop-requested": Object.freeze({ starting: "stopping", running: "stopping", paused: "stopping" }),
+  "stop-requested": Object.freeze({ starting: "stopping", running: "stopping", pausing: "stopping", paused: "stopping", resuming: "stopping", disconnected: "stopping" }),
   "stop-succeeded": Object.freeze({ stopping: "idle" }),
-  "mission-completed": Object.freeze({ starting: "completed", running: "completed" }),
+  "mission-completed": Object.freeze({ starting: "completed", running: "completed", disconnected: "completed" }),
   "operation-failed": Object.freeze({
     staging: "failed", uploading: "failed", starting: "failed", running: "failed",
-    pausing: "failed", paused: "failed", resuming: "failed", stopping: "failed",
+    pausing: "failed", paused: "failed", resuming: "failed", stopping: "failed", disconnected: "failed",
   }),
   "connection-lost": Object.freeze({
     staging: "disconnected", staged: "disconnected", uploading: "disconnected", uploaded: "disconnected",

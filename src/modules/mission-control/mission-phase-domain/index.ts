@@ -57,8 +57,8 @@ export interface MissionPhaseMachine {
 const PHASES: readonly MissionPhase[] = Object.freeze(["idle", "staging", "staged", "uploading", "uploaded", "starting", "running", "pausing", "paused", "resuming", "stopping", "completed", "failed", "disconnected"]);
 const STAGEABLE: readonly MissionPhase[] = Object.freeze(["idle", "completed", "failed", "disconnected"]);
 const DISCONNECTABLE: readonly MissionPhase[] = Object.freeze(["staging", "staged", "uploading", "uploaded", "starting", "running", "pausing", "paused", "resuming", "stopping"]);
-const FAILUREABLE: readonly MissionPhase[] = Object.freeze(["staging", "uploading", "starting", "running", "pausing", "paused", "resuming", "stopping"]);
-const STOPPABLE: readonly MissionPhase[] = Object.freeze(["starting", "running", "paused"]);
+const FAILUREABLE: readonly MissionPhase[] = Object.freeze(["staging", "uploading", "starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"]);
+const STOPPABLE: readonly MissionPhase[] = Object.freeze(["starting", "running", "pausing", "paused", "resuming", "disconnected"]);
 const EVENT_TYPES: readonly string[] = Object.freeze(["stage-requested", "stage-succeeded", "upload-requested", "upload-succeeded", "start-requested", "start-succeeded", "pause-requested", "pause-succeeded", "resume-requested", "resume-succeeded", "stop-requested", "stop-succeeded", "mission-completed", "operation-failed", "connection-lost", "reset", "__invalid__"]);
 
 const idleState = (): MissionPhaseState => Object.freeze({ missionId: null, phase: "idle", failureCode: null });
@@ -165,7 +165,7 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         current = idleState(); return success(current);
       }
       if (type === "mission-completed") {
-        if (current.phase !== "starting" && current.phase !== "running") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        if (current.phase !== "starting" && current.phase !== "running" && current.phase !== "disconnected") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         current = makeState(current.missionId, "completed", null); return success(current);
       }
       if (type === "operation-failed") {

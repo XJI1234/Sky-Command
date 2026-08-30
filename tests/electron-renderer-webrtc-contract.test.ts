@@ -18,7 +18,7 @@ describe("Electron 生产图传渲染", () => {
     expect(source).toContain("flvjs.createPlayer");
     expect(source).toContain("chaseLiveEdge");
     expect(source).toContain("recoverStuckFlv");
-    expect(source).toContain("DeviceFactSummary.format(connection)");
+    expect(source).toContain("deviceFactRows(connection)");
     expect(deviceFactSummary()).toContain("飞行状态尚未确认");
     expect(source).toContain("等待手机就绪");
     expect(source).toContain("flightActionLabel");

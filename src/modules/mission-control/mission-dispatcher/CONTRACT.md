@@ -30,7 +30,8 @@ instance.pause(deviceId) -> Promise<DispatchResult>
 instance.resume(deviceId) -> Promise<DispatchResult>
 instance.stop(deviceId) -> Promise<DispatchResult>
 instance.recordDisconnected(deviceId) -> MissionDispatchSnapshot | null
-instance.recordExecutionTerminal(deviceId, fileName, outcome) -> MissionDispatchSnapshot | null
+instance.recordExecutionStarted(deviceId, fileName, missionRevision, deviceGeneration) -> MissionDispatchSnapshot | null
+instance.recordExecutionTerminal(deviceId, fileName, outcome, missionRevision, deviceGeneration) -> MissionDispatchSnapshot | null
 instance.get(deviceId) -> MissionDispatchSnapshot
 instance.list() -> readonly MissionDispatchSnapshot[]
 instance.forget(deviceId) -> boolean
@@ -96,17 +97,17 @@ interface MissionDispatchSnapshot {
 
 ### 启动
 
-`start` 仅允许从 `uploaded` 执行。在任何出站命令前，它读取当前遥测并调用 `PreflightCheck.evaluate`；仅有遥测快照时 `relayConnected` 才为真，绝不从 WebSocket 或会话对象推导飞机连接状态。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `uploaded` 且不发送命令。通过后进入 `starting`，发送 `wayline.start`。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到 `ROUTE_EXECUTION_STARTED` 后才进入 `running`，否则为 `WAYLINE_START_FAILED`。
+`start` 仅允许从 `uploaded` 执行。在任何出站命令前，它读取当前遥测并调用 `PreflightCheck.evaluate`；仅有遥测快照时 `relayConnected` 才为真，绝不从 WebSocket 或会话对象推导飞机连接状态。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `uploaded` 且不发送命令。通过后进入 `starting`，发送 `wayline.start`。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到带任务身份的 `ROUTE_EXECUTION_STARTED` 后才进入 `running`。启动回执超时、断开或传输失败不能证明 DJI 未接受请求，必须保持 `starting` 并返回 `WAYLINE_START_UNCONFIRMED`；此时禁止重发启动，只允许停止。
 
 ### 暂停、恢复和停止
 
-`pause` 只允许 `running -> pausing -> paused`；`resume` 只允许 `paused -> resuming -> running`；`stop` 只允许从 `starting`、`running` 或 `paused` 进入 `stopping`，成功后回到 `idle`。其中 `pausing` 和 `resuming` 表示等待手机端确认 DJI 调用，不能显示成最终状态。它们均发送相应命令和 `{ confirm: true }`。失败分别为 `WAYLINE_PAUSE_FAILED`、`WAYLINE_RESUME_FAILED`、`WAYLINE_STOP_FAILED`，停止失败不得静默回到 `idle`。上传完成但尚未启动时不得发送 `wayline.stop`，因为飞机端执行器此时仍是未开始。`starting` 期间允许停止，以便中止已接受但尚未进入执行回报的航线。`ROUTE_EXECUTION_STARTED` 可在启动命令仍在等待结果时把任务从 `starting` 转入 `running`；此后迟到的启动失败不得把已在执行的任务写成失败。
+`pause` 只允许 `running -> pausing -> paused`；`resume` 只允许 `paused -> resuming -> running`；`stop` 只允许从 `starting`、`running`、`pausing`、`paused`、`resuming` 或重连后的 `disconnected` 进入 `stopping`，成功后回到 `idle`。其中 `pausing` 和 `resuming` 表示等待手机端确认 DJI 调用，不能显示成最终状态。它们均发送相应命令和 `{ confirm: true }`。暂停、继续或停止回执超时、断开或传输失败时，必须保留相应中间阶段并返回 `WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_UNCONFIRMED` 或 `WAYLINE_STOP_UNCONFIRMED`；不得重发同一动作。暂停/继续不确定时只允许一次停止作为保守处置，停止不确定时不得再发控制命令或替换任务。上传完成但尚未启动时不得发送 `wayline.stop`，因为飞机端执行器此时仍是未开始。`starting` 期间允许停止，以便中止已接受但尚未进入执行回报的航线。`ROUTE_EXECUTION_STARTED` 可在启动命令仍在等待结果时把任务从 `starting` 转入 `running`；此后迟到的启动失败不得把已在执行的任务写成失败。
 
 ## 6. 断线和遥测
 
-`recordDisconnected(deviceId)` 是供父模块调用的断线协调接口，只能在设备从已确认中继快照消失时调用。它不发送命令：活动轨道进入 `disconnected`、发布快照并返回该快照；未知、终态或已断线轨道返回 `null` 且不发布。它绝不重试、自动恢复或启动任务。
+`recordDisconnected(deviceId)` 是供父模块调用的断线协调接口，只能在设备从已确认中继快照消失或会话替换时调用。它不发送命令：活动轨道进入 `disconnected`、发布快照并返回该快照；未知、终态或已断线轨道返回 `null` 且不发布。它绝不重试、自动恢复或启动任务。
 
-命令和暂存结果中的 `disconnected` 仍是该操作失败，不能伪装为成功。`recordExecutionTerminal` 只接受由中继任务状态读取器校验后的 `completed` 或 `failed`：设备、当前安全文件名和本任务的活动阶段必须同时匹配；`completed` 只可使 `starting` 或 `running` 进入 `completed`，`failed` 只可使仍活动的任务进入 `failed`。未知设备、终态、文件名不匹配、重复或迟到事实一律返回 `null`，不发布也不发送命令。调度器不会由自由格式遥测推断完成或暂停；上游必须先将 Android 的封闭 `missionExecution` 枚举校验为上述两种终态。
+命令和暂存结果中的 `disconnected` 仍是该操作失败，不能伪装为成功。`recordExecutionStarted` 与 `recordExecutionTerminal` 都必须携带手机端 `missionRevision` 和 `deviceGeneration`；只有设备、当前安全文件名和两项身份均匹配此前可信执行事实时才可推进。`completed` 可使 `starting`、`running` 或断线后重新收到匹配终态的 `disconnected` 进入 `completed`，`failed` 同样只能结束匹配的活动或断线轨道。未知设备、终态、文件名或身份不匹配、重复或迟到事实一律返回 `null`，不发布也不发送命令。调度器不会由自由格式遥测推断完成或暂停；上游必须先将 Android 的封闭 `missionExecution` 枚举校验为上述两种终态。
 
 ## 7. 结果与错误码
 
@@ -116,7 +117,7 @@ type DispatchResult =
   | { readonly ok: false; readonly operation: DispatchOperation; readonly code: DispatchErrorCode; readonly state: MissionDispatchSnapshot | null; readonly blockers?: readonly PreflightBlocker[] };
 ```
 
-错误码固定为：`INVALID_DEVICE_ID`、`INVALID_ROUTE_ID`、`ROUTE_UNAVAILABLE`、`MISSION_ID_UNAVAILABLE`、`ILLEGAL_PHASE`、`OPERATION_IN_PROGRESS`、`DEPENDENCY_FAILURE`、`MISSION_TRANSFER_FAILED`、`WAYLINE_UPLOAD_FAILED`、`PREFLIGHT_BLOCKED`、`WAYLINE_START_FAILED`、`WAYLINE_PAUSE_FAILED`、`WAYLINE_RESUME_FAILED`、`WAYLINE_STOP_FAILED`。
+错误码固定为：`INVALID_DEVICE_ID`、`INVALID_ROUTE_ID`、`ROUTE_UNAVAILABLE`、`MISSION_ID_UNAVAILABLE`、`ILLEGAL_PHASE`、`OPERATION_IN_PROGRESS`、`DEPENDENCY_FAILURE`、`MISSION_TRANSFER_FAILED`、`WAYLINE_UPLOAD_FAILED`、`PREFLIGHT_BLOCKED`、`WAYLINE_START_FAILED`、`WAYLINE_START_UNCONFIRMED`、`WAYLINE_PAUSE_FAILED`、`WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_FAILED`、`WAYLINE_RESUME_UNCONFIRMED`、`WAYLINE_STOP_FAILED`、`WAYLINE_STOP_UNCONFIRMED`。
 
 `blockers` 只出现在 `PREFLIGHT_BLOCKED`，以 `PreflightCheck` 给出的稳定顺序复制并冻结。任何拒绝都不自动重试；只有已经尝试出站效果且收到非成功结果时才进入 `failed`。
 

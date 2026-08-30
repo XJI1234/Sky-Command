@@ -42,7 +42,7 @@ export interface MissionRelayGateway {
 export interface MissionDispatcherDependencies { readonly routeSource: MissionRouteSource; readonly relay: MissionRelayGateway; }
 export interface MissionDispatcherOptions { readonly createMissionId: (deviceId: string, routeId: string) => string; }
 export type DispatchOperation = "stage" | "upload" | "start" | "pause" | "resume" | "stop";
-export type DispatchErrorCode = "INVALID_DEVICE_ID" | "INVALID_ROUTE_ID" | "ROUTE_UNAVAILABLE" | "MISSION_ID_UNAVAILABLE" | "ILLEGAL_PHASE" | "OPERATION_IN_PROGRESS" | "DEPENDENCY_FAILURE" | "MISSION_TRANSFER_FAILED" | "WAYLINE_UPLOAD_FAILED" | "PREFLIGHT_BLOCKED" | "WAYLINE_START_FAILED" | "WAYLINE_PAUSE_FAILED" | "WAYLINE_RESUME_FAILED" | "WAYLINE_STOP_FAILED";
+export type DispatchErrorCode = "INVALID_DEVICE_ID" | "INVALID_ROUTE_ID" | "ROUTE_UNAVAILABLE" | "MISSION_ID_UNAVAILABLE" | "ILLEGAL_PHASE" | "OPERATION_IN_PROGRESS" | "DEPENDENCY_FAILURE" | "MISSION_TRANSFER_FAILED" | "WAYLINE_UPLOAD_FAILED" | "PREFLIGHT_BLOCKED" | "WAYLINE_START_FAILED" | "WAYLINE_START_UNCONFIRMED" | "WAYLINE_PAUSE_FAILED" | "WAYLINE_PAUSE_UNCONFIRMED" | "WAYLINE_RESUME_FAILED" | "WAYLINE_RESUME_UNCONFIRMED" | "WAYLINE_STOP_FAILED" | "WAYLINE_STOP_UNCONFIRMED";
 export interface LastDispatchResult { readonly operation: DispatchOperation; readonly ok: boolean; readonly code: DispatchErrorCode | null; }
 export interface MissionDispatchSnapshot { readonly deviceId: string; readonly routeId: string | null; readonly missionId: string | null; readonly phase: MissionPhase; readonly failureCode: string | null; readonly lastResult: LastDispatchResult | null; }
 export type DispatchResult = Readonly<{ readonly ok: true; readonly operation: DispatchOperation; readonly state: MissionDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: DispatchOperation; readonly code: DispatchErrorCode; readonly state: MissionDispatchSnapshot | null; readonly blockers?: readonly PreflightBlocker[] }>;
@@ -53,8 +53,8 @@ export interface MissionDispatcherInstance {
   readonly pause: (deviceId: string) => Promise<DispatchResult>;
   readonly resume: (deviceId: string) => Promise<DispatchResult>;
   readonly stop: (deviceId: string) => Promise<DispatchResult>;
-  readonly recordExecutionStarted: (deviceId: string, fileName: string) => MissionDispatchSnapshot | null;
-  readonly recordExecutionTerminal: (deviceId: string, fileName: string, outcome: "completed" | "failed") => MissionDispatchSnapshot | null;
+  readonly recordExecutionStarted: (deviceId: string, fileName: string, missionRevision: number, deviceGeneration: number) => MissionDispatchSnapshot | null;
+  readonly recordExecutionTerminal: (deviceId: string, fileName: string, outcome: "completed" | "failed", missionRevision: number, deviceGeneration: number) => MissionDispatchSnapshot | null;
   readonly recordDisconnected: (deviceId: string) => MissionDispatchSnapshot | null;
   readonly get: (deviceId: string) => MissionDispatchSnapshot;
   readonly list: () => readonly MissionDispatchSnapshot[];
@@ -62,11 +62,14 @@ export interface MissionDispatcherInstance {
   readonly subscribe: (listener: (snapshot: readonly MissionDispatchSnapshot[]) => void) => () => void;
 }
 
-interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; busy: boolean; lastResult: LastDispatchResult | null; }
+interface MissionIdentity { readonly missionRevision: number; readonly deviceGeneration: number; }
+interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; missionIdentity: MissionIdentity | null; busy: boolean; lastResult: LastDispatchResult | null; }
 
 const COMMANDS = Object.freeze({ confirm: true as const });
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const validFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && value.toLowerCase().endsWith(".kmz") && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value);
+const validPositiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+const validGeneration = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const idleSnapshot = (deviceId: string): MissionDispatchSnapshot => freeze({ deviceId, routeId: null, missionId: null, phase: "idle", failureCode: null, lastResult: null });
 type Attempt<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false }>;
@@ -89,6 +92,11 @@ const completeCommand = Object.freeze({
   pause: (machine: MissionPhaseMachine): void => { void machine.transition({ type: "pause-succeeded" }); },
   resume: (machine: MissionPhaseMachine): void => { void machine.transition({ type: "resume-succeeded" }); },
   stop: (machine: MissionPhaseMachine): void => { void machine.transition({ type: "stop-succeeded" }); }
+});
+const unconfirmedCommandFailure = Object.freeze({
+  pause: "WAYLINE_PAUSE_UNCONFIRMED" as const,
+  resume: "WAYLINE_RESUME_UNCONFIRMED" as const,
+  stop: "WAYLINE_STOP_UNCONFIRMED" as const
 });
 type RoutePayloadRead = RouteMissionPayload | null | "dependency-failure";
 const readRoutePayload = (source: MissionRouteSource, routeId: string): RoutePayloadRead => {
@@ -140,11 +148,12 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const missionId = missionIdAttempt.value;
     if (!validId(missionId)) return rejected("stage", "MISSION_ID_UNAVAILABLE", existing ?? null);
 
-    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, lastResult: null } as Lane;
+    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, missionIdentity: null, lastResult: null } as Lane;
     const requested = lane.machine.transition({ type: "stage-requested", missionId });
     if (!requested.ok) return rejected("stage", "ILLEGAL_PHASE", lane);
     lane.routeId = routeId;
     lane.fileName = routePayload.fileName;
+    lane.missionIdentity = null;
     lanes.set(deviceId, lane);
     lane.busy = true;
     publish();
@@ -166,6 +175,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     if (!lane) return rejected(operation, "ILLEGAL_PHASE", null);
     if (lane.busy) return rejected(operation, "OPERATION_IN_PROGRESS", lane);
     if (operation === "start") {
+      if (lane.machine.state().phase !== "uploaded") return rejected(operation, "ILLEGAL_PHASE", lane);
       const telemetryAttempt = attempt(() => dependencies.relay.latestTelemetry(deviceId));
       if (!telemetryAttempt.ok) return rejected(operation, "DEPENDENCY_FAILURE", lane);
       const telemetry = telemetryAttempt.value;
@@ -184,8 +194,12 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
       completeCommand[operation](lane.machine);
       return result(lane, operation, true, null);
     }
-    if (operation === "start" && lane.machine.state().phase !== "starting") {
-      return result(lane, operation, true, null);
+    if (operation === "start") {
+      if (lane.machine.state().phase !== "starting") return result(lane, operation, true, null);
+      return result(lane, operation, false, "WAYLINE_START_UNCONFIRMED");
+    }
+    if (operation === "pause" || operation === "resume" || operation === "stop") {
+      return result(lane, operation, false, unconfirmedCommandFailure[operation]);
     }
     lane.machine.transition({ type: "operation-failed", code: failureCode });
     return result(lane, operation, false, failureCode);
@@ -204,25 +218,27 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     publish();
     return state;
   };
-  const recordExecutionStarted = (deviceId: string, fileName: string): MissionDispatchSnapshot | null => {
-    if (!validId(deviceId) || !validFileName(fileName)) return null;
+  const recordExecutionStarted = (deviceId: string, fileName: string, missionRevision: number, deviceGeneration: number): MissionDispatchSnapshot | null => {
+    if (!validId(deviceId) || !validFileName(fileName) || !validPositiveInteger(missionRevision) || !validGeneration(deviceGeneration)) return null;
     const lane = lanes.get(deviceId);
     if (!lane || lane.fileName !== fileName || lane.machine.state().phase !== "starting") return null;
     const changed = lane.machine.transition({ type: "start-succeeded" });
     /* c8 ignore next -- this transition is guarded by the immediately preceding phase check. */
     if (!changed.ok) return null;
+    lane.missionIdentity = freeze({ missionRevision, deviceGeneration });
     const state = snapshot(lane);
     publish();
     return state;
   };
-  const recordExecutionTerminal = (deviceId: string, fileName: string, outcome: "completed" | "failed"): MissionDispatchSnapshot | null => {
-    if (!validId(deviceId) || !validFileName(fileName) || (outcome !== "completed" && outcome !== "failed")) return null;
+  const recordExecutionTerminal = (deviceId: string, fileName: string, outcome: "completed" | "failed", missionRevision: number, deviceGeneration: number): MissionDispatchSnapshot | null => {
+    if (!validId(deviceId) || !validFileName(fileName) || !validPositiveInteger(missionRevision) || !validGeneration(deviceGeneration) || (outcome !== "completed" && outcome !== "failed")) return null;
     const lane = lanes.get(deviceId);
-    if (!lane || lane.busy || lane.fileName !== fileName) return null;
+    const identity = lane?.missionIdentity;
+    if (!lane || !identity || lane.busy || lane.fileName !== fileName || identity.missionRevision !== missionRevision || identity.deviceGeneration !== deviceGeneration) return null;
     const current = lane.machine.state().phase;
     const changed = outcome === "completed"
-      ? (current === "starting" || current === "running" ? lane.machine.transition({ type: "mission-completed" }) : null)
-      : (["staging", "uploading", "starting", "running", "pausing", "paused", "resuming", "stopping"].includes(current) ? lane.machine.transition({ type: "operation-failed", code: "MISSION_EXECUTION_FAILED" }) : null);
+      ? (["starting", "running", "disconnected"].includes(current) ? lane.machine.transition({ type: "mission-completed" }) : null)
+      : (["staging", "uploading", "starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"].includes(current) ? lane.machine.transition({ type: "operation-failed", code: "MISSION_EXECUTION_FAILED" }) : null);
     if (changed === null || !changed.ok) return null;
     const state = snapshot(lane);
     publish();

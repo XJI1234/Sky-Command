@@ -104,7 +104,7 @@ describe("StreamDispatcher", () => {
     const snapshots: unknown[] = [];
     const unsubscribe = value.dispatcher.subscribe((current) => snapshots.push(current));
     const first = value.dispatcher.start("phone-1");
-    await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "OPERATION_IN_PROGRESS" });
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "OPERATION_IN_PROGRESS" });
     const second = value.dispatcher.start("phone-2");
     expect(value.dispatcher.recordDisconnected("phone-1")).toMatchObject({ phase: "disconnected" });
     resolvers.forEach((resolve) => resolve({ status: "succeeded" }));
@@ -333,5 +333,19 @@ describe("StreamDispatcher", () => {
     const value = fixture();
     await expect(value.dispatcher.start(1 as never)).resolves.toEqual({ ok: false, operation: "start", code: "INVALID_INPUT", state: null });
     expect(value.dispatcher.list()).toEqual([{ deviceId: "", phase: "idle", lastOperation: null, failureCode: null, reason: null }]);
+  });
+
+  it("accepts private 192.168 ingress addresses and rejects a concurrent request for the same device", async () => {
+    let finish!: (value: unknown) => void;
+    const value = fixture({
+      ingressAddress: () => "192.168.1.88",
+      send: async () => new Promise((resolve) => { finish = resolve; }),
+    });
+    const starting = value.dispatcher.start("phone-1");
+    await Promise.resolve();
+    await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "OPERATION_IN_PROGRESS" });
+    finish({ status: "succeeded" });
+    await expect(starting).resolves.toMatchObject({ ok: true, state: { phase: "streaming" } });
+    expect(value.sent).toEqual([]);
   });
 });

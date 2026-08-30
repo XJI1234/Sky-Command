@@ -3,7 +3,7 @@ import { PreflightCheck, type PreflightInput } from "../src/modules/mission-cont
 
 const input: PreflightInput = Object.freeze({
   relayConnected: true,
-  payload: Object.freeze({ sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 }),
+  payload: Object.freeze({ sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }),
   capabilities: Object.freeze({ waypointMission: true, waypointMissionSupport: "supported" }),
   missionPhase: "uploaded"
 });

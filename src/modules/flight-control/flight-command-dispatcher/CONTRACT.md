@@ -17,7 +17,7 @@ instance.dispatch(deviceId, action) -> Promise<FlightCommandResult>
 instance.isBusy(deviceId) -> boolean
 ```
 
-`check` 读取目标设备最新遥测，先调用 `PreflightCheck.evaluateFlightAction`，再调用 `CapabilityGate.evaluate`；通过时返回 `{ ok: true }`，否则返回完整的稳定拒绝原因。`dispatch` 必须再次调用同一检查，再发送准确命令。
+`check` 读取目标设备最新遥测，先调用 `PreflightCheck.evaluateFlightAction`，再调用 `CapabilityGate.evaluate`；通过时返回 `{ ok: true }`，否则返回完整的稳定拒绝原因。`dispatch` 必须再次调用同一检查，再发送准确命令。因而起飞确认后的发送前会重读电量、飞行和电机原始事实；降落与返航确认后的发送前会重读飞行事实。任何重读失败、状态未知或链路断开均不发送。
 
 命令映射固定：
 

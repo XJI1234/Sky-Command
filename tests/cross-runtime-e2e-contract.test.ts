@@ -76,7 +76,8 @@ describe("跨运行时桌面测试宿主", () => {
         <Placemark><Point><coordinates>120.1,30.1</coordinates></Point><wp:index>0</wp:index><wp:executeHeight>40</wp:executeHeight></Placemark>
         <Placemark><Point><coordinates>120.2,30.2</coordinates></Point><wp:index>1</wp:index><wp:executeHeight>40</wp:executeHeight></Placemark>
       </Folder></Document></kml>`;
-      const bytes = await makeKmz({ "waylines.wpml": wpml });
+      const template = `<kml xmlns="http://www.opengis.net/kml/2.2"><Document/></kml>`;
+      const bytes = await makeKmz({ "wpmz/template.kml": template, "wpmz/waylines.wpml": wpml });
 
       const imported = await host.workflow.importRoute({ fileName: "e2e-generated.kmz", bytes });
       expect(imported.ok).toBe(true);
@@ -113,7 +114,10 @@ describe("跨运行时桌面测试宿主", () => {
       host.sendControl("SIGNAL COMPLETED");
       await waitUntil(() => host.missionControl.get(device.deviceId).phase === "completed");
 
-      const secondBytes = await makeKmz({ "waylines.wpml": wpml.replace("120.2,30.2", "120.3,30.3") });
+      const secondBytes = await makeKmz({
+        "wpmz/template.kml": template,
+        "wpmz/waylines.wpml": wpml.replace("120.2,30.2", "120.3,30.3")
+      });
       const secondRoute = await host.routeLibrary.importFile({ fileName: "e2e-second-terminal.kmz", bytes: secondBytes });
       expect(secondRoute.status).toBe("imported");
       if (secondRoute.status !== "imported") throw new Error("second route import failed");
@@ -121,6 +125,11 @@ describe("跨运行时桌面测试宿主", () => {
       const secondUpload = await settleDji(host, host.missionControl.upload(device.deviceId));
       if (!secondUpload.ok) throw new Error(JSON.stringify(secondUpload));
       expect((await settleDji(host, host.missionControl.start(device.deviceId))).ok).toBe(true);
+      host.sendControl("SIGNAL INTERRUPTED");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(host.missionControl.get(device.deviceId).phase).toBe("starting");
+      host.sendControl("SIGNAL EXECUTING");
+      await waitUntil(() => host.missionControl.get(device.deviceId).phase === "running");
       host.sendControl("SIGNAL INTERRUPTED");
       await waitUntil(() => host.missionControl.get(device.deviceId).phase === "failed");
     } finally {

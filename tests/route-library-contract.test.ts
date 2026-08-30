@@ -8,6 +8,7 @@ const wpml = `<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wp="http://www.d
 <Placemark><Point><coordinates>120,30</coordinates></Point><wp:index>0</wp:index><wp:executeHeight>10</wp:executeHeight></Placemark>
 <Placemark><Point><coordinates>121,31</coordinates></Point><wp:index>1</wp:index><wp:executeHeight>20</wp:executeHeight></Placemark>
 </Folder></Document></kml>`;
+const template = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document/></kml>`;
 
 describe("D3 route-library first-level contract", () => {
   it("imports a KML through the only public seam and makes it selectable and previewable", async () => {
@@ -65,7 +66,7 @@ describe("D3 route-library first-level contract", () => {
   });
 
   it("hands upload-candidate KMZ bytes to mission control as an independent copy", async () => {
-    const kmz = await makeKmz({ "waylines.wpml": wpml });
+    const kmz = await makeKmz({ "template.kml": template, "waylines.wpml": wpml });
     const created = RouteLibrary.create({ idProvider: () => "route-1", clock: () => "2026-08-10T00:00:00.000Z" });
     if (!created.ok) throw created.error;
     expect(await created.value.importFile({ fileName: "mission.kmz", bytes: kmz })).toMatchObject({ status: "imported", route: { classification: "upload-candidate" } });
@@ -75,6 +76,25 @@ describe("D3 route-library first-level contract", () => {
     expect(payload.value.bytes).not.toBe(kmz);
     payload.value.bytes[0] = 0;
     expect(created.value.getMissionPayload("route-1")).toMatchObject({ ok: true, value: { bytes: kmz } });
+  });
+
+  it("keeps a WPML-only KMZ preview-only so it cannot reach aircraft upload", async () => {
+    const kmz = await makeKmz({ "wpmz/waylines.wpml": wpml });
+    const created = RouteLibrary.create({ idProvider: () => "route-1", clock: () => "2026-08-10T00:00:00.000Z" });
+    if (!created.ok) throw created.error;
+
+    expect(await created.value.importFile({ fileName: "incomplete.kmz", bytes: kmz })).toMatchObject({
+      status: "imported",
+      route: { classification: "preview-only" },
+    });
+    expect(created.value.get("route-1")).toMatchObject({
+      ok: true,
+      value: { warnings: [{ code: "DJI_TEMPLATE_MISSING" }] },
+    });
+    expect(created.value.getMissionPayload("route-1")).toMatchObject({
+      ok: false,
+      error: { code: "ROUTE_NOT_UPLOADABLE" },
+    });
   });
 
   it("rejects missing routes and hostile input containers without an exception", async () => {

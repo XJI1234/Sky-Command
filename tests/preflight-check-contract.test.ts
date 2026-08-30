@@ -10,7 +10,8 @@ const ready = (): PreflightInput => ({
     connected: true,
     isFlying: false,
     motorsOn: false,
-    batteryPercent: 80
+    batteryPercent: 80,
+    pairingState: "PAIRED"
   },
   capabilities: { waypointMission: true, waypointMissionSupport: "supported" },
   missionPhase: "uploaded"
@@ -58,6 +59,24 @@ describe("preflight check contract", () => {
       expect(result.blockers.map((blocker) => blocker.code)).toContain(code);
       expect(result.blockers.every((blocker) => blocker.message.length > 0)).toBe(true);
     }
+  });
+
+  it("fails closed when pairing or grounded-state telemetry is not an exact safe fact", () => {
+    const invalidFlightStates: readonly [PreflightInput, string][] = [
+      [withInput({ payload: { isFlying: null as never } }), "FLIGHT_STATE_UNKNOWN"],
+      [withInput({ payload: { isFlying: "false" as never } }), "FLIGHT_STATE_UNKNOWN"],
+      [withInput({ payload: { motorsOn: null as never } }), "MOTOR_STATE_UNKNOWN"],
+      [withInput({ payload: { motorsOn: 0 as never } }), "MOTOR_STATE_UNKNOWN"],
+    ];
+
+    for (const [input, code] of invalidFlightStates) {
+      expect(PreflightCheck.evaluate(input).blockers.map((blocker) => blocker.code)).toContain(code);
+    }
+  });
+
+  it("does not treat pairing state as a waypoint mission start prerequisite", () => {
+    expect(PreflightCheck.evaluate(withInput({ payload: { pairingState: "IDLE" } as never }))).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluate(withInput({ payload: { pairingState: undefined } as never }))).toEqual({ ok: true, blockers: [] });
   });
 
   it("keeps combined blockers ordered and never duplicates a reason", () => {
@@ -119,15 +138,79 @@ describe("preflight check contract", () => {
     expect(input.payload.batteryPercent).toBe(originalBattery);
   });
 
-  it("evaluates direct flight actions without treating already-flying or motors-running as blockers", () => {
+  it("uses action-specific conditions so only takeoff requires ground, battery and stopped motors", () => {
     const action: FlightActionPreflightInput = {
       relayConnected: true,
       payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: true, motorsOn: true, batteryPercent: 80 },
       capabilities: {},
       action: "land"
     };
-    expect(PreflightCheck.evaluateFlightAction({ ...action, payload: { ...action.payload, isFlying: false, motorsOn: false } })).toEqual({ ok: true, blockers: [] });
+    const grounded = { ...action, payload: { ...action.payload, isFlying: false, motorsOn: false } };
+    expect(PreflightCheck.evaluateFlightAction({ ...grounded, action: "takeoff" })).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluateFlightAction({ ...grounded, action: "takeoff", payload: { ...grounded.payload, motorsOn: true } })).toMatchObject({
+      ok: false,
+      blockers: [{ code: "MOTORS_RUNNING" }],
+    });
+    expect(PreflightCheck.evaluateFlightAction({ ...grounded, action: "takeoff", payload: { ...grounded.payload, batteryPercent: 19 } })).toMatchObject({
+      ok: false,
+      blockers: [{ code: "BATTERY_LOW" }],
+    });
+    expect(PreflightCheck.evaluateFlightAction({ ...grounded, action: "takeoff", payload: { ...grounded.payload, isFlying: true } })).toMatchObject({
+      ok: false,
+      blockers: [{ code: "AIRCRAFT_ALREADY_FLYING" }],
+    });
     expect(PreflightCheck.evaluateFlightAction(action)).toEqual({ ok: true, blockers: [] });
-    expect(PreflightCheck.evaluateFlightAction({ ...action, payload: { ...action.payload, batteryPercent: 10 } })).toMatchObject({ ok: false, blockers: [{ code: "BATTERY_LOW" }] });
+    expect(PreflightCheck.evaluateFlightAction({ ...action, action: "return-home", payload: { ...action.payload, batteryPercent: 10 } })).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluateFlightAction({ ...action, action: "land", payload: { ...action.payload, batteryPercent: undefined, motorsOn: undefined } })).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluateFlightAction({ ...action, action: "return-home", payload: { ...action.payload, isFlying: undefined } })).toMatchObject({
+      ok: false,
+      blockers: [{ code: "FLIGHT_STATE_UNKNOWN" }],
+    });
+    expect(PreflightCheck.evaluateFlightAction({ ...grounded, action: "land" })).toMatchObject({
+      ok: false,
+      blockers: [{ code: "AIRCRAFT_ON_GROUND" }],
+    });
+  });
+
+  it("fails closed for malformed direct-flight actions and policies", () => {
+    const action: FlightActionPreflightInput = {
+      relayConnected: true,
+      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 },
+      capabilities: {},
+      action: "takeoff",
+    };
+    expect(PreflightCheck.evaluateFlightAction(null as never)).toEqual({ ok: false, blockers: [{ code: "INVALID_INPUT", message: "Device status could not be read." }] });
+    expect(PreflightCheck.evaluateFlightAction({ ...action, action: "hover" as never })).toMatchObject({ ok: false, blockers: [{ code: "INVALID_INPUT" }] });
+    const unreadableAction = Object.defineProperty({ ...action }, "action", { get: () => { throw new Error("action getter"); } });
+    expect(() => PreflightCheck.evaluateFlightAction(unreadableAction as never)).not.toThrow();
+    expect(PreflightCheck.evaluateFlightAction(unreadableAction as never)).toMatchObject({ ok: false, blockers: [{ code: "INVALID_INPUT" }] });
+    expect(PreflightCheck.evaluateFlightAction(action, { minimumBatteryPercent: 0 } as never)).toMatchObject({ ok: false, blockers: [{ code: "INVALID_POLICY" }] });
+  });
+
+  it("reports every unavailable control link before direct flight", () => {
+    const result = PreflightCheck.evaluateFlightAction({
+      relayConnected: false,
+      payload: { sdkRegistered: false, remoteControllerConnected: false, flightControllerConnected: false, connected: false, isFlying: false, motorsOn: false, batteryPercent: 80 },
+      capabilities: {},
+      action: "takeoff",
+    });
+    expect(result.blockers.map((blocker) => blocker.code)).toEqual([
+      "RELAY_DISCONNECTED",
+      "SDK_NOT_READY",
+      "REMOTE_CONTROLLER_DISCONNECTED",
+      "AIRCRAFT_DISCONNECTED",
+    ]);
+  });
+
+  it("refuses takeoff when required telemetry is unknown", () => {
+    const action: FlightActionPreflightInput = {
+      relayConnected: true,
+      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 },
+      capabilities: {},
+      action: "takeoff",
+    };
+    expect(PreflightCheck.evaluateFlightAction({ ...action, payload: { ...action.payload, batteryPercent: undefined } })).toMatchObject({ ok: false, blockers: [{ code: "BATTERY_UNKNOWN" }] });
+    expect(PreflightCheck.evaluateFlightAction({ ...action, payload: { ...action.payload, isFlying: undefined } })).toMatchObject({ ok: false, blockers: [{ code: "FLIGHT_STATE_UNKNOWN" }] });
+    expect(PreflightCheck.evaluateFlightAction({ ...action, payload: { ...action.payload, motorsOn: undefined } })).toMatchObject({ ok: false, blockers: [{ code: "MOTOR_STATE_UNKNOWN" }] });
   });
 });

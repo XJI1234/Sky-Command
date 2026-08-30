@@ -5,10 +5,12 @@ import { RelayDeviceSnapshotReader } from "../src/modules/mission-control/relay-
 it("中继设备快照解析模块可在界面刷新预算内处理高频快照", () => {
   const snapshot = { devices: Array.from({ length: 16 }, (_value, index) => ({ deviceId: `phone-${index}` })) };
   const started = performance.now();
+  let allSnapshotsValid = true;
 
   for (let index = 0; index < 10_000; index += 1) {
-    expect(RelayDeviceSnapshotReader.read(snapshot)?.size).toBe(16);
+    allSnapshotsValid = RelayDeviceSnapshotReader.read(snapshot)?.size === 16 && allSnapshotsValid;
   }
 
+  expect(allSnapshotsValid).toBe(true);
   expect(performance.now() - started).toBeLessThan(250);
 });

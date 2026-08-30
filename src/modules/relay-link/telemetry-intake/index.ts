@@ -1,7 +1,8 @@
 import { type JsonObject, validate } from "../protocol-core/index.js";
 
 export interface TelemetryInput { readonly connectionId: string; readonly payload: JsonObject; readonly capabilities: JsonObject; }
-export interface TelemetrySnapshot extends TelemetryInput {}
+export interface TelemetrySnapshot extends TelemetryInput { readonly receivedAtMs: number | null; }
+export interface TelemetryIntakeOptions { readonly now?: () => number; }
 export interface TelemetryError { readonly code: "INVALID_TELEMETRY"; readonly message: string; }
 export type TelemetryResult<T> = Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false; readonly error: TelemetryError }>;
 export interface TelemetryIntakeInstance {
@@ -15,7 +16,7 @@ export interface TelemetryIntakeInstance {
 const invalid = <T = never>(): TelemetryResult<T> => Object.freeze({ ok: false as const, error: Object.freeze({ code: "INVALID_TELEMETRY" as const, message: "Telemetry is invalid" }) });
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 
-function create(): TelemetryIntakeInstance {
+function create(options: TelemetryIntakeOptions = {}): TelemetryIntakeInstance {
   let current: readonly TelemetrySnapshot[] = Object.freeze([]);
   const listeners = new Set<(snapshot: TelemetrySnapshot) => void>();
   const publish = (value: TelemetrySnapshot): void => { for (const listener of [...listeners]) { try { listener(value); } catch { /* listener isolation is intentional */ } } };
@@ -26,7 +27,12 @@ function create(): TelemetryIntakeInstance {
     if (!validId(connectionId)) return invalid();
     const checked = validate({ type: "telemetry", payload: payload as JsonObject, capabilities: capabilities as JsonObject });
     if (!checked.ok || checked.value.type !== "telemetry") return invalid();
-    const value = Object.freeze({ connectionId, payload: checked.value.payload, capabilities: checked.value.capabilities });
+    let receivedAtMs: number | null = null;
+    try {
+      const now = options.now?.();
+      if (typeof now === "number" && Number.isFinite(now) && now >= 0) receivedAtMs = now;
+    } catch { /* receipt time is optional display metadata */ }
+    const value = Object.freeze({ connectionId, payload: checked.value.payload, capabilities: checked.value.capabilities, receivedAtMs });
     const index = current.findIndex((snapshot) => snapshot.connectionId === connectionId);
     current = Object.freeze(index < 0 ? [...current, value] : [...current.slice(0, index), value, ...current.slice(index + 1)]);
     publish(value);

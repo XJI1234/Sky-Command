@@ -1,9 +1,9 @@
 import flvjs from "flv.js";
 import { OperatorConsole } from "../index.js";
-import { DeviceFactSummary } from "../device-fact-summary/index.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight";
+type MissionStartIntent = Readonly<{ deviceId: string; missionId: string; routeId: string; routeName: string }>;
 type RendererBridge = {
   readonly invoke: (name: string, input?: unknown) => Promise<unknown>;
   readonly relayHint?: string;
@@ -29,6 +29,7 @@ const unwrap = (result: unknown): unknown => {
 };
 
 const read = (value: unknown, key: string): unknown => value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
+const text = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 ? value : null;
 
 const el = (id: string): HTMLElement => {
   const node = document.getElementById(id);
@@ -81,6 +82,7 @@ let lastPlaybackHealthAt = 0;
 let attachedAtMs = 0;
 let lastPaintAtMs = 0;
 let lastSeenCurrentTime = 0;
+let pendingMissionStart: MissionStartIntent | null = null;
 
 const NO_FRAME_MS = 8_000;
 const STALL_MS = 12_000;
@@ -288,7 +290,7 @@ async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>):
 const connectionLabel = (connection: unknown, key: string, ok: string, disconnected: string, unknownLabel: string): string => {
   const value = read(connection, key);
   if (value === "ready" || value === "connected" || value === "online") return ok;
-  if ((key === "remoteController" || key === "aircraft") && read(connection, "sdk") !== "ready") {
+  if ((key === "remoteController" || key === "flightController" || key === "aircraft") && read(connection, "sdk") !== "ready") {
     return "等待手机就绪";
   }
   if (value === "disconnected") return disconnected;
@@ -300,15 +302,14 @@ const connected = (connection: unknown, key: string): boolean => {
   return value === "ready" || value === "connected" || value === "online";
 };
 
-const aircraftLinkLabel = (connection: unknown): string => {
-  const aircraft = read(connection, "aircraft");
-  const flightController = read(connection, "flightController");
-  if (aircraft === "connected" && flightController === "connected") return "飞机已连接";
-  if (aircraft === "connected" && flightController === "disconnected") return "飞机已连上，但飞控未通（请确认飞机已开机）";
-  if (aircraft === "connected" && flightController !== "connected") return "飞机已连上，飞控状态未知";
-  if (aircraft === "disconnected") return "飞机未连接";
-  if (read(connection, "sdk") !== "ready") return "等待手机就绪";
-  return "飞机状态未知";
+const msdkFact = (connection: unknown): { readonly label: string; readonly ok: boolean } => {
+  switch (read(connection, "msdk")) {
+    case "ready": return { label: "MSDK 已就绪", ok: true };
+    case "starting": return { label: "MSDK 正在初始化", ok: false };
+    case "failed": return { label: "MSDK 初始化失败", ok: false };
+    case "stopped": return { label: "MSDK 已停止", ok: false };
+    default: return { label: "MSDK 状态未知", ok: false };
+  }
 };
 
 const pairingFact = (connection: unknown): { readonly label: string; readonly ok: boolean } => {
@@ -324,6 +325,121 @@ const pairingFact = (connection: unknown): { readonly label: string; readonly ok
 };
 
 const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+
+const statusRow = (name: string, label: string, ok: boolean): string =>
+  `<div class="connection-status-row"><span class="connection-status-name">${escapeHtml(name)}</span><span class="connection-status-value${ok ? " ok" : ""}">${escapeHtml(label)}</span></div>`;
+
+const finiteNumber = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
+const optionalText = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 ? value : null;
+const durationLabel = (value: unknown): string | null => {
+  const seconds = finiteNumber(value);
+  if (seconds === null || !Number.isInteger(seconds) || seconds < 0) return null;
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+};
+const flightFactsUnconfirmed = (connection: unknown): boolean => read(connection, "flightController") === "unknown";
+const telemetryTimeKnown = (connection: unknown): boolean => finiteNumber(read(connection, "telemetryReceivedAtMs")) !== null;
+const telemetryTimeLabel = (connection: unknown): string => {
+  const receivedAtMs = finiteNumber(read(connection, "telemetryReceivedAtMs"));
+  if (receivedAtMs === null) return flightFactsUnconfirmed(connection) ? "尚未收到有效状态，飞控状态当前未确认" : "尚未收到有效状态";
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - receivedAtMs) / 1_000));
+  const clock = new Date(receivedAtMs).toLocaleTimeString("zh-CN", { hour12: false });
+  if (flightFactsUnconfirmed(connection)) return `上次更新于 ${clock}（${ageSeconds <= 2 ? "刚刚" : `${ageSeconds} 秒前`}），飞控状态当前未确认`;
+  return ageSeconds <= 2 ? `刚刚（${clock}）` : `${ageSeconds} 秒前（${clock}）`;
+};
+
+const deviceFactRows = (connection: unknown): string => {
+  const pose = read(connection, "pose");
+  const live = read(connection, "live");
+  const aircraftModel = optionalText(read(connection, "aircraftModel"));
+  const remoteControllerModel = optionalText(read(connection, "remoteControllerModel"));
+  const battery = finiteNumber(read(connection, "batteryPercent"));
+  const remaining = durationLabel(read(connection, "remainingFlightTimeSeconds"));
+  const flightMode = optionalText(read(connection, "flightMode"));
+  const altitude = finiteNumber(read(pose, "altitudeMeters"));
+  const latitude = finiteNumber(read(pose, "latitude"));
+  const longitude = finiteNumber(read(pose, "longitude"));
+  const resolution = optionalText(read(live, "resolution"));
+  const fps = finiteNumber(read(live, "fps"));
+  const bitrate = finiteNumber(read(live, "videoBitrateKbps"));
+  const rtt = finiteNumber(read(live, "rttMillis"));
+  const flightState = read(connection, "flightState") === "grounded" ? "地面" : read(connection, "flightState") === "flying" ? "飞行中" : "尚未确认";
+  const motors = read(connection, "motorsOn") === true ? "已启动" : read(connection, "motorsOn") === false ? "已关闭" : "尚未确认";
+  const streaming = read(live, "streaming") === true ? "MSDK 报告正在推流" : read(live, "streaming") === false ? "MSDK 报告未推流" : "尚未取得";
+  return [
+    statusRow("飞机型号", aircraftModel ?? "尚未取得", aircraftModel !== null),
+    statusRow("遥控器型号", remoteControllerModel ?? "尚未取得", remoteControllerModel !== null),
+    statusRow("飞行状态", flightState, false),
+    statusRow("电机", motors, false),
+    statusRow("电量", battery === null ? "尚未取得" : `${battery}%`, battery !== null),
+    statusRow("低电量返航预估", remaining ?? "尚未取得", remaining !== null),
+    statusRow("飞行模式", flightMode ?? "尚未取得", flightMode !== null),
+    statusRow("高度", altitude === null ? "尚未取得" : `${altitude.toFixed(1)} 米`, altitude !== null),
+    statusRow("位置", latitude === null || longitude === null ? "尚未取得" : `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`, latitude !== null && longitude !== null),
+    statusRow("MSDK 图传观测", streaming, read(live, "streaming") === true),
+    statusRow("图传分辨率", resolution ?? "尚未取得", resolution !== null),
+    statusRow("图传帧率", fps === null ? "尚未取得" : `${fps} fps`, fps !== null),
+    statusRow("图传码率", bitrate === null ? "尚未取得" : `${bitrate} Kbps`, bitrate !== null),
+    statusRow("图传往返时间", rtt === null ? "尚未取得" : `${rtt} ms`, rtt !== null),
+    statusRow("状态更新时间", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection)),
+  ].join("");
+};
+
+const missionRuntimeLabel = (mission: unknown): string => {
+  switch (read(mission, "phase")) {
+    case "staging": return "准备中";
+    case "staged": return "已暂存到手机";
+    case "uploading": return "上传中";
+    case "uploaded": return "已上传至飞机";
+    case "starting": return "启动中，等待飞机确认";
+    case "running": return "执行中";
+    case "pausing": return "暂停中";
+    case "paused": return "已暂停";
+    case "resuming": return "恢复中";
+    case "stopping": return "停止中";
+    case "completed": return "已完成";
+    case "failed": return "失败";
+    case "disconnected": return "链路中断";
+    case "idle": return "未开始";
+    default: return "状态未知";
+  }
+};
+
+const streamRuntimeLabel = (device: unknown): string => {
+  const stream = read(device, "stream");
+  const live = read(read(device, "connection"), "live");
+  switch (read(stream, "phase")) {
+    case "starting": return "启动中";
+    case "stopping": return "停止中";
+    case "failed": return "失败";
+    case "disconnected": return "链路中断";
+    case "streaming":
+      return read(live, "streaming") === true ? "推流中" : read(live, "streaming") === false ? "已接收启动命令，等待推流" : "已接收启动命令，等待状态确认";
+    case "idle":
+      return read(live, "streaming") === true ? "MSDK 报告推流中（非当前控制会话）" : "已停止";
+    default: return "状态未知";
+  }
+};
+
+const playbackRuntimeLabel = (video: unknown): string => {
+  switch (read(video, "phase")) {
+    case "awaiting-ingest": return "等待流进入";
+    case "awaiting-playback": return "等待播放器";
+    case "failed": return "播放失败";
+    case "ready": {
+      if (read(video, "selected") !== true) return "等待播放器";
+      const player = document.getElementById("video");
+      return player instanceof HTMLVideoElement && isPainting(player) ? "正在播放" : "等待播放器出画";
+    }
+    case "unavailable": return "未开始";
+    default: return "状态未知";
+  }
+};
+
+const runtimeStatusRows = (device: unknown): string => [
+  statusRow("任务", missionRuntimeLabel(read(device, "mission")), false),
+  statusRow("手机推流", streamRuntimeLabel(device), false),
+  statusRow("桌面播放", playbackRuntimeLabel(read(device, "video")), false),
+].join("");
 
 async function projectView(): Promise<ReturnType<typeof OperatorConsole.project>> {
   const snapshotResult = unwrap(await bridge().invoke("state-snapshot"));
@@ -352,6 +468,44 @@ async function run(action: string, invokeName: string, input: unknown): Promise<
   await render();
 }
 
+const createMissionStartIntent = (view: ReturnType<typeof OperatorConsole.project>): MissionStartIntent | null => {
+  const deviceId = view.missionDeviceId;
+  const missionId = text(read(view.mission, "missionId"));
+  const route = view.missionRoute;
+  return deviceId !== null && missionId !== null && route !== null
+    ? Object.freeze({ deviceId, missionId, routeId: route.routeId, routeName: route.displayName })
+    : null;
+};
+
+const requestMissionStartConfirmation = async (view: ReturnType<typeof OperatorConsole.project>): Promise<void> => {
+  const decision = OperatorConsole.evaluate("mission-start", view);
+  if (!decision.ok) { blocked("mission-start", decision.reason ?? "无法执行航线"); return; }
+  const intent = createMissionStartIntent(view);
+  if (intent === null) {
+    blocked("mission-start", "已上传任务的身份不完整，请重新准备并上传航线");
+    return;
+  }
+  pendingMissionStart = intent;
+  await render();
+};
+
+const confirmMissionStart = async (): Promise<void> => {
+  const intent = pendingMissionStart;
+  pendingMissionStart = null;
+  if (intent === null) { await render(); return; }
+  const view = await projectView();
+  if (
+    view.missionDeviceId !== intent.deviceId ||
+    text(read(view.mission, "missionId")) !== intent.missionId ||
+    view.missionRoute?.routeId !== intent.routeId
+  ) {
+    blocked("mission-start", "任务、目标飞机或航线已变化，请重新确认");
+    await render();
+    return;
+  }
+  await run("mission-start", "mission-start", { deviceId: intent.deviceId });
+};
+
 function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const devices = view.devices as readonly Record<string, unknown>[];
   const count = el("connection-count");
@@ -362,26 +516,33 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     node.className = "device";
     if (device.deviceId === view.missionDeviceId) node.classList.add("inspected");
     const connection = device.connection ?? {};
-    const pairing = pairingFact(connection);
-    node.innerHTML = `<strong>${escapeHtml(String(device.deviceId))}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${pairing.label} · ${aircraftLinkLabel(connection)}</div>`;
+    const msdk = msdkFact(connection);
+    node.innerHTML = `<strong>${escapeHtml(String(device.deviceId))}</strong><div class="muted">${msdk.label} · ${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")} · ${connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知")}</div>`;
     node.addEventListener("click", () => { state.missionDeviceId = String(device.deviceId); void render(); });
     return node;
   }));
   const inspected = devices.find((item) => item.deviceId === view.missionDeviceId);
   const connection = inspected === undefined ? {} : inspected.connection as Record<string, unknown> ?? {};
+  const msdk = msdkFact(connection);
   const pairing = pairingFact(connection);
   el("device-detail").innerHTML = inspected === undefined
     ? "从左侧选择已连接的手机。"
     : `<p class="muted">编号 ${escapeHtml(String(inspected.deviceId))}</p>
-      <div class="chain">
-        <span class="ok">手机已连接</span>
-        <span class="${connected(connection, "remoteController") ? "ok" : ""}">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")}</span>
-        <span class="${pairing.ok ? "ok" : ""}">${pairing.label}</span>
-        <span class="${connected(connection, "aircraft") && connected(connection, "flightController") ? "ok" : ""}">${aircraftLinkLabel(connection)}</span>
+      <h3 class="device-status-heading">连接状态</h3>
+      <div class="connection-status-list" aria-label="连接状态">
+        ${statusRow("电脑到手机中继", "中继在线", true)}
+        ${statusRow("MSDK", msdk.label, msdk.ok)}
+        ${statusRow("遥控器", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))}
+        ${statusRow("对频", pairing.label, pairing.ok)}
+        ${statusRow("飞控", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))}
+        ${statusRow("飞机", connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知"), connected(connection, "aircraft"))}
       </div>
-      <p>${escapeHtml(DeviceFactSummary.format(connection))}</p>
-      <p class="muted">对频请在手机上开始或停止。这里只显示手机回报的结果。</p>`;
-  el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。遥控器连上后，请在手机上开始对频，再等飞机连上。电脑关掉后，需要在手机上重新连接。`;
+      <h3 class="device-status-heading">动态飞行事实</h3>
+      <div class="connection-status-list" aria-label="动态飞行事实">${deviceFactRows(connection)}</div>
+      <h3 class="device-status-heading">运行状态</h3>
+      <div class="connection-status-list" aria-label="运行状态">${runtimeStatusRows(inspected)}</div>
+      <p class="muted">对频仅用于新增飞机或更换遥控器。这里只显示手机回报的结果。</p>`;
+  el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在手机上开始对频。电脑关掉后，需要在手机上重新连接。`;
 }
 
 function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
@@ -432,9 +593,27 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
   el("mission-label").textContent = view.missionDeviceId === null ? "未选择任务机" : `${view.missionDeviceId} · ${view.missionLabel}`;
-  el("flight-route").textContent = view.selectedRoute === null
-    ? "尚未在航线页选择可执行 KMZ"
-    : `${view.selectedRoute.displayName} · ${view.selectedRoute.executable ? "可提交" : view.selectedRoute.blockedReason}`;
+  const activeRoute = view.missionRoute;
+  el("flight-route").textContent = activeRoute === null
+    ? view.selectedRoute === null
+      ? "尚未在航线页选择可执行 KMZ"
+      : `待准备航线：${view.selectedRoute.displayName} · ${view.selectedRoute.executable ? "可提交" : view.selectedRoute.blockedReason}`
+    : `当前任务航线：${activeRoute.displayName}${view.selectedRoute?.routeId === activeRoute.routeId ? "" : `（航线页当前选择：${view.selectedRoute?.displayName ?? "无"}）`}`;
+  const missionButtonActions = Object.freeze({
+    stage: "mission-stage",
+    upload: "mission-upload",
+    start: "mission-start",
+    pause: "mission-pause",
+    resume: "mission-resume",
+    stop: "mission-stop",
+  } as const);
+  for (const [action, dataAction] of Object.entries(missionButtonActions) as Array<[keyof typeof missionButtonActions, string]>) {
+    const button = document.querySelector(`button[data-action="${dataAction}"]`);
+    if (!(button instanceof HTMLButtonElement)) continue;
+    const availability = view.missionActions[action];
+    button.disabled = !availability.enabled;
+    button.title = availability.enabled ? button.textContent ?? "" : availability.reason ?? "当前阶段不能执行此操作";
+  }
   el("stream-label").textContent = view.streamLabel;
   el("stream-label").classList.toggle("ok", view.playbackReady || view.streamCanStart);
   const streamReady = el("stream-ready");
@@ -473,6 +652,21 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     confirm.dataset.confirmationId = view.confirmation.confirmationId;
   } else {
     confirm.hidden = true;
+  }
+  const missionConfirm = el("mission-confirm");
+  const intent = pendingMissionStart;
+  const currentMissionId = text(read(view.mission, "missionId"));
+  if (
+    intent === null ||
+    view.missionDeviceId !== intent.deviceId ||
+    currentMissionId !== intent.missionId ||
+    view.missionRoute?.routeId !== intent.routeId
+  ) {
+    pendingMissionStart = null;
+    missionConfirm.hidden = true;
+  } else {
+    missionConfirm.hidden = false;
+    el("mission-confirm-text").textContent = `确认让 ${intent.deviceId} 执行航线「${intent.routeName}」？手机会在调用 DJI 前再次检查设备状态。`;
   }
 }
 
@@ -621,6 +815,10 @@ el("route-remove").addEventListener("click", async () => {
   button.addEventListener("click", async () => {
     const action = (button as HTMLButtonElement).dataset.action ?? "";
     const view = await projectView();
+    if (action === "mission-start") {
+      await requestMissionStartConfirmation(view);
+      return;
+    }
     if (action === "hardware-readiness") {
       if (view.missionDeviceId === null) { show("请先选择任务飞机"); return; }
       show(operatorNotice(await bridge().invoke("hardware-readiness", { deviceId: view.missionDeviceId })));
@@ -669,6 +867,8 @@ el("confirm-yes").addEventListener("click", async () => {
 el("confirm-no").addEventListener("click", async () => {
   await run("flight-cancel", "flight-cancel", { deviceId: el("confirm").dataset.deviceId, confirmationId: el("confirm").dataset.confirmationId });
 });
+el("mission-confirm-yes").addEventListener("click", () => { void confirmMissionStart(); });
+el("mission-confirm-no").addEventListener("click", () => { pendingMissionStart = null; void render(); });
 
 const tick = async (): Promise<void> => {
    try {

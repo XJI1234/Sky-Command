@@ -97,6 +97,38 @@ describe("飞行任务控制模块契约", () => {
     expect(unsubscribeCalls).toBe(1);
   });
 
+  it("将同一中继快照的后续畸形设备读取隔离为无会话事实", () => {
+    let receiveRelaySnapshot!: (snapshot: unknown) => void;
+    const control = MissionControl.create({
+      routeSource: { getMissionPayload: () => ({ ok: false as const, error: { code: "ROUTE_NOT_FOUND" } }) },
+      relay: {
+        sendMission: async () => ({ deviceId: "phone-1", missionId: "mission-1", status: "succeeded" as const, detail: "ok" }),
+        sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "ok" }),
+        latestTelemetry: () => null,
+        subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; },
+      },
+    }, { createMissionId: () => "mission-1" });
+    let nullReads = 0;
+    const changesToNonArray = Object.defineProperty({}, "devices", {
+      get: () => {
+        nullReads += 1;
+        return nullReads === 1 ? [{ deviceId: "phone-1", sessionId: "session-1" }] : null;
+      },
+    });
+    let throwingReads = 0;
+    const throwsOnSessionProjection = Object.defineProperty({}, "devices", {
+      get: () => {
+        throwingReads += 1;
+        if (throwingReads === 1) return [{ deviceId: "phone-1", sessionId: "session-2" }];
+        throw new Error("unreadable session list");
+      },
+    });
+
+    expect(() => receiveRelaySnapshot(changesToNonArray)).not.toThrow();
+    expect(() => receiveRelaySnapshot(throwsOnSessionProjection)).not.toThrow();
+    control.dispose();
+  });
+
   it("仅在手机上报实际进入航线后把已提交的启动变为执行中", async () => {
     let receiveRelaySnapshot!: (snapshot: unknown) => void;
     const control = MissionControl.create({
@@ -104,7 +136,7 @@ describe("飞行任务控制模块契约", () => {
       relay: {
         sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
         sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "accepted" }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
         subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; }
       }
     }, { createMissionId: () => "mission-1" });
@@ -129,7 +161,7 @@ describe("飞行任务控制模块契约", () => {
       relay: {
         sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
         sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "accepted" }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
         subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; }
       }
     }, { createMissionId: () => "mission-1" });
@@ -153,6 +185,41 @@ describe("飞行任务控制模块契约", () => {
     expect(control.get("phone-1")).toMatchObject({ phase: "disconnected" });
   });
 
+  it("会话替换后清除旧阶段水位，使手机重启后的新任务可以确认执行", async () => {
+    let receiveRelaySnapshot!: (snapshot: unknown) => void;
+    const control = MissionControl.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) },
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "accepted" }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
+        subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; },
+      },
+    }, { createMissionId: () => "mission-1" });
+
+    await control.stage("phone-1", "route-1");
+    await control.upload("phone-1");
+    await control.start("phone-1");
+    receiveRelaySnapshot({
+      devices: [{ deviceId: "phone-1", sessionId: "session-1" }],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 3, deviceGeneration: 2, sequence: 1, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
+    });
+    expect(control.get("phone-1").phase).toBe("running");
+
+    receiveRelaySnapshot({ devices: [{ deviceId: "phone-1", sessionId: "session-2" }], missionPhases: [] });
+    expect(control.get("phone-1").phase).toBe("disconnected");
+
+    await control.stage("phone-1", "route-1");
+    await control.upload("phone-1");
+    await control.start("phone-1");
+    receiveRelaySnapshot({
+      devices: [{ deviceId: "phone-1", sessionId: "session-2" }],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 0, sequence: 1, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
+    });
+
+    expect(control.get("phone-1").phase).toBe("running");
+  });
+
   it("只接受与当前任务匹配的 Android 终态遥测，并保留启动与执行的区别", async () => {
     let receiveRelaySnapshot!: (snapshot: unknown) => void;
     const control = MissionControl.create({
@@ -160,7 +227,7 @@ describe("飞行任务控制模块契约", () => {
       relay: {
         sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
         sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "accepted" }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
         subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; }
       }
     }, { createMissionId: () => "mission-1" });
@@ -170,10 +237,10 @@ describe("飞行任务控制模块契约", () => {
     await control.start("phone-1");
     receiveRelaySnapshot({
       devices: [{ deviceId: "phone-1" }],
-      missionPhases: [],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 0, sequence: 1, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
       telemetry: [{
         deviceId: "phone-1",
-        payload: { kind: "object", fields: { missionExecution: { kind: "string", value: "FINISHED" }, missionFileName: { kind: "string", value: "survey.kmz" } } },
+        payload: { kind: "object", fields: { missionExecution: { kind: "string", value: "FINISHED" }, missionFileName: { kind: "string", value: "survey.kmz" }, missionRevision: { kind: "number", value: "1" }, missionDeviceGeneration: { kind: "number", value: "0" } } },
       }],
     });
     expect(control.get("phone-1")).toMatchObject({ phase: "completed" });
@@ -183,15 +250,57 @@ describe("飞行任务控制模块契约", () => {
       relay: {
         sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
         sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "accepted" }),
-        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
         subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; }
       }
     }, { createMissionId: () => "mission-1" });
     await failed.stage("phone-1", "route-1");
     await failed.upload("phone-1");
     await failed.start("phone-1");
-    receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }], missionPhases: [], telemetry: [{ deviceId: "phone-1", payload: { kind: "object", fields: { missionExecution: { kind: "string", value: "FAILED" }, missionFileName: { kind: "string", value: "other.kmz" } } } }] });
+    receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }], missionPhases: [], telemetry: [{ deviceId: "phone-1", payload: { kind: "object", fields: { missionExecution: { kind: "string", value: "FAILED" }, missionFileName: { kind: "string", value: "other.kmz" }, missionRevision: { kind: "number", value: "1" }, missionDeviceGeneration: { kind: "number", value: "0" } } } }] });
     expect(failed.get("phone-1").phase).toBe("starting");
+  });
+
+  it("不会让同名旧航线的迟到终态结束当前正在执行的任务", async () => {
+    let receiveRelaySnapshot!: (snapshot: unknown) => void;
+    const control = MissionControl.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) },
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "accepted" }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 90, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" as const } }),
+        subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; },
+      },
+    }, { createMissionId: () => "mission-1" });
+
+    await control.stage("phone-1", "route-1");
+    await control.upload("phone-1");
+    await control.start("phone-1");
+    receiveRelaySnapshot({
+      devices: [{ deviceId: "phone-1" }],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 2, deviceGeneration: 4, sequence: 1, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
+      telemetry: [],
+    });
+    expect(control.get("phone-1").phase).toBe("running");
+
+    receiveRelaySnapshot({
+      devices: [{ deviceId: "phone-1" }],
+      missionPhases: [],
+      telemetry: [{
+        deviceId: "phone-1",
+        payload: {
+          kind: "object",
+          fields: {
+            missionExecution: { kind: "string", value: "FINISHED" },
+            missionFileName: { kind: "string", value: "survey.kmz" },
+            missionRevision: { kind: "number", value: "1" },
+            missionDeviceGeneration: { kind: "number", value: "4" },
+          },
+        },
+      }],
+    });
+
+    expect(control.get("phone-1").phase).toBe("running");
   });
 
   it("忽略无效快照，并在释放后隔离迟到的中继事件", async () => {
@@ -217,7 +326,7 @@ describe("飞行任务控制模块契约", () => {
   });
 
   it("完整委托上传、启动前检查、暂停恢复停止、目录和清理操作", async () => {
-    const control = MissionControl.create({ routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) }, relay: { sendMission: async (_id, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "ok" }), sendCommand: async () => ({ deviceId: "phone-1", commandId: "command", status: "succeeded" as const, detail: "ok" }), latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } }), subscribe: () => () => undefined } }, { createMissionId: () => "mission-1" });
+    const control = MissionControl.create({ routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) }, relay: { sendMission: async (_id, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "ok" }), sendCommand: async () => ({ deviceId: "phone-1", commandId: "command", status: "succeeded" as const, detail: "ok" }), latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } }), subscribe: () => () => undefined } }, { createMissionId: () => "mission-1" });
     await control.stage("phone-1", "route-1");
     expect((await control.upload("phone-1")).ok).toBe(true);
     expect((await control.start("phone-1")).ok).toBe(true);

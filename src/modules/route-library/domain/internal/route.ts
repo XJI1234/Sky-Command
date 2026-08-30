@@ -22,7 +22,8 @@ const FORMAT_VALUES: readonly RouteFileFormat[] = ["kml", "kmz"];
 const CLASSIFICATION_VALUES: readonly RouteClassification[] = ["preview-only", "upload-candidate"];
 const WARNING_ORDER: Readonly<Record<RouteWarningCode, number>> = {
   WPML_MISSING: 0,
-  ALTITUDE_MISSING: 1
+  DJI_TEMPLATE_MISSING: 1,
+  ALTITUDE_MISSING: 2
 };
 
 function invariant(field: string, reason: string): DomainResult<never> {
@@ -78,7 +79,7 @@ function normalizeWarnings(value: unknown): DomainResult<readonly RouteWarning[]
   for (const candidate of value) {
     if (candidate === null || candidate === undefined) return invariant("warnings", "invalid-warning");
     const record = candidate as Record<string, unknown>;
-    if (record.code !== "WPML_MISSING" && record.code !== "ALTITUDE_MISSING") {
+    if (record.code !== "WPML_MISSING" && record.code !== "DJI_TEMPLATE_MISSING" && record.code !== "ALTITUDE_MISSING") {
       return invariant("warnings", "unknown-code");
     }
     if (seen.has(record.code)) return invariant("warnings", "duplicate-code");
@@ -163,18 +164,22 @@ export function createQualifiedRoute(input: CreateQualifiedRouteInput): DomainRe
   if (!warningResult.ok) return warningResult;
   const warnings = warningResult.value;
   const hasWpmlMissing = warnings.some((warning) => warning.code === "WPML_MISSING");
+  const hasDjiTemplateMissing = warnings.some((warning) => warning.code === "DJI_TEMPLATE_MISSING");
   const hasAltitudeMissing = warnings.some((warning) => warning.code === "ALTITUDE_MISSING");
   const altitudeMissing = value.waypoints.some((point) => point.altitude === null);
 
   if (hasAltitudeMissing !== altitudeMissing) return invariant("warnings", "altitude-warning-mismatch");
   if (value.format === "kml") {
-    if (value.classification !== "preview-only" || hasWpmlMissing) return invariant("classification", "invalid-kml-combination");
+    if (value.classification !== "preview-only" || hasWpmlMissing || hasDjiTemplateMissing) return invariant("classification", "invalid-kml-combination");
   } else if (value.classification === "upload-candidate") {
-    if (!value.sourceDocument.toLowerCase().endsWith(".wpml") || hasWpmlMissing) {
+    if (!value.sourceDocument.toLowerCase().endsWith(".wpml") || hasWpmlMissing || hasDjiTemplateMissing) {
       return invariant("classification", "invalid-upload-combination");
     }
-  } else if (!hasWpmlMissing || value.sourceDocument.toLowerCase().endsWith(".wpml")) {
-    return invariant("classification", "invalid-preview-combination");
+  } else {
+    const sourceIsWpml = value.sourceDocument.toLowerCase().endsWith(".wpml");
+    if ((sourceIsWpml && !hasDjiTemplateMissing) || (!sourceIsWpml && !hasWpmlMissing) || (hasWpmlMissing && hasDjiTemplateMissing)) {
+      return invariant("classification", "invalid-preview-combination");
+    }
   }
 
   const data: QualifiedRouteData = Object.freeze({

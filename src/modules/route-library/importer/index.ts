@@ -35,7 +35,7 @@ async function ingest(
     }
     const source = snapshot.format === "kmz"
       ? await readKmz(snapshot.bytes, snapshot.limits, cancellation)
-      : Object.freeze({ ok: true as const, value: Object.freeze({ sourceDocument: snapshot.fileName, sourceKind: "kml" as const, xmlBytes: snapshot.bytes }) });
+      : Object.freeze({ ok: true as const, value: Object.freeze({ sourceDocument: snapshot.fileName, sourceKind: "kml" as const, hasCompanionTemplate: false, xmlBytes: snapshot.bytes }) });
     if (!source.ok) return rejectedOutcome(source.error);
     const parsed = await parseXmlDocument(
       source.value.xmlBytes,
@@ -52,6 +52,7 @@ async function ingest(
       format: snapshot.format,
       sourceDocument: source.value.sourceDocument,
       sourceKind: source.value.sourceKind,
+      hasCompanionTemplate: source.value.hasCompanionTemplate,
       wpmlNamespace: parsed.value.wpmlNamespace,
       waypointCandidates: parsed.value.waypointCandidates,
       sha256,

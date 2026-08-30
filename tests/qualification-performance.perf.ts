@@ -21,6 +21,7 @@ function largeDocument(count: number): ParsedRouteDocument {
     format: "kml" as const,
     sourceDocument: "large.kml",
     sourceKind: "kml" as const,
+    hasCompanionTemplate: false,
     wpmlNamespace: null,
     waypointCandidates: Object.freeze(candidates),
     sha256: "d".repeat(64),

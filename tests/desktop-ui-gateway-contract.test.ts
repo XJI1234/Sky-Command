@@ -252,4 +252,13 @@ describe("DesktopUiGateway", () => {
     await expect(gateway.invoke("webrtc.start", undefined)).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
     await expect(gateway.invoke("webrtc.stream-start", { deviceId: "phone-1" })).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
   });
+
+  it("在硬件就绪度查询缺少设备标识时不调用工作流", async () => {
+    let calls = 0;
+    const gateway = DesktopUiGateway.create({
+      application: { snapshot: () => ({}), subscribe: () => () => undefined, workflow: () => ({ checkHardwareReadiness: () => { calls += 1; } }) },
+    });
+    await expect(gateway.invoke("hardware.readiness", {})).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
+    expect(calls).toBe(0);
+  });
 });

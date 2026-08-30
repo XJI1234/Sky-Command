@@ -15,34 +15,17 @@ describe("设备连接引导契约", () => {
     [{ link: { ...readyLink, overall: "degraded", phoneToRemoteController: "unknown", remoteControllerToAircraft: "unknown" } }, "WAIT_FOR_SDK", "wait-for-sdk"],
     [{ link: { ...readyLink, overall: "degraded", phoneToRemoteController: "disconnected", remoteControllerToAircraft: "unknown" } }, "CONNECT_REMOTE_CONTROLLER", "connect-remote-controller"],
     [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "unknown" } }, "WAIT_FOR_SDK", "wait-for-sdk"],
-    [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "IDLE" }, "START_PAIRING", "start-pairing"],
-    [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "PAIRING" }, "WAIT_FOR_PAIRING", "wait-for-pairing"],
-    [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "STOPPING" }, "WAIT_FOR_PAIRING", "wait-for-pairing"],
-    [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "FAILED" }, "PAIRING_FAILED", "resolve-pairing-failure"],
-    [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "PAIRED" }, "CONNECT_AIRCRAFT", "connect-aircraft"],
-    [{ link: readyLink, pairingState: "PAIRED" }, "READY", null],
-    [{ link: readyLink, pairingState: "PAIRING" }, "WAIT_FOR_PAIRING", "wait-for-pairing"],
-    [{ link: readyLink, pairingState: "STOPPING" }, "WAIT_FOR_PAIRING", "wait-for-pairing"],
-    [{ link: readyLink, pairingState: "FAILED" }, "PAIRING_FAILED", "resolve-pairing-failure"]
+    [{ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" } }, "CONNECT_AIRCRAFT", "connect-aircraft"],
+    [{ link: readyLink }, "READY", null]
   ])("对当前阻塞步骤给出唯一且可执行的 %s 引导", (input, code, action) => {
     const result = DeviceGuidance.evaluate(input);
     expect(result).toMatchObject({ ok: true, value: { deviceId: "phone-1", code, action } });
   });
 
-  it("把未知未来配对状态安全地处理为可以重新发起配对，而不是伪造已配对", () => {
-    expect(DeviceGuidance.evaluate({ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "FUTURE_STATE" })).toMatchObject({ ok: true, value: { code: "START_PAIRING", action: "start-pairing" } });
-    expect(DeviceGuidance.evaluate({ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" } })).toMatchObject({ ok: true, value: { code: "START_PAIRING", action: "start-pairing" } });
-  });
-
-  it.each([
-    ["UNKNOWN", "START_PAIRING"],
-    ["IDLE", "START_PAIRING"],
-    ["PAIRING", "WAIT_FOR_PAIRING"],
-    ["STOPPING", "WAIT_FOR_PAIRING"],
-    ["PAIRED", "CONNECT_AIRCRAFT"],
-    ["FAILED", "PAIRING_FAILED"]
-  ] as const)("保留手机端已定义的配对状态 %s 的安全语义", (pairingState, code) => {
-    expect(DeviceGuidance.evaluate({ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState })).toMatchObject({ ok: true, value: { code } });
+  it("常规连接引导不读取独立对频维护状态", () => {
+    expect(DeviceGuidance.evaluate({ link: readyLink, pairingState: "FAILED" })).toMatchObject({ ok: true, value: { code: "READY", action: null } });
+    expect(DeviceGuidance.evaluate({ link: { ...readyLink, overall: "degraded", remoteControllerToAircraft: "disconnected" }, pairingState: "FUTURE_STATE" })).toMatchObject({ ok: true, value: { code: "CONNECT_AIRCRAFT", action: "connect-aircraft" } });
+    expect(DeviceGuidance.evaluate({ link: readyLink, pairingState: false })).toMatchObject({ ok: true, value: { code: "READY", action: null } });
   });
 
   it.each([
@@ -58,8 +41,7 @@ describe("设备连接引导契约", () => {
     [{ link: { ...readyLink, overall: "missing" } }, "link.overall", "invalid-value"],
     [{ link: { ...readyLink, computerToPhone: "unknown" } }, "link.computerToPhone", "invalid-value"],
     [{ link: { ...readyLink, phoneToRemoteController: null } }, "link.phoneToRemoteController", "invalid-value"],
-    [{ link: { ...readyLink, remoteControllerToAircraft: null } }, "link.remoteControllerToAircraft", "invalid-value"],
-    [{ link: readyLink, pairingState: false }, "pairingState", "invalid-value"]
+    [{ link: { ...readyLink, remoteControllerToAircraft: null } }, "link.remoteControllerToAircraft", "invalid-value"]
   ])("拒绝非法或矛盾输入", (input, field, reason) => {
     expect(DeviceGuidance.evaluate(input)).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field, reason } } });
   });

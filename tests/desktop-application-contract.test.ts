@@ -325,6 +325,7 @@ describe("DesktopApplication", () => {
     const source = readFileSync(new URL("../src/production/desktop-application/index.ts", import.meta.url), "utf8");
     expect(source).toContain("missionControl.stop(deviceId)");
     expect(source).toContain("best-effort stop on desktop shutdown");
+    expect(source).toMatch(/\["starting"[^\]]*"disconnected"[^\]]*\]/u);
     expect(source).not.toContain('requestFlightAction');
   });
 });

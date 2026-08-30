@@ -66,7 +66,8 @@ export type PreflightBlockerCode =
   | "FLIGHT_STATE_UNKNOWN"
   | "AIRCRAFT_ALREADY_FLYING"
   | "MOTOR_STATE_UNKNOWN"
-  | "MOTORS_RUNNING";
+  | "MOTORS_RUNNING"
+  | "AIRCRAFT_ON_GROUND";
 
 export interface PreflightBlocker {
   readonly code: PreflightBlockerCode;
@@ -90,7 +91,8 @@ const messages: Readonly<Record<PreflightBlockerCode, string>> = Object.freeze({
   FLIGHT_STATE_UNKNOWN: "Aircraft flight state is unknown.",
   AIRCRAFT_ALREADY_FLYING: "The aircraft is already flying.",
   MOTOR_STATE_UNKNOWN: "Aircraft motor state is unknown.",
-  MOTORS_RUNNING: "Aircraft motors are running."
+  MOTORS_RUNNING: "Aircraft motors are running.",
+  AIRCRAFT_ON_GROUND: "The aircraft is already on the ground."
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
@@ -144,6 +146,15 @@ const result = (codes: readonly PreflightBlockerCode[]): PreflightResult => {
   const blockers = Object.freeze(codes.map(blocker));
   return blockers.length === 0 ? Object.freeze({ ok: true as const, blockers: Object.freeze([]) as readonly [] }) : Object.freeze({ ok: false as const, blockers });
 };
+const flightActions: readonly FlightActionPreflightAction[] = ["takeoff", "land", "return-home"];
+const flightActionOf = (value: unknown): FlightActionPreflightAction | null => {
+  try {
+    if (!isRecord(value) || typeof value.action !== "string") return null;
+    return flightActions.includes(value.action as FlightActionPreflightAction) ? value.action as FlightActionPreflightAction : null;
+  } catch {
+    return null;
+  }
+};
 
 function evaluate(input: PreflightInput, policy: PreflightPolicy = DEFAULT_POLICY): PreflightResult {
   const normalized = normalize(input);
@@ -160,20 +171,37 @@ function evaluate(input: PreflightInput, policy: PreflightPolicy = DEFAULT_POLIC
   const battery = normalized.batteryPercent;
   if (typeof battery !== "number" || !Number.isFinite(battery) || battery < 0 || battery > 100) codes.push("BATTERY_UNKNOWN");
   else if (battery < policy.minimumBatteryPercent) codes.push("BATTERY_LOW");
-  if (normalized.isFlying === undefined) codes.push("FLIGHT_STATE_UNKNOWN");
-  else if (normalized.isFlying === true) codes.push("AIRCRAFT_ALREADY_FLYING");
-  if (normalized.motorsOn === undefined) codes.push("MOTOR_STATE_UNKNOWN");
-  else if (normalized.motorsOn === true) codes.push("MOTORS_RUNNING");
+  if (normalized.isFlying !== false && normalized.isFlying !== true) codes.push("FLIGHT_STATE_UNKNOWN");
+  else if (normalized.isFlying) codes.push("AIRCRAFT_ALREADY_FLYING");
+  if (normalized.motorsOn !== false && normalized.motorsOn !== true) codes.push("MOTOR_STATE_UNKNOWN");
+  else if (normalized.motorsOn) codes.push("MOTORS_RUNNING");
   return result(codes);
 }
 
 function evaluateFlightAction(input: FlightActionPreflightInput, policy: PreflightPolicy = DEFAULT_POLICY): PreflightResult {
-  const base = evaluate({ ...input, capabilities: { waypointMission: true, waypointMissionSupport: "supported" }, missionPhase: "uploaded" }, policy);
-  if (!base.ok) {
-    const allowed = base.blockers.filter((item) => item.code !== "AIRCRAFT_ALREADY_FLYING" && item.code !== "MOTORS_RUNNING");
-    return allowed.length === 0 ? result([]) : Object.freeze({ ok: false as const, blockers: Object.freeze(allowed.map((item) => Object.freeze({ code: item.code, message: item.message }))) });
+  const normalized = normalize(input);
+  const action = flightActionOf(input);
+  if (normalized === null || action === null) return result(["INVALID_INPUT"]);
+  if (!validPolicy(policy)) return result(["INVALID_POLICY"]);
+
+  const codes: PreflightBlockerCode[] = [];
+  if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
+  if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
+  if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
+  if (normalized.flightControllerConnected !== true || normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+
+  if (action === "takeoff") {
+    const battery = normalized.batteryPercent;
+    if (typeof battery !== "number" || !Number.isFinite(battery) || battery < 0 || battery > 100) codes.push("BATTERY_UNKNOWN");
+    else if (battery < policy.minimumBatteryPercent) codes.push("BATTERY_LOW");
+    if (normalized.isFlying !== false && normalized.isFlying !== true) codes.push("FLIGHT_STATE_UNKNOWN");
+    else if (normalized.isFlying) codes.push("AIRCRAFT_ALREADY_FLYING");
+    if (normalized.motorsOn !== false && normalized.motorsOn !== true) codes.push("MOTOR_STATE_UNKNOWN");
+    else if (normalized.motorsOn) codes.push("MOTORS_RUNNING");
+  } else if (normalized.isFlying !== true) {
+    codes.push(normalized.isFlying === false ? "AIRCRAFT_ON_GROUND" : "FLIGHT_STATE_UNKNOWN");
   }
-  return base;
+  return result(codes);
 }
 
 export const PreflightCheck = Object.freeze({ evaluate, evaluateFlightAction });

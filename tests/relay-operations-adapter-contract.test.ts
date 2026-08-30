@@ -24,6 +24,7 @@ function relayFixture() {
     devices: Object.freeze([Object.freeze({ deviceId: "relay-1", sessionId: "session-1" })]),
     telemetry: Object.freeze([Object.freeze({
       deviceId: "relay-1",
+      receivedAtMs: 1_725_000_000_000,
       payload: object({
         sdkAvailability: text("READY"),
         remoteController: text("CONNECTED"),
@@ -73,7 +74,9 @@ describe("RelayOperationsAdapter", () => {
 
     expect(adapter.telemetry("relay-1")).toEqual({
       deviceId: "relay-1",
+      receivedAtMs: 1_725_000_000_000,
       payload: {
+        sdkAvailability: "READY",
         sdkRegistered: true,
         remoteControllerConnected: true,
         flightControllerConnected: true,
@@ -209,6 +212,7 @@ describe("RelayOperationsAdapter", () => {
     );
     expect(adapter.telemetry("relay-1")).toEqual({
       deviceId: "relay-1",
+      receivedAtMs: null,
       payload: {},
       capabilities: { liveVideo: true, waypointMission: true, waypointMissionSupport: "supported" }
     });
@@ -348,12 +352,19 @@ describe("RelayOperationsAdapter", () => {
         aircraft: text("CONNECTED"),
         missionExecution: text("FINISHED"),
         missionFileName: text("survey.kmz"),
+        missionRevision: numeric("7"),
+        missionDeviceGeneration: numeric("3"),
       }),
       object({ liveVideo: bool(true), waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") }),
     );
 
     expect(adapter.telemetry("relay-1")).toMatchObject({
-      payload: { missionExecution: "FINISHED", missionFileName: "survey.kmz" },
+      payload: {
+        missionExecution: "FINISHED",
+        missionFileName: "survey.kmz",
+        missionRevision: 7,
+        missionDeviceGeneration: 3,
+      },
     });
   });
 
@@ -419,7 +430,9 @@ describe("RelayOperationsAdapter", () => {
     expect(adapter.devices()).toEqual([{ deviceId: "relay-1" }]);
     expect(adapter.telemetry("relay-1")).toEqual({
       deviceId: "relay-1",
+      receivedAtMs: null,
       payload: {
+        sdkAvailability: "STARTING",
         sdkRegistered: false,
         remoteControllerConnected: false,
         flightControllerConnected: false,
@@ -519,7 +532,7 @@ describe("RelayOperationsAdapter", () => {
     } });
     expect(malformed.devices()).toEqual([]);
     expect(malformed.telemetry("relay-1")).toBeNull();
-    expect(malformed.telemetry("number")).toEqual({ deviceId: "number", payload: {}, capabilities: {} });
+    expect(malformed.telemetry("number")).toEqual({ deviceId: "number", receivedAtMs: null, payload: {}, capabilities: {} });
 
     const settings = RelayOperationsAdapter.create({ relay: {
       devices: () => [],
@@ -539,7 +552,7 @@ describe("RelayOperationsAdapter", () => {
       object({ waypointMissionSupport: text("UNKNOWN"), liveVideo: text("yes") })
     );
 
-    expect(adapter.telemetry("relay-1")).toEqual({ deviceId: "relay-1", payload: {}, capabilities: {} });
+    expect(adapter.telemetry("relay-1")).toEqual({ deviceId: "relay-1", receivedAtMs: null, payload: {}, capabilities: {} });
   });
 
   it("以手机端注册的精确名称和字段发送航线、图传、配对与飞控命令", async () => {
@@ -607,5 +620,22 @@ describe("RelayOperationsAdapter", () => {
     expect(adapter.devices()).toEqual([]);
     expect(adapter.telemetry("relay-1")).toBeNull();
     expect((await adapter.missionGateway().sendMission("relay-1", { missionId: "mission-1", fileName: "survey.kmz", size: 1, sha256: "a".repeat(64), bytes: new Uint8Array([1]) })).status).toBe("rejected");
+  });
+
+  it("只接受私网 192.168 中继地址，并稳定拒绝无效的对频查询", async () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+    fixture.setIngress("192.168.50.8");
+    expect(adapter.streamGateway().ingressAddress("relay-1")).toBe("192.168.50.8");
+    expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.status", fields: { extra: true } as never })).status).toBe("rejected");
+    adapter.dispose();
+    expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.status", fields: {} })).status).toBe("rejected");
+
+    const timedOut = RelayOperationsAdapter.create({ relay: {
+      devices: () => [],
+      latestTelemetry: () => null,
+      sendCommand: async () => ({ status: "timed-out" }),
+    } });
+    expect(await timedOut.pairingGateway().sendCommand("relay-1", { name: "pairing.status", fields: {} })).toMatchObject({ status: "timeout", detail: "timed-out" });
   });
 });

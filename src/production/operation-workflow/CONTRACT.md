@@ -160,7 +160,10 @@ interface WorkflowDevice {
   readonly deviceId: string;
   readonly connection: {
     readonly relay: "online";
+    /** 桌面最后成功验证一份手机遥测的时刻；仅供显示，不能授权控制。 */
+    readonly telemetryReceivedAtMs: number | null;
     readonly sdk: "ready" | "not-ready" | "unknown";
+    readonly msdk: "stopped" | "starting" | "ready" | "failed" | "unknown";
     readonly remoteController: "connected" | "disconnected" | "unknown";
     readonly flightController: "connected" | "disconnected" | "unknown";
     readonly aircraft: "connected" | "disconnected" | "unknown";
@@ -170,7 +173,7 @@ interface WorkflowDevice {
     readonly flightState: "grounded" | "flying" | "unknown";
     readonly motorsOn: boolean | null;
     readonly flightMode: string | null;
-    readonly remainingFlightTimeSeconds: number | null;
+    readonly remainingFlightTimeSeconds: number | null; // DJI low-battery return-to-home estimate only
     readonly pairingState: "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED" | "unknown";
     readonly pose: {
       readonly latitude: number | null;
@@ -205,9 +208,11 @@ interface WorkflowDevice {
 }
 ```
 
+`sdk` 仅表示来自安全适配层的 SDK 门禁事实，不能替代遥控器、飞控或飞机连接状态。`msdk` 是独立的精确 DJI MSDK 生命周期事实，用于设备页观察；它不改变 `sdk` 的既有门禁语义，也不代表飞机或图传状态。`telemetryReceivedAtMs` 是桌面验证收到当前遥测的时间，可能为 `null`；它与 `connection` 一样仅供显示，绝不能进入 `control` 或被任何任务、图传、设置、飞控门禁读取。
+
 `preflight` 必须直接投影任务控制的同一套启动前检查结果，包含 `ready` 与按既有契约固定排序的阻塞项；不得创建第二套规则。只有“已上传任务”的设备才可以是 `ready`。其它任务阶段一律返回 `not-applicable`，而不是假装预检通过。
 
-媒体管线未运行、设备还未推流、HTTP-FLV 分发未就绪或视频播放器未选择时，视频均不可被报告为 `ready`。快照不得含 `playbackUrl`；未来 IPC 白名单可单独提供受控播放资源入口。
+媒体管线未运行、设备还未推流、HTTP-FLV 分发未就绪或视频播放器未选择时，视频均不可被报告为 `ready`。快照不得含 `playbackUrl`；未来 IPC 白名单可单独提供受控播放资源入口。任务、手机图传控制和本机播放必须始终作为三项独立运行事实输出：任务不能由图传成功推导，手机接受推流命令不能由此推导本机播放，播放失败也不能修改 DJI 任务或飞控状态。
 
 ## 6. 航线管理与分配规则
 
@@ -251,8 +256,8 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 ## 8. 图传与媒体规则
 
-1. `checkHardwareReadiness(deviceId)` 只评估当前已知事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
-2. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须通过 `legacy-video` 实机预检；未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。通过后仍只委托 `live-stream-control`。
+1. `checkHardwareReadiness(deviceId)` 只评估当前中继上报的原始事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
+2. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须通过基于原始事实的 `legacy-video` 实机预检；未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。通过后仍只委托 `live-stream-control`。
 3. `stopStream(deviceId)` 不经过实机预检，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
 4. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
 5. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。
@@ -265,14 +270,14 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 ## 9. 设备设置规则
 
 1. 四个设置操作只委托注入的 `deviceSettings`：图传设置读取/写入对应 `readTransmission`/`writeTransmission`，相机设置读取/写入对应 `readCamera`/`writeCamera`。
-2. 每次设置操作前，工作流必须以当前设备事实调用既有 `CapabilityGate.evaluate`，操作名分别为 `transmission-settings` 或 `camera-settings`。门禁失败时不得调用设置模块。
+2. 每次设置操作前，工作流必须以当前中继上报的原始设备事实调用既有 `CapabilityGate.evaluate`，操作名分别为 `transmission-settings` 或 `camera-settings`。门禁失败时不得调用设置模块。
 3. 设备快照应包含 `deviceSettings.snapshot(deviceId)` 的已确认设置快照和请求中标识。写入成功只能展示手机端 DJI 回调返回的完整确认快照，禁止以提交补丁作乐观更新。
 4. 设置读取、写入、超时、拒绝、畸形结果和同设备同域并发语义全部保持 `device-settings-panel` 契约；工作流不解析字段、不维护机型枚举，也不将设置失败归类为任务或图传失败。
 5. 设备断连后，后续设置结果不得重新出现在在线设备视图；同设备的新会话必须重新读取设置。
 
 ## 10. 直接飞控规则
 
-1. `requestFlightAction` 在委托 `flightControl.request` 前必须通过 `flight-control` 实机预检；未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得创建确认或向手机发送飞控请求。通过后只委托 `flightControl.request`，从不直接发送命令。
+1. `requestFlightAction` 在委托 `flightControl.request` 前必须通过基于原始事实的 `flight-control` 实机预检；未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得创建确认或向手机发送飞控请求。通过后只委托 `flightControl.request`，从不直接发送命令。
 2. `confirmFlightAction` 和 `cancelFlightAction` 不经过实机预检，只委托同一设备的确认 ID；确认不可跨设备、跨动作、重复或过期复用。
 3. 起飞、降落、返航始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。
 4. 飞控命令成功只表示 DJI 调用完成；工作流必须等待后续遥测再显示飞机实际飞行状态。
@@ -292,7 +297,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道、清空该设备连接滞回；不得让旧确认对话框在新会话上继续可点。
 
-连接快照中的 `connected`（飞机）、`remoteControllerConnected`、`flightControllerConnected` 必须经短滞回后再对外显示 true→false，避免遥测闪断带动 UI/门闩抖动；false→true 与 unknown 立即生效。
+连接快照中的 `connected`（飞机）、`remoteControllerConnected`、`flightControllerConnected` 仅供界面展示，必须经短滞回后再对外显示 true→false，避免遥测闪断带动界面抖动；false→true 与 unknown 立即生效。每个设备快照还必须输出同一次原始遥测投影得到的 `control` 连接事实，供操作台预先禁用新操作。此显示保持不得参与图传启动、直接飞控、设备设置或航线启动前检查：这些控制决策各自直接读取当前原始事实，任何 `false` 或 `unknown` 都必须立即拒绝新操作。
 
 同 ID 的新手机会话后续重新出现时被视为新在线设备：旧任务和旧图传都不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。
 

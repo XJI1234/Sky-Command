@@ -13,6 +13,16 @@ describe("telemetry-intake contract", () => {
     expect(intake.get("connection-1")).toMatchObject({ payload: { fields: { battery: { value: "97" } } } });
   });
 
+  it("records only the local acceptance time for each validated telemetry frame", () => {
+    let now = 1_725_000_000_000;
+    const intake = TelemetryIntake.create({ now: () => now });
+
+    expect(intake.accept(input())).toMatchObject({ ok: true, value: { receivedAtMs: 1_725_000_000_000 } });
+    now += 800;
+    expect(intake.accept(input({ payload: object({ battery: { kind: "number", value: "97" } }) }))).toMatchObject({ ok: true, value: { receivedAtMs: 1_725_000_000_800 } });
+    expect(intake.get("connection-1")).toMatchObject({ receivedAtMs: 1_725_000_000_800 });
+  });
+
   it("preserves order, removes independently, and ignores unknown removal", () => {
     const intake = TelemetryIntake.create();
     intake.accept(input());
