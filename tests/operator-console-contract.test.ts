@@ -49,10 +49,11 @@ describe("操作台投影", () => {
     expect(source).toContain('MSDK 状态未知');
   });
 
-  it("设备页分别呈现飞控和飞机的连接事实", () => {
+  it("设备页分别呈现飞控和 DJI 硬件产品的连接事实", () => {
     const source = renderer();
     expect(source).toContain('connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")');
-    expect(source).toContain('connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知")');
+    expect(source).toContain('connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知")');
+    expect(source).not.toContain('connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知")');
   });
 
   it("设备详情以六个具名独立行呈现连接事实", () => {
@@ -63,7 +64,7 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("遥控器连接 [RemoteControllerKey.KeyConnection]", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))');
     expect(source).toContain('statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)');
     expect(source).toContain('statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))');
-    expect(source).toContain('statusRow("飞机连接 [ProductKey.KeyConnection]", connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知"), connected(connection, "aircraft"))');
+    expect(source).toContain('statusRow("DJI 硬件产品连接 [ProductKey.KeyConnection]", connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知"), connected(connection, "aircraft"))');
   });
 
   it("设备详情将动态事实、任务、手机推流和当前图传机的桌面播放逐行分开呈现", () => {

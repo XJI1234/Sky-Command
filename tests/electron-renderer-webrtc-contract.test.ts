@@ -32,8 +32,8 @@ describe("Electron 生产图传渲染", () => {
     expect(flight).toContain('id="stream-label"');
     expect(flight).toContain('id="stream-ready"');
     expect(page.indexOf('id="stream-label"')).toBeGreaterThan(page.indexOf('id="workspace-flight"'));
-    expect(renderer()).toContain("飞机未连接");
-    expect(renderer()).toContain("飞机状态未知");
+    expect(renderer()).toContain("DJI 硬件产品未连接");
+    expect(renderer()).toContain("DJI 硬件产品状态未知");
     expect(renderer()).toContain("streamCanStart");
     expect(renderer()).toContain('button[data-action="stream-start"]');
     expect(page).toContain('<video id="video"');
