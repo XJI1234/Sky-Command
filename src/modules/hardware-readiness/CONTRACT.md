@@ -35,7 +35,9 @@ interface HardwareReadinessInput {
 }
 ```
 
-旧图传检查桌面局域网与 FFmpeg 事实；飞控检查不要求这两项。两种检查都要求手机当前在线、会话已稳定、SDK 与遥控器已连接。飞控动作额外要求飞控和飞行器已连接；旧图传不把飞机/飞控遥测当作推流门闩（真实能否出画由 DJI 启动与 RTMP 收流判定）。缺失、非布尔或畸形安全事实一律阻塞，不得推定为安全。
+旧图传检查桌面局域网与 FFmpeg 事实；飞控检查不要求这两项。两种检查都要求手机当前在线、会话已稳定和 MSDK 已就绪。飞控动作额外要求遥控器、飞控和飞行器已连接；旧图传不把遥控器、飞机或飞控遥测当作桌面端推流门闩。
+
+这是 DJI MSDK `ILiveStreamManager.startStream` 的调用边界：桌面只能先确认手机能调用已经配置好的直播管理器，真实的遥控器/飞机链路、产品支持性、网络服务及推流创建结果必须由 DJI 的异步完成回调和后续 RTMP 入流确认。桌面不得把瞬时遥测或缺失的型号能力字段写成“当前机不支持图传”。缺失、非布尔或畸形的必要安全事实仍一律阻塞，不得推定为安全。
 
 ## 阻塞项和顺序
 
@@ -47,7 +49,7 @@ interface HardwareReadinessInput {
 4. `PHONE_DISCONNECTED`
 5. `PHONE_SESSION_UNSTABLE`
 6. `SDK_NOT_READY`
-7. `REMOTE_CONTROLLER_DISCONNECTED`
+7. `REMOTE_CONTROLLER_DISCONNECTED`（仅飞控）
 8. `FLIGHT_CONTROLLER_DISCONNECTED`（仅飞控）
 9. `AIRCRAFT_DISCONNECTED`（仅飞控）
 

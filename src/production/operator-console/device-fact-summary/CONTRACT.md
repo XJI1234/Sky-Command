@@ -16,9 +16,10 @@ DeviceFactSummary.format(connection) -> string
 
 ## 显示规则
 
-在电量和飞行状态之前按此顺序显示已知的 `aircraftModel`（“机型 …”）和 `remoteControllerModel`（“遥控器 …”）；之后依次追加已知的低电量返航预估、电机状态、飞行模式、高度、位置，以及 `live.streaming === true` 时的图传运行状态、分辨率、帧率、码率、RTT。
+在电量和飞行状态之前按此顺序显示已知的 `aircraftModel`（“机型 …”）和 `remoteControllerModel`（“遥控器 …”）；之后依次追加已知的低电量返航状态与预估、电机状态、飞行模式、高度、位置，以及 `live.streaming === true` 时的图传运行状态、分辨率、帧率、码率、RTT。
 
-- `remainingFlightTimeSeconds` 只表示 DJI 低电量返航策略的预估时间，由完整秒数表示为“低电量返航预估 N分M秒”；它不是通用预计可飞时间，也不参与按钮门禁。
+- `lowBatteryRthState` 只接受 `IDLE`、`COUNTING_DOWN`、`EXECUTED`、`CANCELLED`，分别显示为“未触发”“正在倒计时”“已执行”“已取消”；未知值完全省略。
+- `remainingFlightTimeSeconds` 只表示 DJI 低电量返航策略的预估时间。只有返航状态已知且值为正秒数时才由完整秒数表示为“低电量返航预估 N分M秒”；它不是通用预计可飞时间，也不参与按钮门禁。
 - 高度独立于位置显示；只有经纬度均为有限数值时才显示位置，固定保留五位小数。
 - `live` 指标只是当前图传观测，不得推断飞机、飞控或图传控制状态；`streaming` 不是 `true` 时不得显示旧指标。
 - 未知的可选字段完全省略，不使用 `0`、空字符串、占位符或猜测值。

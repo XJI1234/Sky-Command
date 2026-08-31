@@ -116,7 +116,7 @@ instance.dispose() -> void
 
 它还接收唯一的运行时选项 `now(): number`，用于调用既有 `mediaPipeline.evaluate(now)`、记录手机会话稳定时间，并判断控制遥测时效。该函数必须返回非负有限毫秒数；不可用时依赖它的操作返回稳定失败，且不执行后续效果。模块不创建计时器，未来 Electron/IPC 装配或页面按固定频率调用 `refreshMedia()`。
 
-`hardwareReadiness` 是装配根确认过的桌面事实。`sessionStableAfterMs` 必须是非负有限毫秒数；生产值为 15 秒。工作流只在中继设备首次出现或同设备会话更换时开始计时，设备消失时删除该计时。若当前遥测已同时确认 SDK、遥控器、飞控和飞机均为连接，则旧图传与飞控预检视会话已稳定，不再等待该计时。它不向手机发送探测命令，也不把一次 Relay 连接或 DJI 回调伪造成链路可用。
+`hardwareReadiness` 是装配根确认过的桌面事实。`sessionStableAfterMs` 必须是非负有限毫秒数；生产值为 5 秒。该值是桌面端为避免手机中继刚重连时误发开始型命令设置的保护窗口，不是 DJI 或 WebSocket 的协议要求。工作流只在中继设备首次出现或同设备会话更换时开始计时，设备消失时删除该计时。若当前遥测已同时确认 SDK、遥控器、飞控和飞机均为连接，则旧图传与飞控预检视会话已稳定，不再等待该计时。它不向手机发送探测命令，也不把一次 Relay 连接或 DJI 回调伪造成链路可用。
 
 `desktop-runtime` 负责启动、停止中继与媒体服务；`operation-workflow` 不得替代其生命周期职责。最外层生产装配根负责按下列顺序构造：
 
@@ -174,6 +174,7 @@ interface WorkflowDevice {
     readonly flightState: "grounded" | "flying" | "unknown";
     readonly motorsOn: boolean | null;
     readonly flightMode: string | null;
+    readonly lowBatteryRthState: "IDLE" | "COUNTING_DOWN" | "EXECUTED" | "CANCELLED" | "unknown";
     readonly remainingFlightTimeSeconds: number | null; // DJI low-battery return-to-home estimate only
     readonly pairingState: "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED" | "unknown";
     readonly pose: {
@@ -209,7 +210,7 @@ interface WorkflowDevice {
 }
 ```
 
-`sdk` 仅表示来自安全适配层的 SDK 门禁事实，不能替代遥控器、飞控或飞机连接状态。`msdk` 是独立的精确 DJI MSDK 生命周期事实，用于设备页观察；它不改变 `sdk` 的既有门禁语义，也不代表飞机或图传状态。`telemetryReceivedAtMs` 是桌面验证收到当前遥测的时间，可能为 `null`；它与 `connection` 一样仅供显示，绝不能进入 `control` 或被任何任务、图传、设置、飞控门禁读取。
+`sdk` 仅表示来自安全适配层的 SDK 门禁事实，不能替代遥控器、飞控或飞机连接状态。`msdk` 是独立的精确 DJI MSDK 生命周期事实，用于设备页观察；它不改变 `sdk` 的既有门禁语义，也不代表飞机或图传状态。`connection` 与 `control` 必须投影自同一 Relay 会话中的当前 MSDK 设备事实；`control` 只是该事实的最小门禁视图，不能来自另一条命令结果缓存。`telemetryReceivedAtMs` 是桌面验证收到当前遥测的时间，可能为 `null`；它只供显示，绝不能因年龄增长而单独使 `control` 失效。会话替换、MSDK 观察重建或明确的未知/断开事实才会改变门禁。
 
 `preflight` 必须直接投影任务控制的同一套启动前检查结果，包含 `ready` 与按既有契约固定排序的阻塞项；不得创建第二套规则。只有“已上传任务”的设备才可以是 `ready`。其它任务阶段一律返回 `not-applicable`，而不是假装预检通过。
 
@@ -259,10 +260,10 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 1. `refreshDeviceState(deviceId)` 是设备页的显式只读刷新入口。它仅发送一次 `telemetry.read` 并返回稳定结果；成功只表示桌面取得了当次手机状态，绝不表示飞机或图传就绪，也不发送 DJI、任务、图传或飞控命令。
 2. `checkHardwareReadiness(deviceId)` 只评估当前中继上报的显示事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
-3. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须先读取同会话的控制遥测，再通过基于该控制事实的 `legacy-video` 实机预检；读取失败、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，不发送启动命令。预检未通过返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。通过后仍只委托 `live-stream-control`。
+3. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须先读取同会话的控制遥测，再通过基于该控制事实的 `legacy-video` 实机预检；读取失败、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，不发送启动命令。该预检只要求电脑媒体服务、在线稳定中继和 MSDK 已就绪，不得把遥控器、飞控、飞机或 `liveVideo` 遥测当作型号不支持或推流启动门闩。预检未通过返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。通过后仍只委托 `live-stream-control`，由 DJI 完成回调与 RTMP 入流确认真实结果。
 4. `stopStream(deviceId)` 不经过实机预检或控制遥测读取，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
 4. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
-5. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。
+5. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。生产渲染器在成功附着当前图传机的 HTTP-FLV 播放器时必须调用该入口，使主进程选择状态与实际播放器目标一致；该选择本身不等同于首帧已经绘制。
 6. 图传与航线任务彼此独立：可以在航线开始前或飞行期间启动；图传失败不修改任务状态，任务失败不替其他设备停止图传。
 7. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`。同一设备编号换了会话时同样必须复位生产 RTMP 图传车道，不得继续显示“已启动”。任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
 8. `clearVideo()` 只清空本地播放器选择，不向手机发送停止推流命令。
@@ -297,9 +298,9 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 6. 不发送 `wayline.stop`、`live-stream.stop` 或任何飞控命令；
 7. 不自动重连、不自动重传、不自动恢复任务或图传。
 
-同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道、清空该设备连接滞回；不得让旧确认对话框在新会话上继续可点。
+同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道；不得让旧确认对话框在新会话上继续可点。
 
-连接快照中的 `connected`（飞机）、`remoteControllerConnected`、`flightControllerConnected` 仅供界面展示，必须经短滞回后再对外显示 true→false，避免遥测闪断带动界面抖动；false→true 与 unknown 立即生效。每个设备快照还必须输出同一次未滞回显示遥测投影得到的 `control` 连接事实，供操作台提前提示与禁用明显不满足前置条件的操作；它不是后端授权。此显示保持不得参与图传启动、直接飞控、设备设置、航线上传或航线启动前检查：这些控制决策各自只接受当次 `telemetry.read` 成功建立的控制遥测，任何读取失败、会话变化、过期、`false` 或 `unknown` 都必须拒绝新操作。
+设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`aircraft` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示与禁用明显不满足前置条件的操作；它不是后端授权。图传启动、直接飞控、设备设置、航线上传或航线启动仍各自只接受当次 `telemetry.read` 成功建立的控制遥测，任何读取失败、会话变化、过期、`false` 或 `unknown` 都必须拒绝新操作。
 
 同 ID 的新手机会话后续重新出现时被视为新在线设备：旧任务和旧图传都不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。
 

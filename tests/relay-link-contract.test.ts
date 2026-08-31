@@ -64,7 +64,7 @@ describe("relay-link root contract", () => {
     expect(link.devices()).toMatchObject([{ deviceId: "phone-1", sessionId: "session-phone-1" }]);
     expect(link.latestTelemetry("phone-1")).toBeNull(); expect(link.latestTelemetry(" ")).toBeNull();
     phone.emit({ type: "telemetry", payload: object({ battery: { kind: "number", value: "98" } }), capabilities: object({ live: { kind: "boolean", value: true } }) }); await flush();
-    expect(link.latestTelemetry("phone-1")).toMatchObject({ deviceId: "phone-1", payload: { fields: { battery: { value: "98" } } } });
+    expect(link.latestTelemetry("phone-1")).toMatchObject({ deviceId: "phone-1", sessionId: "session-phone-1", payload: { fields: { battery: { value: "98" } } } });
     expect(snapshots.length).toBeGreaterThan(1);
     expect(Object.isFrozen(link.devices())).toBe(true);
   });

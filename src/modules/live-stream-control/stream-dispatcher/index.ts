@@ -11,7 +11,7 @@ export interface StreamDispatcherDependencies {
 }
 export interface StreamDispatcherInstance { readonly check: (deviceId: string) => StreamDispatchCheck; readonly start: (deviceId: string) => Promise<StreamDispatchResult>; readonly stop: (deviceId: string) => Promise<StreamDispatchResult>; readonly get: (deviceId: string) => StreamDispatchSnapshot; readonly list: () => readonly StreamDispatchSnapshot[]; readonly recordDisconnected: (deviceId: string) => StreamDispatchSnapshot | null; readonly forget: (deviceId: string) => boolean; readonly subscribe: (listener: (snapshots: readonly StreamDispatchSnapshot[]) => void) => () => void; }
 
-type Lane = { phase: StreamDispatchSnapshot["phase"]; busy: boolean; lastOperation: StreamOperation | null; failureCode: StreamDispatchCode | null; reason: string | null; };
+type Lane = { phase: StreamDispatchSnapshot["phase"]; busy: boolean; lastOperation: StreamOperation | null; failureCode: StreamDispatchCode | null; reason: string | null; restartResolvers: Array<(result: StreamDispatchResult) => void>; };
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；所有公开结果均有契约测试。
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；输入边界由公开契约覆盖。
@@ -53,7 +53,7 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
   const snapshot = (deviceId: string, lane: Lane): StreamDispatchSnapshot => freeze({ deviceId, phase: lane.phase, lastOperation: lane.lastOperation, failureCode: lane.failureCode, reason: lane.reason });
   const list = (): readonly StreamDispatchSnapshot[] => freeze([...lanes.entries()].map(([deviceId, lane]) => snapshot(deviceId, lane)).sort((left, right) => left.deviceId.localeCompare(right.deviceId)));
   const publish = (): void => { const value = list(); for (const listener of [...listeners]) { try { listener(value); } catch { /* subscriber isolation */ } } };
-  const laneFor = (deviceId: string): Lane => { const existing = lanes.get(deviceId); if (existing) return existing; const next: Lane = { phase: "idle", busy: false, lastOperation: null, failureCode: null, reason: null }; lanes.set(deviceId, next); return next; };
+  const laneFor = (deviceId: string): Lane => { const existing = lanes.get(deviceId); if (existing) return existing; const next: Lane = { phase: "idle", busy: false, lastOperation: null, failureCode: null, reason: null, restartResolvers: [] }; lanes.set(deviceId, next); return next; };
   const check = (deviceId: string): StreamDispatchCheck => {
     if (!validId(deviceId)) return freeze({ ok: false as const, code: "INVALID_INPUT" as const });
     const telemetryAttempt = attempt(() => dependencies.relay.latestTelemetry(deviceId));
@@ -93,36 +93,66 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
       ? result(deviceId, lane, operation, true, null)
       : result(deviceId, lane, operation, false, "RELAY_REJECTED", relayRejectionReason(payload.value.detail));
   };
+  const restartFailure = (deviceId: string, lane: Lane, code: StreamDispatchCode, reason: string | null = null): StreamDispatchResult => {
+    const state = snapshot(deviceId, lane);
+    return freeze({ ok: false as const, operation: "start" as const, code, state, ...(reason === null ? {} : { reason }) });
+  };
+  const settleRestartResolvers = (resolvers: readonly ((result: StreamDispatchResult) => void)[], outcome: StreamDispatchResult): void => {
+    for (const resolve of resolvers) {
+      try { resolve(outcome); } catch { /* promise resolution must not affect the lane */ }
+    }
+  };
+  const beginStart = async (deviceId: string, lane: Lane): Promise<StreamDispatchResult> => {
+    const rejected = checked(deviceId, "start", lane); if (rejected) return rejected;
+    const media = attempt(() => dependencies.media.snapshot());
+    // Stryker disable next-line ConditionalExpression: 捕获失败后缺失 value 仍会被下一条媒体快照验证归一为同一不可用结果。
+    if (!media.ok) return result(deviceId, lane, "start", false, "MEDIA_PIPELINE_UNAVAILABLE");
+    const mediaSnapshot = media.value;
+    if (!record(mediaSnapshot) || mediaSnapshot.phase !== "running" || !record(mediaSnapshot.endpoint)) return result(deviceId, lane, "start", false, "MEDIA_PIPELINE_UNAVAILABLE");
+    const ingress = attempt(() => {
+      const resolve = dependencies.relay.ingressAddress;
+      return typeof resolve === "function" ? resolve(deviceId) : null;
+    });
+    const endpoint = ingress.ok && privateIpv4(ingress.value)
+      ? freeze({ ...mediaSnapshot.endpoint, host: ingress.value })
+      : mediaSnapshot.endpoint;
+    const target = attempt(() => dependencies.targetConfig.createRtmpTarget({ deviceId, endpoint }));
+    if (!target.ok || !record(target.value) || target.value.ok !== true || !record(target.value.value) || typeof target.value.value.rtmpUrl !== "string") return result(deviceId, lane, "start", false, "CONFIGURATION_INVALID");
+    return send(deviceId, lane, "start", freeze({ name: "live-stream.start" as const, fields: freeze({ rtmpUrl: target.value.value.rtmpUrl }) }));
+  };
+  const settleQueuedRestart = (deviceId: string, lane: Lane, stopResult: StreamDispatchResult): void => {
+    const resolvers = lane.restartResolvers.splice(0);
+    if (resolvers.length === 0) return;
+    if (!stopResult.ok) {
+      settleRestartResolvers(resolvers, restartFailure(deviceId, lane, stopResult.code, stopResult.reason ?? null));
+      return;
+    }
+    void beginStart(deviceId, lane).then(
+      (outcome) => settleRestartResolvers(resolvers, outcome),
+      () => settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "DEPENDENCY_FAILURE")),
+    );
+  };
   return freeze({
     check,
     start: async (deviceId) => {
-      const lane = laneFor(typeof deviceId === "string" ? deviceId : ""); const rejected = checked(deviceId, "start", lane); if (rejected) return rejected;
-      const media = attempt(() => dependencies.media.snapshot());
-      // Stryker disable next-line ConditionalExpression: 捕获失败后缺失 value 仍会被下一条媒体快照验证归一为同一不可用结果。
-      if (!media.ok) return result(deviceId, lane, "start", false, "MEDIA_PIPELINE_UNAVAILABLE");
-      const mediaSnapshot = media.value;
-      if (!record(mediaSnapshot) || mediaSnapshot.phase !== "running" || !record(mediaSnapshot.endpoint)) return result(deviceId, lane, "start", false, "MEDIA_PIPELINE_UNAVAILABLE");
-      const ingress = attempt(() => {
-        const resolve = dependencies.relay.ingressAddress;
-        return typeof resolve === "function" ? resolve(deviceId) : null;
-      });
-      const endpoint = ingress.ok && privateIpv4(ingress.value)
-        ? freeze({ ...mediaSnapshot.endpoint, host: ingress.value })
-        : mediaSnapshot.endpoint;
-      const target = attempt(() => dependencies.targetConfig.createRtmpTarget({ deviceId, endpoint }));
-      if (!target.ok || !record(target.value) || target.value.ok !== true || !record(target.value.value) || typeof target.value.value.rtmpUrl !== "string") return result(deviceId, lane, "start", false, "CONFIGURATION_INVALID");
-      return send(deviceId, lane, "start", freeze({ name: "live-stream.start" as const, fields: freeze({ rtmpUrl: target.value.value.rtmpUrl }) }));
+      const lane = laneFor(typeof deviceId === "string" ? deviceId : "");
+      if (validId(deviceId) && lane.busy && lane.phase === "stopping") {
+        return await new Promise<StreamDispatchResult>((resolve) => { lane.restartResolvers.push(resolve); });
+      }
+      return beginStart(deviceId, lane);
     },
     stop: async (deviceId) => {
       const lane = laneFor(typeof deviceId === "string" ? deviceId : "");
       if (!validId(deviceId)) return freeze({ ok: false as const, operation: "stop" as const, code: "INVALID_INPUT" as const, state: null });
       if (lane.busy) return freeze({ ok: false as const, operation: "stop" as const, code: "OPERATION_IN_PROGRESS" as const, state: snapshot(deviceId, lane) });
       // 停止不得复用启动能力门闩：遥控器/SDK 遥测抖动时仍须能发 live-stream.stop。
-      return send(deviceId, lane, "stop", freeze({ name: "live-stream.stop" as const, fields: freeze({}) }));
+      const stopResult = await send(deviceId, lane, "stop", freeze({ name: "live-stream.stop" as const, fields: freeze({}) }));
+      settleQueuedRestart(deviceId, lane, stopResult);
+      return stopResult;
     },
     get: (deviceId) => validId(deviceId) && lanes.has(deviceId) ? snapshot(deviceId, lanes.get(deviceId)!) : empty(typeof deviceId === "string" ? deviceId : ""),
     list,
-    recordDisconnected: (deviceId) => { const lane = lanes.get(deviceId); if (!lane) return null; lane.phase = "disconnected"; lane.busy = false; lane.failureCode = "DISCONNECTED"; lane.reason = null; const state = snapshot(deviceId, lane); publish(); return state; },
+    recordDisconnected: (deviceId) => { const lane = lanes.get(deviceId); if (!lane) return null; lane.phase = "disconnected"; lane.busy = false; lane.failureCode = "DISCONNECTED"; lane.reason = null; const state = snapshot(deviceId, lane); const resolvers = lane.restartResolvers.splice(0); publish(); settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "DISCONNECTED")); return state; },
     forget: (deviceId) => { const lane = lanes.get(deviceId); if (!lane || !["idle", "failed", "disconnected"].includes(lane.phase)) return false; lanes.delete(deviceId); publish(); return true; },
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; }
   });

@@ -53,15 +53,17 @@ instance.dispose() -> void
 | Android 协议字段 | 桌面投影字段 | 转换规则 |
 | --- | --- | --- |
 | `sdkAvailability` | `sdkAvailability`、`sdkRegistered` | 仅原始封闭枚举 `STOPPED`、`STARTING`、`READY`、`FAILED` 可作为 `sdkAvailability` 保留；同时仅 `READY` 派生为 `sdkRegistered=true`，其余三态派生为 `false`；缺失或未知均为 `undefined` |
-| `remoteController` | `remoteControllerConnected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
-| `flightController` | `flightControllerConnected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
-| `aircraft` | `connected` | `CONNECTED` 为 `true`，`DISCONNECTED` 为 `false`，其余为 `undefined` |
+| `deviceRevision` | `deviceRevision` | 仅保留正安全整数。它是手机端 `DeviceStateStore` 对当前 MSDK 设备事实的单调版本，供同一 Relay 会话内拒绝较旧的连接观察；不是时间戳，也不代表飞行遥测的独立版本 |
+| `remoteController` | `remoteController`、`remoteControllerConnected` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须原样保留为 `remoteController`；仅 `CONNECTED` 派生兼容值 `true`，仅 `DISCONNECTED` 派生兼容值 `false`，`UNKNOWN` 不得伪造成布尔值 |
+| `flightController` | `flightController`、`flightControllerConnected` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须原样保留为 `flightController`；仅 `CONNECTED` 派生兼容值 `true`，仅 `DISCONNECTED` 派生兼容值 `false`，`UNKNOWN` 不得伪造成布尔值 |
+| `aircraft` | `aircraft`、`connected` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须原样保留为 `aircraft`；仅 `CONNECTED` 派生兼容值 `true`，仅 `DISCONNECTED` 派生兼容值 `false`，`UNKNOWN` 不得伪造成布尔值 |
 | `aircraftModel`、`remoteControllerModel` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
 | `isFlying`、`motorsOn` | 同名字段 | 仅保留布尔值 |
 | `flightMode` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
 | `batteryPercent` | 同名字段 | 仅保留 `0..100` 的有限数值 |
-| `remainingFlightTimeSeconds` | 同名字段 | 仅保留 `0..86,400` 的非负安全整数；只表示 DJI 低电量返航策略预估，不能作为通用预计飞行时间或安全门禁 |
-| `pairing` | `pairingState` | 仅保留 `UNKNOWN`、`IDLE`、`PAIRING`、`PAIRED`、`STOPPING`、`FAILED` |
+| `lowBatteryRthState` | 同名字段 | 仅保留 `IDLE`、`COUNTING_DOWN`、`EXECUTED`、`CANCELLED`；`UNKNOWN`、缺失或畸形值一律不投影 |
+| `remainingFlightTimeSeconds` | 同名字段 | 仅在 `lowBatteryRthState` 已投影时保留 `1..86,400` 的安全整数；只表示 DJI 低电量返航策略预估，不能作为通用预计飞行时间或安全门禁。`UNKNOWN + 0` 必须视为未知 |
+| `pairing` | `pairing`、`pairingState` | 原始受限枚举 `UNKNOWN`、`IDLE`、`PAIRING`、`PAIRED`、`STOPPING`、`FAILED` 必须原样保留为 `pairing`；`pairingState` 仅为既有调用方的兼容别名 |
 | `latitude` / `longitude` | 同名字段 | 仅在两者都是有限数值且分别落在 `[-90,90]`、`[-180,180]` 时成对保留；缺一、越界、JSON null 均省略，不得写成 `0` |
 | `altitudeMeters` | 同名字段 | 仅保留有限数值，不受电池 `0..100` 范围限制 |
 | `liveStreaming` | 同名字段 | 仅保留布尔值；它是当前只读观测，不能改变桌面图传状态机 |
@@ -77,11 +79,13 @@ instance.dispose() -> void
 | `capabilities.waypointMission` | 同名字段 | 仅保留布尔值；字段名不得改写 |
 | `capabilities.waypointMissionSupport` | 同名字段 | 线协议 `SUPPORTED` / `UNSUPPORTED` 归一为桌面门禁词表 `supported` / `unsupported`；其他值为 `undefined`。这不是改字段名。 |
 
-投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability` 是设备页的只读 MSDK 生命周期事实；`sdkRegistered` 是保留给既有安全门禁的兼容布尔投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
+投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability`、`remoteController`、`flightController`、`aircraft` 与 `pairing` 是设备页的只读 MSDK 原始状态事实：显示链路必须直接消费这些枚举，不能改读兼容布尔值、别名、合并多个字段或施加显示保持。`sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 与 `pairingState` 只保留给既有调用方的兼容投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
 
 `liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。
 
-`telemetry(deviceId)` 是显示遥测：它可以保留最近一次成功接收的完整快照，用于向操作员说明最后已知事实和更新时间；它绝不单独授权任何命令。`controlTelemetry(deviceId)` 是控制遥测：只能返回本设备当前会话中一次 `telemetry.read` 成功结果解码出的完整快照，并且仅在该结果于桌面本地接收后的 3 秒内有效。每次刷新开始时都必须先作废本设备旧控制快照；结果缺失、畸形、会话未知、设备断开、同 ID 会话替换、时钟失效或超过时效时必须保持 `null`。这确保失败或畸形的本次读取绝不复用先前读数来授权新操作。这两个接口不能互相代替。
+`telemetry(deviceId)` 与 `controlTelemetry(deviceId)` 必须读取同一份“当前会话设备事实”，两者不得维护不同来源、不同值或不同的显示保持期。该事实只能由两种 Android MSDK 观察更新：持续订阅的 `TelemetryFrame`，或一次 `telemetry.read` 在手机重新读取各硬件 Key 后返回的完整基线。订阅遥测必须同时携带 `relay-link` 为它绑定的 `sessionId`，且与当前 `{ deviceId, sessionId }` 完全一致；缺失或不一致时整条遥测不得显示、不得写入观察、不得授权控制。二者都必须能解码出完整的连接字段与正 `deviceRevision`；同一会话内较小的 `deviceRevision` 不得覆盖较大的版本。一次 `telemetry.read` 成功可立刻成为当前事实，使本次控制与设备页看见同一结果；随后抵达的不旧于它的订阅帧继续替换该事实。
+
+当前会话的已确认 MSDK 事实在状态长期不变时仍然有效，绝不能因为桌面经过若干秒没有收到新事件就自动变成不可信。接收时间只供操作员观察链路，不参与门禁判定。事实必须在设备断开、同 ID 会话替换、MSDK 观察停止/重启、结果畸形，或新事件明确给出 `UNKNOWN`/`DISCONNECTED` 时按字段更新或清空；新的会话或观察代次只有在收到该代完整 MSDK Key 基线后才能再次授权开始型操作。显示链路绝不单独授权命令，控制模块仍必须逐项执行自身门禁。
 
 ## 航线阶段快照投影
 
@@ -113,7 +117,7 @@ instance.dispose() -> void
 - 暂停、继续、停止在等待命令结果时必须保留“请求中”状态；命令成功后才进入对应已确认状态。
 - `live-stream.start` 成功只表示手机接受 RTMP 推流；播放成功只能由媒体管线确认本机 HTTP-FLV 已就绪并由播放器附着后产生。
 - `flight.*` 成功只表示 DJI 已完成该调用；飞行状态必须仍由后续遥测显示。
-- `telemetry.read` 成功只表示手机已返回当次完整快照；不得据此把链路标为 ready。每次读取开始时适配器先作废该设备旧控制遥测；仅当返回的结构化 `result` 可按本契约入站投影完整解码、且请求前后仍是同一 `deviceId + sessionId` 时，才可建立新的 3 秒控制遥测。读取失败、超时、畸形、会话变化或时钟失效必须保持该事实为空，不能回退至旧快照；调用方仍必须逐项执行各自的门禁，不能把读取成功视为 DJI、遥控器、飞机或飞控已就绪。
+- `telemetry.read` 成功只表示手机已返回当次完整 MSDK 快照；不得据此推导任何链路一定 ready。手机必须先重新建立硬件 Key 观察并读取初值，适配器仅在请求前后仍为同一 `deviceId + sessionId`、结构化 `result` 可按本契约完整解码且携带正 `deviceRevision` 时，才将它写入该会话的当前设备事实。读取失败、超时、畸形或会话变化不得覆盖现有订阅事实，也不得制造控制授权；调用方仍必须逐项执行各自的门禁。
 - 设置读写成功必须携带可解码的 `command-result.result` 完整快照；缺失或畸形结果是 `invalid-result`，不得乐观更新。
 - `pairing.status` 仅在命令 `succeeded` 时携带根契约 §7.4 的结构化 `result`（`pairingState`、`aircraftConnected`、`flightControllerConnected`、`aircraftModel`、`motorsOn`、`sdkRegistered`）。失败、超时或 `pairing.start` / `pairing.stop` 不得附带该 `result`。实时配对显示仍以入站遥测的 `pairingState` 为准，命令成功不等于已配对。
 

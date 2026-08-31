@@ -9,11 +9,24 @@ type JsonValue = Readonly<{ readonly kind: "null" }>
   | Readonly<{ readonly kind: "object"; readonly fields: Readonly<Record<string, JsonValue>> }>;
 
 type CommandStatus = "succeeded" | "rejected" | "timed-out" | "disconnected" | "transport-failed";
+type MsdkLinkState = "UNKNOWN" | "DISCONNECTED" | "CONNECTED";
+type MsdkPairingState = "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED";
 
 export interface DesktopRelayTelemetryPayload {
   readonly [key: string]: unknown;
   readonly sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED";
+  /** Monotonic `DeviceStateStore` revision for the MSDK device Key observation. */
+  readonly deviceRevision?: number;
   readonly sdkRegistered?: boolean;
+  /** Raw `RemoteControllerKey.KeyConnection` value from Android MSDK telemetry. */
+  readonly remoteController?: MsdkLinkState;
+  /** Raw `FlightControllerKey.KeyConnection` value from Android MSDK telemetry. */
+  readonly flightController?: MsdkLinkState;
+  /** Raw `ProductKey.KeyConnection` value from Android MSDK telemetry. */
+  readonly aircraft?: MsdkLinkState;
+  /** Raw `RemoteControllerKey.KeyPairingStatus` value from Android MSDK telemetry. */
+  readonly pairing?: MsdkPairingState;
+  /** Compatibility projections for existing control gates. Do not use for device facts. */
   readonly remoteControllerConnected?: boolean;
   readonly flightControllerConnected?: boolean;
   readonly connected?: boolean;
@@ -23,8 +36,10 @@ export interface DesktopRelayTelemetryPayload {
   readonly aircraftModel?: string;
   readonly remoteControllerModel?: string;
   readonly flightMode?: string;
+  readonly lowBatteryRthState?: "IDLE" | "COUNTING_DOWN" | "EXECUTED" | "CANCELLED";
   readonly remainingFlightTimeSeconds?: number;
-  readonly pairingState?: "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED";
+  /** Compatibility alias for existing callers. Do not use for device facts. */
+  readonly pairingState?: MsdkPairingState;
   readonly latitude?: number;
   readonly longitude?: number;
   readonly altitudeMeters?: number;
@@ -166,13 +181,21 @@ const longitude = (value: unknown): number | undefined => {
   const parsed = finiteNumber(value);
   return parsed !== undefined && parsed >= -180 && parsed <= 180 ? parsed : undefined;
 };
-const pairingState = (value: unknown): "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED" | undefined => {
+const pairingState = (value: unknown): MsdkPairingState | undefined => {
   const current = string(value);
   return current === "UNKNOWN" || current === "IDLE" || current === "PAIRING" || current === "PAIRED" || current === "STOPPING" || current === "FAILED" ? current : undefined;
 };
 const sdkAvailability = (value: unknown): "STOPPED" | "STARTING" | "READY" | "FAILED" | undefined => {
   const current = string(value);
   return current === "STOPPED" || current === "STARTING" || current === "READY" || current === "FAILED" ? current : undefined;
+};
+const msdkLinkState = (value: unknown): MsdkLinkState | undefined => {
+  const current = string(value);
+  return current === "UNKNOWN" || current === "DISCONNECTED" || current === "CONNECTED" ? current : undefined;
+};
+const lowBatteryRthState = (value: unknown): "IDLE" | "COUNTING_DOWN" | "EXECUTED" | "CANCELLED" | undefined => {
+  const current = string(value);
+  return current === "IDLE" || current === "COUNTING_DOWN" || current === "EXECUTED" || current === "CANCELLED" ? current : undefined;
 };
 const status = (value: unknown): CommandStatus => {
   const current = read(value, "status");
@@ -192,22 +215,43 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   if (payload === null || capabilities === null) return null;
   const outputPayload: MutableDesktopRelayTelemetryPayload = {};
   const outputCapabilities: { liveVideo?: boolean; waypointMission?: boolean; waypointMissionSupport?: "supported" | "unsupported" } = {};
+  const deviceRevision = positiveIntegerValue(payload.deviceRevision); if (deviceRevision !== undefined) outputPayload.deviceRevision = deviceRevision;
   const sdk = sdkAvailability(payload.sdkAvailability);
   if (sdk !== undefined) {
     outputPayload.sdkAvailability = sdk;
     outputPayload.sdkRegistered = sdk === "READY";
   }
-  const remote = string(payload.remoteController); if (remote === "CONNECTED") outputPayload.remoteControllerConnected = true; else if (remote === "DISCONNECTED") outputPayload.remoteControllerConnected = false;
-  const flight = string(payload.flightController); if (flight === "CONNECTED") outputPayload.flightControllerConnected = true; else if (flight === "DISCONNECTED") outputPayload.flightControllerConnected = false;
-  const aircraft = string(payload.aircraft); if (aircraft === "CONNECTED") outputPayload.connected = true; else if (aircraft === "DISCONNECTED") outputPayload.connected = false;
+  const remote = msdkLinkState(payload.remoteController);
+  if (remote !== undefined) {
+    outputPayload.remoteController = remote;
+    if (remote === "CONNECTED") outputPayload.remoteControllerConnected = true;
+    else if (remote === "DISCONNECTED") outputPayload.remoteControllerConnected = false;
+  }
+  const flight = msdkLinkState(payload.flightController);
+  if (flight !== undefined) {
+    outputPayload.flightController = flight;
+    if (flight === "CONNECTED") outputPayload.flightControllerConnected = true;
+    else if (flight === "DISCONNECTED") outputPayload.flightControllerConnected = false;
+  }
+  const aircraft = msdkLinkState(payload.aircraft);
+  if (aircraft !== undefined) {
+    outputPayload.aircraft = aircraft;
+    if (aircraft === "CONNECTED") outputPayload.connected = true;
+    else if (aircraft === "DISCONNECTED") outputPayload.connected = false;
+  }
   const isFlying = boolean(payload.isFlying); if (isFlying !== undefined) outputPayload.isFlying = isFlying;
   const motorsOn = boolean(payload.motorsOn); if (motorsOn !== undefined) outputPayload.motorsOn = motorsOn;
   const batteryPercent = number(payload.batteryPercent); if (batteryPercent !== undefined) outputPayload.batteryPercent = batteryPercent;
   const aircraftModel = safeText(string(payload.aircraftModel)); if (aircraftModel !== undefined) outputPayload.aircraftModel = aircraftModel;
   const remoteControllerModel = safeText(string(payload.remoteControllerModel)); if (remoteControllerModel !== undefined) outputPayload.remoteControllerModel = remoteControllerModel;
   const flightMode = safeText(string(payload.flightMode)); if (flightMode !== undefined) outputPayload.flightMode = flightMode;
-  const remainingFlightTimeSeconds = boundedInteger(payload.remainingFlightTimeSeconds, 0, 86_400); if (remainingFlightTimeSeconds !== undefined) outputPayload.remainingFlightTimeSeconds = remainingFlightTimeSeconds;
-  const pairing = pairingState(payload.pairing); if (pairing !== undefined) outputPayload.pairingState = pairing;
+  const rthState = lowBatteryRthState(payload.lowBatteryRthState); if (rthState !== undefined) outputPayload.lowBatteryRthState = rthState;
+  const remainingFlightTimeSeconds = rthState === undefined ? undefined : boundedInteger(payload.remainingFlightTimeSeconds, 1, 86_400); if (remainingFlightTimeSeconds !== undefined) outputPayload.remainingFlightTimeSeconds = remainingFlightTimeSeconds;
+  const pairing = pairingState(payload.pairing);
+  if (pairing !== undefined) {
+    outputPayload.pairing = pairing;
+    outputPayload.pairingState = pairing;
+  }
   const latitudeValue = latitude(payload.latitude);
   const longitudeValue = longitude(payload.longitude);
   if (latitudeValue !== undefined && longitudeValue !== undefined) {
@@ -242,25 +286,28 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   });
 }
 
-const CONTROL_TELEMETRY_MAX_AGE_MS = 3_000;
-
 function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterInstance {
   const relay = options.relay as RelaySource;
   const listeners = new Set<(snapshot: RelayOperationsSnapshot) => void>();
   let rawSnapshot: unknown = null;
   let disposed = false;
-  type CachedTelemetry = Readonly<{ readonly sessionId: string; readonly checkedAtMs: number; readonly telemetry: DesktopRelayTelemetry }>;
-  const displaySnapshots = new Map<string, CachedTelemetry>();
-  const controlSnapshots = new Map<string, CachedTelemetry>();
+  type CurrentObservation = Readonly<{ readonly sessionId: string; readonly deviceRevision: number; readonly telemetry: DesktopRelayTelemetry }>;
+  const observations = new Map<string, CurrentObservation>();
   const now = (): number | null => {
     try {
       const value = options.now === undefined ? Date.now() : options.now();
       return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
     } catch { return null; }
   };
-  const rawTelemetry = (deviceId: string): DesktopRelayTelemetry | null => {
+  type SessionTelemetry = Readonly<{ readonly sessionId: string | null; readonly telemetry: DesktopRelayTelemetry }>;
+  const rawTelemetry = (deviceId: string): SessionTelemetry | null => {
     if (disposed || !validId(deviceId) || typeof relay.latestTelemetry !== "function") return null;
-    try { return project(deviceId, relay.latestTelemetry(deviceId)); } catch { return null; }
+    try {
+      const source = relay.latestTelemetry(deviceId);
+      const telemetry = project(deviceId, source);
+      const sourceSessionId = read(source, "sessionId");
+      return telemetry === null ? null : freeze({ sessionId: validId(sourceSessionId) ? sourceSessionId : null, telemetry });
+    } catch { return null; }
   };
   const devices = (): readonly DesktopRelayDevice[] => {
     if (disposed || typeof relay.devices !== "function") return freeze([]);
@@ -281,29 +328,42 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     const device = devices().find((candidate) => candidate.deviceId === deviceId);
     return device !== undefined && validId(device.sessionId) ? device.sessionId : null;
   };
-  const discardStaleControlSnapshots = (): void => {
-    for (const [deviceId, cached] of displaySnapshots) if (activeSession(deviceId) !== cached.sessionId) displaySnapshots.delete(deviceId);
-    for (const [deviceId, cached] of controlSnapshots) if (activeSession(deviceId) !== cached.sessionId) controlSnapshots.delete(deviceId);
+  const deviceRevisionOf = (telemetry: DesktopRelayTelemetry): number | null => {
+    const value = telemetry.payload.deviceRevision;
+    return positiveInteger(value) ? value : null;
   };
-  const displaySnapshot = (deviceId: string): DesktopRelayTelemetry | null => {
-    discardStaleControlSnapshots();
-    return displaySnapshots.get(deviceId)?.telemetry ?? null;
+  const completeDeviceFact = (telemetry: DesktopRelayTelemetry): boolean =>
+    deviceRevisionOf(telemetry) !== null &&
+    telemetry.payload.sdkAvailability !== undefined &&
+    telemetry.payload.remoteController !== undefined &&
+    telemetry.payload.flightController !== undefined &&
+    telemetry.payload.aircraft !== undefined;
+  const discardStaleObservations = (): void => {
+    for (const [deviceId, observation] of observations) if (activeSession(deviceId) !== observation.sessionId) observations.delete(deviceId);
   };
-  const telemetry = (deviceId: string): DesktopRelayTelemetry | null => {
-    const raw = rawTelemetry(deviceId);
-    const cached = displaySnapshot(deviceId);
-    if (raw === null) return cached;
-    if (cached === null) return raw;
-    if (raw.receivedAtMs === null || cached.receivedAtMs === null || cached.receivedAtMs >= raw.receivedAtMs) return cached;
-    return raw;
+  const admit = (deviceId: string, sessionId: string, telemetry: DesktopRelayTelemetry): DesktopRelayTelemetry | null => {
+    const deviceRevision = deviceRevisionOf(telemetry);
+    if (deviceRevision === null || !completeDeviceFact(telemetry)) return null;
+    const previous = observations.get(deviceId);
+    if (previous !== undefined && previous.sessionId === sessionId && previous.deviceRevision > deviceRevision) return previous.telemetry;
+    observations.set(deviceId, freeze({ sessionId, deviceRevision, telemetry }));
+    return telemetry;
   };
-  const controlTelemetry = (deviceId: string): DesktopRelayTelemetry | null => {
+  const currentObservation = (deviceId: string): DesktopRelayTelemetry | null => {
     if (disposed || !validId(deviceId)) return null;
-    discardStaleControlSnapshots();
-    const cached = controlSnapshots.get(deviceId);
-    const checkedAtMs = now();
-    if (cached === undefined || checkedAtMs === null || checkedAtMs < cached.checkedAtMs || checkedAtMs - cached.checkedAtMs > CONTROL_TELEMETRY_MAX_AGE_MS) return null;
-    return cached.telemetry;
+    discardStaleObservations();
+    const sessionId = activeSession(deviceId);
+    const raw = rawTelemetry(deviceId);
+    if (sessionId === null) return raw?.telemetry ?? null;
+    if (raw === null) return observations.get(deviceId)?.telemetry ?? null;
+    if (raw.sessionId !== sessionId) return null;
+    admit(deviceId, sessionId, raw.telemetry);
+    return observations.get(deviceId)?.telemetry ?? raw.telemetry;
+  };
+  const telemetry = (deviceId: string): DesktopRelayTelemetry | null => currentObservation(deviceId);
+  const controlTelemetry = (deviceId: string): DesktopRelayTelemetry | null => {
+    const current = currentObservation(deviceId);
+    return current !== null && completeDeviceFact(current) ? current : null;
   };
   const ingressAddress = (deviceId: string): string | null => {
     if (disposed || !validId(deviceId) || typeof relay.ingressAddress !== "function" || !devices().some((device) => device.deviceId === deviceId)) return null;
@@ -328,7 +388,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   const publish = (): void => { if (disposed) return; const value = snapshot(); for (const listener of [...listeners]) { try { listener(value); } catch { /* subscriber faults are isolated */ } } };
   let unsubscribeRelay = (): void => undefined;
   if (typeof relay.subscribe === "function") {
-    try { unsubscribeRelay = relay.subscribe((value) => { rawSnapshot = value; discardStaleControlSnapshots(); publish(); }); } catch { /* an unavailable relay leaves the adapter offline */ }
+    try { unsubscribeRelay = relay.subscribe((value) => { rawSnapshot = value; discardStaleObservations(); publish(); }); } catch { /* an unavailable relay leaves the adapter offline */ }
   }
   const send = async (deviceId: string, name: string, fields: Record<string, JsonValue>): Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>> => {
     if (disposed || !validId(deviceId) || typeof relay.sendCommand !== "function") return commandFailure();
@@ -409,7 +469,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   });
   const projectTelemetryRead = (deviceId: string, receivedAtMs: number, result: JsonValue): DesktopRelayTelemetry | null => {
     const fields = fieldsOf(result);
-    if (fields === null || !Object.hasOwn(fields, "sdkAvailability") || !Object.hasOwn(fields, "remoteController") || !Object.hasOwn(fields, "flightController") || !Object.hasOwn(fields, "aircraft") || !Object.hasOwn(fields, "capabilities")) return null;
+    if (fields === null || !Object.hasOwn(fields, "deviceRevision") || !Object.hasOwn(fields, "sdkAvailability") || !Object.hasOwn(fields, "remoteController") || !Object.hasOwn(fields, "flightController") || !Object.hasOwn(fields, "aircraft") || !Object.hasOwn(fields, "capabilities")) return null;
     const capabilities = read(fields, "capabilities");
     if (fieldsOf(capabilities) === null) return null;
     const payload: UnknownRecord = {};
@@ -417,17 +477,13 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     return project(deviceId, freeze({ deviceId, receivedAtMs, payload: freeze({ kind: "object", fields: freeze(payload) }), capabilities }));
   };
   const refreshTelemetry = async (deviceId: string): Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>> => {
-    if (validId(deviceId)) controlSnapshots.delete(deviceId);
     const sessionId = validId(deviceId) ? activeSession(deviceId) : null;
     const outcome = await send(deviceId, "telemetry.read", {});
     const receivedAtMs = now();
     if (outcome.status !== "succeeded" || outcome.result === undefined || sessionId === null || receivedAtMs === null || activeSession(deviceId) !== sessionId) return outcome;
     const projected = projectTelemetryRead(deviceId, receivedAtMs, outcome.result);
-    if (projected !== null) {
-      const cached = freeze({ sessionId, checkedAtMs: receivedAtMs, telemetry: projected });
-      displaySnapshots.set(deviceId, cached);
-      controlSnapshots.set(deviceId, cached);
-    }
+    if (projected !== null) admit(deviceId, sessionId, projected);
+    publish();
     return outcome;
   };
   return freeze({
@@ -443,7 +499,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     flightGateway: () => flightGateway,
     settingsGateway: () => settingsGateway,
     refreshTelemetry,
-    dispose: () => { if (disposed) return; disposed = true; listeners.clear(); displaySnapshots.clear(); controlSnapshots.clear(); try { unsubscribeRelay(); } catch { /* adapter teardown is best effort */ } }
+    dispose: () => { if (disposed) return; disposed = true; listeners.clear(); observations.clear(); try { unsubscribeRelay(); } catch { /* adapter teardown is best effort */ } }
   });
 }
 

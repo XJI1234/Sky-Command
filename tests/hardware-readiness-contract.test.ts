@@ -14,7 +14,7 @@ const ready = (): HardwareReadinessInput => ({
 });
 
 describe("hardware readiness contract", () => {
-  it("allows legacy video when phone/SDK/remote are ready even if aircraft telemetry is down", () => {
+  it("allows legacy video with MSDK ready even when controller and flight telemetry are unavailable", () => {
     const result = HardwareReadiness.evaluate(ready(), "legacy-video");
 
     expect(result).toEqual({ ok: true, blockers: [] });
@@ -22,7 +22,7 @@ describe("hardware readiness contract", () => {
     expect(Object.isFrozen(result.blockers)).toBe(true);
     expect(HardwareReadiness.evaluate({
       ...ready(),
-      payload: { ...ready().payload, flightControllerConnected: false, connected: false },
+      payload: { ...ready().payload, remoteControllerConnected: false, flightControllerConnected: false, connected: false },
     }, "legacy-video")).toEqual({ ok: true, blockers: [] });
   });
 
@@ -46,7 +46,6 @@ describe("hardware readiness contract", () => {
       "PHONE_DISCONNECTED",
       "PHONE_SESSION_UNSTABLE",
       "SDK_NOT_READY",
-      "REMOTE_CONTROLLER_DISCONNECTED",
     ]);
     expect(result.blockers.every((blocker) => blocker.message.length > 0 && Object.isFrozen(blocker))).toBe(true);
   });

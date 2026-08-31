@@ -15,7 +15,7 @@ export interface RelayDiagnosticSink {
   persist(input: Readonly<{ readonly deviceId: string; readonly runId: string; readonly events: readonly DiagnosticEventFrame[] }>): boolean;
 }
 export interface RelayDeviceSnapshot { readonly deviceId: string; readonly sessionId: string; }
-export interface RelayTelemetrySnapshot { readonly deviceId: string; readonly payload: JsonObject; readonly capabilities: JsonObject; readonly receivedAtMs: number | null; }
+export interface RelayTelemetrySnapshot { readonly deviceId: string; readonly sessionId: string; readonly payload: JsonObject; readonly capabilities: JsonObject; readonly receivedAtMs: number | null; }
 export interface RelayMissionPhaseSnapshot {
   readonly deviceId: string;
   readonly missionRevision: number;
@@ -101,7 +101,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       // The close route removes this child state before the registry mapping.
       const device = deviceForConnection(value.connectionId);
       /* c8 ignore next -- a snapshot cannot retain telemetry for a removed registry entry. */
-      return device ? [frozen({ deviceId: device.deviceId, payload: value.payload, capabilities: value.capabilities, receivedAtMs: value.receivedAtMs })] : [];
+      return device ? [frozen({ deviceId: device.deviceId, sessionId: device.sessionId, payload: value.payload, capabilities: value.capabilities, receivedAtMs: value.receivedAtMs })] : [];
     }));
     const phaseFacts = Object.freeze(missionPhases.snapshot().flatMap((value) => {
       const device = deviceForConnection(value.connectionId);
@@ -214,7 +214,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     latestTelemetry: (deviceId: string): RelayTelemetrySnapshot | null => {
       if (!validId(deviceId)) return null;
       const device = registry.getByDevice(deviceId); if (!device) return null;
-      const value = intake.get(device.connectionId); return value ? frozen({ deviceId, payload: value.payload, capabilities: value.capabilities, receivedAtMs: value.receivedAtMs }) : null;
+      const value = intake.get(device.connectionId); return value ? frozen({ deviceId, sessionId: device.sessionId, payload: value.payload, capabilities: value.capabilities, receivedAtMs: value.receivedAtMs }) : null;
     },
     ingressAddress: (deviceId: string): string | null => {
       if (!validId(deviceId)) return null;

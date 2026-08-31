@@ -207,12 +207,14 @@ const missionLabelOf = (mission: unknown): string => {
 };
 const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (device === undefined) return "图传未就绪：未选择图传机";
+  const streamPhase = text(read(read(device, "stream"), "phase"));
+  // 停止命令尚未确认时，播放器的最后一帧不能覆盖控制车道的事实。
+  if (streamPhase === "stopping") return "正在停止图传";
   const videoPhase = text(read(read(device, "video"), "phase"));
   if (videoPhase === "ready") return "图传播放中";
   if (videoPhase === "awaiting-playback") return "正在准备画面";
   if (videoPhase === "awaiting-ingest") return "手机已接受推流，等待接收";
   if (videoPhase === "failed") return "图传失败";
-  const streamPhase = text(read(read(device, "stream"), "phase"));
   // 手机常回报 START_OK 但不真正推 RTMP；无画面时不得写成「已经有图传」。
   if (streamPhase === "starting" || streamPhase === "streaming") {
     return "手机已接命令，电脑还没收到画面";
@@ -228,16 +230,12 @@ const streamStartIssueOf = (device: Record<string, unknown> | undefined): Stream
   if (device === undefined) return freeze({ label: "未选择图传机", reason: "请选择用于图传的飞机" });
   const connection = controlConnection(device);
   if (read(connection, "sdk") !== "ready") return freeze({ label: "等待手机就绪", reason: "手机尚未就绪，无法启动图传" });
-  if (read(connection, "remoteController") !== "connected") return freeze({ label: "遥控器未连接", reason: "遥控器未连接，无法启动图传" });
-  const liveVideo = read(read(device, "capabilities"), "liveVideo");
-  if (liveVideo === "unsupported") return freeze({ label: "当前机不支持图传", reason: "当前机不支持图传" });
-  if (liveVideo !== "supported") return freeze({ label: "等待图传能力确认", reason: "尚未确认当前机是否支持图传" });
   return null;
 };
 const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean => {
   if (device === undefined) return false;
   const streamPhase = text(read(read(device, "stream"), "phase"));
-  if (streamPhase === "starting" || streamPhase === "streaming" || streamPhase === "stopping") return false;
+  if (streamPhase === "starting" || streamPhase === "streaming") return false;
   return streamStartIssueOf(device) === null;
 };
 const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean => {

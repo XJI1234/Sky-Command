@@ -43,22 +43,20 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
   // Stryker disable next-line ConditionalExpression: the operation list rejects every non-string after runtime coercion, so removing this redundant precheck cannot change the public result.
   if (typeof input.operation !== "string" || !operations.includes(input.operation as DeviceOperation)) return failure("operation", "invalid-value");
   const operation = input.operation as DeviceOperation;
-  const fields = ["relayConnected", "sdkRegistered", "remoteControllerConnected", "flightControllerConnected", "aircraftConnected"] as const;
+  if (optionalBoolean(input.sdkRegistered) === null) return failure("sdkRegistered", "invalid-value");
+  if (input.relayConnected !== true) return decision(operation, false, "RELAY_OFFLINE");
+  if (input.sdkRegistered !== true) return decision(operation, false, "SDK_NOT_READY");
+  // `startStream` has no desktop-verifiable aircraft/RC/model precondition. DJI completion is authoritative.
+  if (operation === "live-stream") return decision(operation, true, null);
+  const fields = ["remoteControllerConnected", "flightControllerConnected", "aircraftConnected"] as const;
   for (const field of fields) if (optionalBoolean(input[field]) === null) return failure(field, "invalid-value");
   const capabilities = readCapabilities(input.capabilities);
   if (capabilities === "invalid-value" || capabilities === "unreadable") return failure("capabilities.liveVideo", capabilities);
-  if (input.relayConnected !== true) return decision(operation, false, "RELAY_OFFLINE");
-  if (input.sdkRegistered !== true) return decision(operation, false, "SDK_NOT_READY");
   if (operation === "pairing") {
     if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
     if (input.aircraftConnected === true) return decision(operation, false, "PAIRING_NOT_NEEDED");
     if (input.aircraftConnected !== false || input.flightControllerConnected !== false) return decision(operation, false, "AIRCRAFT_CONNECTION_UNKNOWN");
     return decision(operation, true, null);
-  }
-  // 旧 RTMP 图传只要求 SDK 与 liveVideo 能力；飞机/飞控未连时由 DJI 启动失败回报，不得在桌面误拦推流命令。
-  if (operation === "live-stream") {
-    if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
-    return capabilities === null || capabilities.liveVideo === undefined ? decision(operation, false, "CAPABILITY_UNKNOWN") : capabilities.liveVideo ? decision(operation, true, null) : decision(operation, false, "LIVE_VIDEO_UNSUPPORTED");
   }
   if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
   if (input.flightControllerConnected !== true || input.aircraftConnected !== true) return decision(operation, false, "AIRCRAFT_NOT_CONNECTED");

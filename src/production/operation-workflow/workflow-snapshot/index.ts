@@ -3,6 +3,11 @@ const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value)
 const record = (value: unknown): RecordValue | null => value !== null && typeof value === "object" ? value as RecordValue : null;
 const read = (value: unknown, key: string): unknown => { try { return record(value)?.[key]; } catch { return undefined; } };
 const state = (value: unknown, yes: string, no: string): string => value === true ? yes : value === false ? no : "unknown";
+const linkState = (value: unknown): "connected" | "disconnected" | "unknown" => {
+  if (value === "CONNECTED") return "connected";
+  if (value === "DISCONNECTED") return "disconnected";
+  return "unknown";
+};
 const msdkState = (value: unknown): "stopped" | "starting" | "ready" | "failed" | "unknown" => {
   if (value === "STOPPED") return "stopped";
   if (value === "STARTING") return "starting";
@@ -12,6 +17,8 @@ const msdkState = (value: unknown): "stopped" | "starting" | "ready" | "failed" 
 };
 const pairingStates = ["UNKNOWN", "IDLE", "PAIRING", "PAIRED", "STOPPING", "FAILED"] as const;
 const pairingState = (value: unknown): string => typeof value === "string" && pairingStates.includes(value as typeof pairingStates[number]) ? value : "unknown";
+const lowBatteryRthStates = ["IDLE", "COUNTING_DOWN", "EXECUTED", "CANCELLED"] as const;
+const lowBatteryRthState = (value: unknown): typeof lowBatteryRthStates[number] | "unknown" => typeof value === "string" && lowBatteryRthStates.includes(value as typeof lowBatteryRthStates[number]) ? value as typeof lowBatteryRthStates[number] : "unknown";
 const poseNumber = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
 const safeText = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value) ? value : null;
 const boundedInteger = (value: unknown, minimum: number, maximum: number): number | null => typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : null;
@@ -36,33 +43,35 @@ const live = (payload: unknown) => {
   });
 };
 const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
-  const flightController = state(read(payload, "flightControllerConnected"), "connected", "disconnected");
+  const flightController = linkState(read(payload, "flightController"));
   const flightFactsAvailable = flightController !== "disconnected";
+  const rthState = flightFactsAvailable ? lowBatteryRthState(read(payload, "lowBatteryRthState")) : "unknown";
   return freeze({
     relay: "online" as const,
     telemetryReceivedAtMs: boundedInteger(telemetryReceivedAtMs, 0, Number.MAX_SAFE_INTEGER),
     sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"),
     msdk: msdkState(read(payload, "sdkAvailability")),
-    remoteController: state(read(payload, "remoteControllerConnected"), "connected", "disconnected"),
+    remoteController: linkState(read(payload, "remoteController")),
     flightController,
-    aircraft: state(read(payload, "connected"), "connected", "disconnected"),
+    aircraft: linkState(read(payload, "aircraft")),
     aircraftModel: safeText(read(payload, "aircraftModel")),
     remoteControllerModel: safeText(read(payload, "remoteControllerModel")),
     batteryPercent: flightFactsAvailable ? boundedInteger(read(payload, "batteryPercent"), 0, 100) : null,
     flightState: flightFactsAvailable ? state(read(payload, "isFlying"), "flying", "grounded") : "unknown",
     motorsOn: flightFactsAvailable && typeof read(payload, "motorsOn") === "boolean" ? read(payload, "motorsOn") as boolean : null,
     flightMode: flightFactsAvailable ? safeText(read(payload, "flightMode")) : null,
-    remainingFlightTimeSeconds: flightFactsAvailable ? boundedInteger(read(payload, "remainingFlightTimeSeconds"), 0, 86_400) : null,
-    pairingState: pairingState(read(payload, "pairingState")),
+    lowBatteryRthState: rthState,
+    remainingFlightTimeSeconds: rthState === "unknown" ? null : boundedInteger(read(payload, "remainingFlightTimeSeconds"), 1, 86_400),
+    pairingState: pairingState(read(payload, "pairing")),
     pose: flightFactsAvailable ? pose(payload) : null,
     live: live(payload),
   });
 };
 const control = (payload: unknown) => freeze({
   sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"),
-  remoteController: state(read(payload, "remoteControllerConnected"), "connected", "disconnected"),
-  flightController: state(read(payload, "flightControllerConnected"), "connected", "disconnected"),
-  aircraft: state(read(payload, "connected"), "connected", "disconnected"),
+  remoteController: linkState(read(payload, "remoteController")),
+  flightController: linkState(read(payload, "flightController")),
+  aircraft: linkState(read(payload, "aircraft")),
 });
 
 function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {

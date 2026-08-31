@@ -58,22 +58,35 @@ describe("操作台投影", () => {
   it("设备详情以六个具名独立行呈现连接事实", () => {
     const source = renderer();
     expect(source).toContain('class="connection-status-list"');
-    expect(source).toContain('statusRow("电脑到手机中继", "中继在线", true)');
-    expect(source).toContain('statusRow("MSDK", msdk.label, msdk.ok)');
-    expect(source).toContain('statusRow("遥控器", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))');
-    expect(source).toContain('statusRow("对频", pairing.label, pairing.ok)');
-    expect(source).toContain('statusRow("飞控", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))');
-    expect(source).toContain('statusRow("飞机", connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知"), connected(connection, "aircraft"))');
+    expect(source).toContain('statusRow("电脑到手机中继 [桌面 Relay Session]", "中继在线", true)');
+    expect(source).toContain('statusRow("MSDK 生命周期 [SDKManager]", msdk.label, msdk.ok)');
+    expect(source).toContain('statusRow("遥控器连接 [RemoteControllerKey.KeyConnection]", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))');
+    expect(source).toContain('statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)');
+    expect(source).toContain('statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))');
+    expect(source).toContain('statusRow("飞机连接 [ProductKey.KeyConnection]", connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知"), connected(connection, "aircraft"))');
   });
 
-  it("设备详情将动态事实、任务、手机推流和桌面播放逐行分开呈现", () => {
+  it("设备详情将动态事实、任务、手机推流和当前图传机的桌面播放逐行分开呈现", () => {
     const source = renderer();
     expect(source).toContain("deviceFactRows(connection)");
-    expect(source).toContain("runtimeStatusRows(inspected)");
-    expect(source).toContain('statusRow("状态更新时间", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection))');
-    expect(source).toContain('statusRow("任务", missionRuntimeLabel(read(device, "mission")), false)');
-    expect(source).toContain('statusRow("手机推流", streamRuntimeLabel(device), false)');
-    expect(source).toContain('statusRow("桌面播放", playbackRuntimeLabel(read(device, "video")), false)');
+    expect(source).toContain('statusRow("机型 [ProductKey.KeyProductType]"');
+    expect(source).toContain('statusRow("遥控器型号 [RemoteControllerKey.KeyRemoteControllerType]"');
+    expect(source).toContain('statusRow("飞行状态 [FlightControllerKey.KeyIsFlying]"');
+    expect(source).toContain('statusRow("电机 [FlightControllerKey.KeyAreMotorsOn]"');
+    expect(source).toContain('statusRow("电量 [BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]"');
+    expect(source).toContain('statusRow("低电量返航状态 [FlightControllerKey.KeyLowBatteryRTHInfo]"');
+    expect(source).toContain('statusRow("低电量返航预估 [FlightControllerKey.KeyLowBatteryRTHInfo]"');
+    expect(source).toContain('statusRow("飞行模式 [FlightControllerKey.KeyFCFlightMode]"');
+    expect(source).toContain('statusRow("高度 [FlightControllerKey.KeyAltitude]"');
+    expect(source).toContain('statusRow("位置 [FlightControllerKey.KeyAircraftLocation]"');
+    expect(source).toContain('statusRow("MSDK 图传观测 [手机 MSDK 图传运行观测]"');
+    expect(source).toContain('statusRow("状态更新时间 [桌面接收时间]"');
+    expect(source).toContain("runtimeStatusRows(inspected, view.streamDeviceId)");
+    expect(source).toContain('statusRow("状态更新时间 [桌面接收时间]", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection))');
+    expect(source).toContain('statusRow("任务 [手机任务运行状态]", missionRuntimeLabel(read(device, "mission")), false)');
+    expect(source).toContain('statusRow("手机推流 [手机图传运行状态]", streamRuntimeLabel(device), false)');
+    expect(source).toContain('statusRow("桌面播放 [桌面播放器运行状态]", playbackRuntimeLabel(device, streamDeviceId), false)');
+    expect(source).toContain('await bridge().invoke("stream-select", { deviceId: view.streamDeviceId })');
   });
 
   it("飞控状态未知时把保留的动态事实明确标为上次更新且当前未确认", () => {
@@ -105,9 +118,9 @@ describe("操作台投影", () => {
       workspace: "flight",
     });
 
-    expect(view.streamCanStart).toBe(false);
+    expect(view.streamCanStart).toBe(true);
     expect(view.missionActions.start).toEqual({ enabled: false, reason: "遥控器未连接" });
-    expect(OperatorConsole.evaluate("stream-start", view)).toEqual({ ok: false, reason: "遥控器未连接，无法启动图传" });
+    expect(OperatorConsole.evaluate("stream-start", view)).toEqual({ ok: true });
   });
 
   it("多机时不自动改选任务机或图传机", () => {
@@ -481,6 +494,18 @@ describe("操作台工作区", () => {
     expect(ready.streamCanStop).toBe(true);
   });
 
+  it("停止图传时不能被遗留播放器画面掩盖，并允许登记停止后重启", () => {
+    const stopping = OperatorConsole.project({
+      snapshot: snapshot([device({ stream: { phase: "stopping" }, video: { phase: "ready", selected: true } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(stopping.streamLabel).toBe("正在停止图传");
+    expect(stopping.streamCanStart).toBe(true);
+    expect(stopping.streamCanStop).toBe(true);
+  });
+
   it("空闲图传必须提前标明能否启动，而不是笼统写空闲", () => {
     const ready = OperatorConsole.project({
       snapshot: snapshot([device()]),
@@ -496,8 +521,8 @@ describe("操作台工作区", () => {
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(noRc.streamLabel).toBe("图传未就绪：遥控器未连接");
-    expect(noRc.streamCanStart).toBe(false);
+    expect(noRc.streamLabel).toBe("图传可启动");
+    expect(noRc.streamCanStart).toBe(true);
 
     const noSdk = OperatorConsole.project({
       snapshot: snapshot([device({ control: { ...device().connection, sdk: "not-ready" } })]),
@@ -512,9 +537,9 @@ describe("操作台工作区", () => {
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(unknownCapability.streamLabel).toBe("图传未就绪：等待图传能力确认");
-    expect(unknownCapability.streamCanStart).toBe(false);
-    expect(OperatorConsole.evaluate("stream-start", unknownCapability)).toEqual({ ok: false, reason: "尚未确认当前机是否支持图传" });
+    expect(unknownCapability.streamLabel).toBe("图传可启动");
+    expect(unknownCapability.streamCanStart).toBe(true);
+    expect(OperatorConsole.evaluate("stream-start", unknownCapability)).toEqual({ ok: true });
 
     const noAircraft = OperatorConsole.project({
       snapshot: snapshot([device({ connection: { ...device().connection, aircraft: "disconnected" } })]),

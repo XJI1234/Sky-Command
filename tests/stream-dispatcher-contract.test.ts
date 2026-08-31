@@ -278,6 +278,57 @@ describe("StreamDispatcher", () => {
     expect(events).toHaveLength(beforeDispose);
   });
 
+  it("queues a restart requested during stopping until the phone confirms the stop", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    const operations: string[] = [];
+    const value = fixture({
+      send: async (_deviceId, request) => new Promise((resolve) => {
+        operations.push((request as { name: string }).name);
+        resolvers.push(resolve);
+      }),
+    });
+
+    const initialStart = value.dispatcher.start("phone-1");
+    resolvers.shift()!({ status: "succeeded" });
+    await expect(initialStart).resolves.toMatchObject({ ok: true, state: { phase: "streaming" } });
+
+    const stopping = value.dispatcher.stop("phone-1");
+    const restart = value.dispatcher.start("phone-1");
+    expect(value.dispatcher.get("phone-1")).toMatchObject({ phase: "stopping" });
+    expect(operations).toEqual(["live-stream.start", "live-stream.stop"]);
+
+    resolvers.shift()!({ status: "succeeded" });
+    await expect(stopping).resolves.toMatchObject({ ok: true, state: { phase: "idle" } });
+    expect(value.dispatcher.get("phone-1")).toMatchObject({ phase: "starting" });
+    expect(operations).toEqual(["live-stream.start", "live-stream.stop", "live-stream.start"]);
+
+    resolvers.shift()!({ status: "succeeded" });
+    await expect(restart).resolves.toMatchObject({ ok: true, operation: "start", state: { phase: "streaming" } });
+  });
+
+  it("does not issue a queued restart when the stop is rejected", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    const operations: string[] = [];
+    const value = fixture({
+      send: async (_deviceId, request) => new Promise((resolve) => {
+        operations.push((request as { name: string }).name);
+        resolvers.push(resolve);
+      }),
+    });
+
+    const initialStart = value.dispatcher.start("phone-1");
+    resolvers.shift()!({ status: "succeeded" });
+    await initialStart;
+
+    const stopping = value.dispatcher.stop("phone-1");
+    const restart = value.dispatcher.start("phone-1");
+    resolvers.shift()!({ status: "rejected" });
+
+    await expect(stopping).resolves.toMatchObject({ ok: false, operation: "stop", code: "RELAY_REJECTED", state: { phase: "failed" } });
+    await expect(restart).resolves.toMatchObject({ ok: false, operation: "start", code: "RELAY_REJECTED", state: { phase: "failed" } });
+    expect(operations).toEqual(["live-stream.start", "live-stream.stop"]);
+  });
+
   it("keeps list order and snapshots immutable across terminal lanes and missing lookups", async () => {
     const value = fixture({ send: async () => ({ status: "rejected" }) });
     await value.dispatcher.stop("z-phone");

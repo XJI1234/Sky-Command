@@ -12,6 +12,13 @@ const rounded = (value: number, decimals: number): string => {
   return Number.isInteger(normalized) ? String(normalized) : normalized.toFixed(decimals);
 };
 const duration = (seconds: number): string => `低电量返航预估 ${Math.floor(seconds / 60)}分${seconds % 60}秒`;
+const lowBatteryRthLabel = (value: unknown): string | null => {
+  if (value === "IDLE") return "低电量返航未触发";
+  if (value === "COUNTING_DOWN") return "低电量返航正在倒计时";
+  if (value === "EXECUTED") return "低电量返航已执行";
+  if (value === "CANCELLED") return "低电量返航已取消";
+  return null;
+};
 
 function format(connection: unknown): string {
   const parts: string[] = [];
@@ -22,7 +29,9 @@ function format(connection: unknown): string {
 
   const battery = boundedInteger(read(connection, "batteryPercent"), 0, 100);
   parts.push(battery === null ? "电量尚未取得" : `电量 ${battery}%`);
-  const remaining = boundedInteger(read(connection, "remainingFlightTimeSeconds"), 0, 86_400);
+  const rthState = lowBatteryRthLabel(read(connection, "lowBatteryRthState"));
+  if (rthState !== null) parts.push(rthState);
+  const remaining = rthState === null ? null : boundedInteger(read(connection, "remainingFlightTimeSeconds"), 1, 86_400);
   if (remaining !== null) parts.push(duration(remaining));
 
   const flightState = read(connection, "flightState");

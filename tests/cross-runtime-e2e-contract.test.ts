@@ -593,8 +593,9 @@ describe("跨运行时桌面测试宿主", () => {
     });
     try {
       const device = await host.waitForDevice(30_000);
-      expect((await host.relay.sendCommand(device.deviceId, { name: "telemetry.read", fields: {} })).status).toBe("succeeded");
+      expect((await host.operations.refreshTelemetry(device.deviceId)).status).toBe("succeeded");
       await waitUntil(() => host.operations.telemetry(device.deviceId) !== null);
+      expect(host.operations.controlTelemetry(device.deviceId)).not.toBeNull();
       expect(host.mediaPipeline.snapshot()).toMatchObject({
         phase: "running",
         endpoint: { host: "192.168.50.10" },
@@ -675,8 +676,9 @@ describe("跨运行时桌面测试宿主", () => {
     });
     try {
       const device = await host.waitForDevice(30_000);
-      expect((await host.relay.sendCommand(device.deviceId, { name: "telemetry.read", fields: {} })).status).toBe("succeeded");
+      expect((await host.operations.refreshTelemetry(device.deviceId)).status).toBe("succeeded");
       await waitUntil(() => host.operations.telemetry(device.deviceId) !== null);
+      expect(host.operations.controlTelemetry(device.deviceId)).not.toBeNull();
       const requested = host.flightControl.request(device.deviceId, "takeoff");
       if (!requested.ok) throw new Error(JSON.stringify(requested));
       expect(requested).toMatchObject({ ok: true, code: "CONFIRMATION_REQUIRED" });

@@ -32,8 +32,10 @@ instance.subscribe(listener) -> unsubscribe
 1. 校验设备标识和同设备互斥；
 2. 读取 `media-pipeline` 快照，只有 `phase === "running"` 且存在有效 `endpoint.host`、`endpoint.port` 时继续；
 3. 调用 `stream-protocol-config.createRtmpTarget`，获得唯一的 RTMP 目标；
-4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`；
+4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。这个门禁只验证中继和 MSDK 生命周期；不把遥控器、飞控、飞机或 `liveVideo` 遥测解释为型号支持性；
 5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。
+
+当同一设备正处于 `stopping` 时，`start(deviceId)` 不是并发命令：它登记一次“停止后重启”意图，并等待现有停止命令的终态。停止成功后，调度器必须重新执行上述全部启动检查，再发送唯一一条 `live-stream.start`；停止失败或设备断线时，不得发送启动命令，所有已登记调用必须得到该终态失败。处于 `starting` 的同设备 `start`、以及所有其他忙碌冲突，仍返回 `OPERATION_IN_PROGRESS`。多个停止期间的启动请求可以合并为一次实际启动，但每个调用都必须收到该次启动的最终结果。
 
 `stop(deviceId)` 不读取媒体端点、不构造地址、也不走启动用的 `CapabilityGate(live-stream)`。它只校验设备标识与同设备互斥，进入 `stopping` 后发送冻结空字段对象。中继成功时进入 `idle`，失败时进入 `failed`。手机端命令成功只表示 DJI 操作结果，播放器可用性仍由 `media-pipeline` 决定。
 
@@ -43,7 +45,7 @@ instance.subscribe(listener) -> unsubscribe
 
 一个 `deviceId` 一个记录，阶段为 `idle`、`starting`、`streaming`、`stopping`、`failed` 或 `disconnected`。快照只含设备标识、阶段、最后操作、失败码和能力拒绝原因，绝不含 RTMP URL、令牌、媒体地址或异常。
 
-同设备的进行中操作互斥，不同设备可并行。断线立即将已存在的设备记录标记为 `disconnected`；断线前开始的异步结果是迟到结果，必须忽略。`forget` 只能删除 `idle`、`failed` 或 `disconnected` 记录。快照按 `deviceId` 排序、逐层冻结并与内部状态隔离；订阅者异常不会影响状态或其他订阅者，注销幂等。
+同设备的进行中操作互斥，不同设备可并行；唯一例外是 `stopping` 期间登记的“停止后重启”意图，它绝不与停止命令并发执行。断线立即将已存在的设备记录标记为 `disconnected`，并终止尚未执行的重启意图；断线前开始的异步结果是迟到结果，必须忽略。`forget` 只能删除 `idle`、`failed` 或 `disconnected` 记录。快照按 `deviceId` 排序、逐层冻结并与内部状态隔离；订阅者异常不会影响状态或其他订阅者，注销幂等。
 
 ## 验收
 

@@ -2,7 +2,6 @@ import { AssignmentRegistry } from "./assignment-registry/index.js";
 import { WorkflowSnapshot } from "./workflow-snapshot/index.js";
 import { WorkflowSubscriptions } from "./workflow-subscriptions/index.js";
 import { WorkflowActions } from "./workflow-actions/index.js";
-import { createConnectionHold } from "./connection-hold.js";
 import type { OperationWorkflowDependencies, RouteLibraryPort } from "./ports.js";
 import { CapabilityGate } from "../../modules/device-console/index.js";
 import { HardwareReadiness, type HardwareReadinessResult, type HardwareReadinessTarget } from "../../modules/hardware-readiness/index.js";
@@ -47,7 +46,6 @@ function create(dependencies: OperationWorkflowDependencies) {
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
   const connectedSince = new Map<string, number>();
-  const connectionHold = createConnectionHold();
   const initialConnectionTime = clock();
   if (initialConnectionTime !== null) for (const deviceId of previousOnline) connectedSince.set(deviceId, initialConnectionTime);
   const online = (deviceId: string): boolean => onlineIds().includes(deviceId);
@@ -58,20 +56,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   const stream = (deviceId: string): unknown => { try { return dependencies.liveStreamControl.get(deviceId); } catch { return freeze({ deviceId, phase: "idle" }); } };
   const telemetryRaw = (deviceId: string): unknown => { try { return dependencies.relayOperations.telemetry(deviceId); } catch { return null; } };
   const controlTelemetryRaw = (deviceId: string): unknown => { try { return dependencies.relayOperations.controlTelemetry(deviceId); } catch { return null; } };
-  // UI-only projection: connection drops are briefly held to avoid visible flicker.
-  const telemetryForDisplay = (deviceId: string, raw: unknown = telemetryRaw(deviceId)): unknown => {
-    const now = clock();
-    const source = record(raw);
-    const payload = source === null ? null : record(read(source, "payload"));
-    if (source === null || payload === null || now === null) return raw;
-    const next = freeze({
-      ...payload,
-      connected: connectionHold.hold(deviceId, "connected", payload.connected, now),
-      remoteControllerConnected: connectionHold.hold(deviceId, "remoteControllerConnected", payload.remoteControllerConnected, now),
-      flightControllerConnected: connectionHold.hold(deviceId, "flightControllerConnected", payload.flightControllerConnected, now),
-    });
-    return freeze({ ...source, payload: next });
-  };
+  const telemetryForDisplay = (_deviceId: string, raw: unknown = telemetryRaw(_deviceId)): unknown => raw;
   const settings = (deviceId: string): unknown => { try { return dependencies.deviceSettings.snapshot(deviceId); } catch { return freeze({}); } };
   const media = (): unknown => { try { return dependencies.mediaPipeline.snapshot(); } catch { return freeze({ streams: [] }); } };
   const clearFlightConfirm = (deviceId: string): void => {
@@ -86,7 +71,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
   const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => {
     const rawTelemetry = telemetryRaw(deviceId);
-    return freeze({ deviceId, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: rawTelemetry, assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId) });
+    return freeze({ deviceId, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: controlTelemetryRaw(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId) });
   }), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
   const publish = (): void => { revision += 1; const current = snapshot(); for (const listener of [...listeners]) { try { listener(current); } catch { /* listener faults are isolated */ } } };
   const forgetVideo = (deviceId: string): void => {
@@ -105,7 +90,6 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!gone && !replaced) continue;
       // 设备消失或会话替换：危险确认与图传车道都必须作废，避免重连后点到旧确认。
       clearFlightConfirm(deviceId);
-      connectionHold.forget(deviceId);
       if (gone) {
         connectedSince.delete(deviceId);
         assignments.removeDevice(deviceId);
@@ -311,7 +295,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); connectionHold.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
   });
 }
 

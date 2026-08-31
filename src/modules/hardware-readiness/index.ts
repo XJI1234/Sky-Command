@@ -96,9 +96,9 @@ export const HardwareReadiness = freeze({
     if (normalized.relayConnected !== true) codes.push("PHONE_DISCONNECTED");
     if (normalized.relayStable !== true) codes.push("PHONE_SESSION_UNSTABLE");
     if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
-    if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-    // 旧图传推流不依赖飞控/飞机遥测门闩；飞控动作仍要求完整链路。
+    // DJI 直播管理器的实际结果由异步回调确认；旧图传只要求能调用已就绪 MSDK。
     if (target === "flight-control") {
+      if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
       if (normalized.flightControllerConnected !== true) codes.push("FLIGHT_CONTROLLER_DISCONNECTED");
       if (normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
     }

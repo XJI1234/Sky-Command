@@ -17,6 +17,7 @@
     "test:types": "tsc --noEmit -p tsconfig.type-tests.json",
     "test:mutation": "stryker run stryker/stryker.config.json",
     "build": "node scripts/build-desktop.mjs",
+    "package:win": "npm run build && electron-builder --win nsis --x64",
     "desktop": "electron electron/main.mjs",
     "start:desktop": "npm run build && npm run desktop",
     "check": "npm run test:types && npm run test:coverage && npm run test:performance",
@@ -29,6 +30,7 @@
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^4.1.10",
     "electron": "^37.2.6",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.12",
     "fast-check": "^4.2.0",
     "tsx": "^4.20.3",
@@ -45,5 +47,35 @@
     "node-media-server": "^2.6.6",
     "saxes": "^6.0.0",
     "ws": "^8.18.3"
+  },
+  "build": {
+    "appId": "com.skycommand.desktop",
+    "productName": "Sky Command",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Sky Command"
+    }
   }
 }
