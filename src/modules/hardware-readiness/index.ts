@@ -6,7 +6,6 @@ export interface HardwareReadinessInput {
     readonly legacyMediaAvailable: boolean;
   };
   readonly relayConnected: boolean;
-  readonly relayStable: boolean;
   readonly payload: {
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
@@ -20,7 +19,6 @@ export type HardwareReadinessBlockerCode =
   | "DESKTOP_NETWORK_UNAVAILABLE"
   | "LEGACY_MEDIA_UNAVAILABLE"
   | "PHONE_DISCONNECTED"
-  | "PHONE_SESSION_UNSTABLE"
   | "SDK_NOT_READY"
   | "REMOTE_CONTROLLER_DISCONNECTED"
   | "FLIGHT_CONTROLLER_DISCONNECTED"
@@ -42,7 +40,6 @@ const messages: Readonly<Record<HardwareReadinessBlockerCode, string>> = freeze(
   DESKTOP_NETWORK_UNAVAILABLE: "电脑没有可用的局域网地址，请检查 Wi-Fi/网线。",
   LEGACY_MEDIA_UNAVAILABLE: "电脑图传服务不可用，请重启 Sky Command。",
   PHONE_DISCONNECTED: "手机尚未连接到电脑。",
-  PHONE_SESSION_UNSTABLE: "手机刚连上，请稍等十几秒再操作。",
   SDK_NOT_READY: "手机端 DJI 尚未就绪，请在手机上确认已启动。",
   REMOTE_CONTROLLER_DISCONNECTED: "遥控器尚未连接。",
   FLIGHT_CONTROLLER_DISCONNECTED: "飞机飞控未连接，请确认飞机已开机。",
@@ -53,7 +50,6 @@ interface NormalizedInput {
   readonly lanAddressAvailable: unknown;
   readonly legacyMediaAvailable: unknown;
   readonly relayConnected: unknown;
-  readonly relayStable: unknown;
   readonly sdkRegistered: unknown;
   readonly remoteControllerConnected: unknown;
   readonly flightControllerConnected: unknown;
@@ -68,7 +64,6 @@ const normalize = (value: unknown): NormalizedInput | null => {
       lanAddressAvailable: value.desktop.lanAddressAvailable,
       legacyMediaAvailable: value.desktop.legacyMediaAvailable,
       relayConnected: value.relayConnected,
-      relayStable: value.relayStable,
       sdkRegistered: value.payload.sdkRegistered,
       remoteControllerConnected: value.payload.remoteControllerConnected,
       flightControllerConnected: value.payload.flightControllerConnected,
@@ -94,7 +89,6 @@ export const HardwareReadiness = freeze({
     if (target === "legacy-video" && normalized.lanAddressAvailable !== true) codes.push("DESKTOP_NETWORK_UNAVAILABLE");
     if (target === "legacy-video" && normalized.legacyMediaAvailable !== true) codes.push("LEGACY_MEDIA_UNAVAILABLE");
     if (normalized.relayConnected !== true) codes.push("PHONE_DISCONNECTED");
-    if (normalized.relayStable !== true) codes.push("PHONE_SESSION_UNSTABLE");
     if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
     // DJI 直播管理器的实际结果由异步回调确认；旧图传只要求能调用已就绪 MSDK。
     if (target === "flight-control") {

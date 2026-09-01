@@ -44,28 +44,24 @@ export function createConnectionHold(dropHoldMs: number = DROP_HOLD_MS): Connect
         records.set(key, { shown: undefined, candidate: undefined, sinceMs: nowMs });
         return undefined;
       }
-      // false→true：立即恢复，避免操作被拖慢。
-      if (prev.shown === false && next === true) {
+      // 任意已知状态恢复为 true：立即显示，避免操作被拖慢。
+      if (next === true) {
         records.set(key, { shown: true, candidate: true, sinceMs: nowMs });
         return true;
       }
-      // undefined→true/false：立即采纳。
+      // 此处 next 已知为 false；unknown→false 立即采纳。
       if (prev.shown === undefined) {
-        records.set(key, { shown: next, candidate: next, sinceMs: nowMs });
-        return next;
-      }
-      // true→false：滞回。
-      if (prev.shown === true && next === false) {
-        if (prev.candidate !== false) {
-          records.set(key, { shown: true, candidate: false, sinceMs: nowMs });
-          return true;
-        }
-        if (nowMs - prev.sinceMs < dropHoldMs) return true;
         records.set(key, { shown: false, candidate: false, sinceMs: nowMs });
         return false;
       }
-      records.set(key, { shown: next, candidate: next, sinceMs: nowMs });
-      return next;
+      // 到这里必为 true→false，应用滞回。
+      if (prev.candidate !== false) {
+        records.set(key, { shown: true, candidate: false, sinceMs: nowMs });
+        return true;
+      }
+      if (nowMs - prev.sinceMs < dropHoldMs) return true;
+      records.set(key, { shown: false, candidate: false, sinceMs: nowMs });
+      return false;
     },
     forget: (deviceId) => {
       for (const key of [...records.keys()]) if (key.startsWith(`${deviceId}\u0000`)) records.delete(key);

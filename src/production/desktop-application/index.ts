@@ -31,7 +31,6 @@ export interface DesktopApplicationOptions {
   readonly hardwareReadiness: Readonly<{
     readonly lanAddressAvailable: boolean;
     readonly legacyMediaAvailable: boolean;
-    readonly sessionStableAfterMs: number;
   }>;
   readonly now: () => number;
 }
@@ -117,9 +116,6 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
       && hardwareReadiness !== null
       && typeof hardwareReadiness.lanAddressAvailable === "boolean"
       && typeof hardwareReadiness.legacyMediaAvailable === "boolean"
-      && typeof hardwareReadiness.sessionStableAfterMs === "number"
-      && Number.isFinite(hardwareReadiness.sessionStableAfterMs)
-      && hardwareReadiness.sessionStableAfterMs >= 0
       && validFunction(source.now)
       && validFunction(record(source.mission)?.createMissionId)
       && validFunction(record(source.flight)?.now)
@@ -256,21 +252,12 @@ function instance(dependencies: Readonly<{
     operation = "stop";
     transition("stopping");
     active = (async () => {
-      const list = dependencies.missionControl.list;
-      if (typeof list === "function") {
-        try {
-          const lanes = list();
-          if (Array.isArray(lanes)) {
-            await Promise.all(lanes.map(async (lane) => {
-              const deviceId = typeof (lane as { deviceId?: unknown }).deviceId === "string" ? (lane as { deviceId: string }).deviceId : null;
-              const phase = typeof (lane as { phase?: unknown }).phase === "string" ? (lane as { phase: string }).phase : "";
-              if (deviceId === null) return;
-              if (!["starting", "running", "pausing", "paused", "resuming", "stopping", "staging", "staged", "uploading", "uploaded", "disconnected"].includes(phase)) return;
-              try { await dependencies.missionControl.stop(deviceId); } catch { /* best-effort stop on desktop shutdown */ }
-            }));
-          }
-        } catch { /* mission inventory failure must not block media/relay stop */ }
-      }
+      try {
+        const activeLanes = dependencies.missionControl.list().filter((lane) => ["starting", "running", "pausing", "paused", "resuming", "stopping", "staging", "staged", "uploading", "uploaded", "disconnected"].includes(lane.phase));
+        await Promise.all(activeLanes.map(async ({ deviceId }) => {
+          try { await dependencies.missionControl.stop(deviceId); } catch { /* best-effort stop on desktop shutdown */ }
+        }));
+      } catch { /* mission inventory failure must not block media/relay stop */ }
       const stopped = await dependencies.runtime.stop();
       operation = null;
       transition("idle");

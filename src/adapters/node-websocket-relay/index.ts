@@ -126,7 +126,7 @@ function create(options: NodeWebSocketRelayOptions = {}): RelayTransport {
     intervalMs: options.pingIntervalMs ?? 15_000,
     scheduler: options.scheduler ?? Object.freeze({
       setInterval: (callback: () => void, milliseconds: number) => setInterval(callback, milliseconds),
-      clearInterval: (handle: unknown) => { if (typeof handle === "object" || typeof handle === "number") clearInterval(handle as NodeJS.Timeout); },
+      clearInterval: (handle: unknown) => { clearInterval(handle as NodeJS.Timeout); },
     }),
   });
   return Object.freeze({

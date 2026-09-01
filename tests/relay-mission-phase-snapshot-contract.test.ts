@@ -117,4 +117,79 @@ describe("中继航线阶段快照解析模块契约", () => {
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [terminal(numberValueThrows)] })).toBeNull();
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: "phone-1", payload: plainIntegerThrows }] })).toBeNull();
   });
+
+  it("隔离 JSON 数字值在校验期间发生的迟到读取异常", () => {
+    let reads = 0;
+    const delayedFailure = new Proxy({ kind: "number", value: "1" }, {
+      get(target, key) {
+        if (key === "value") {
+          reads += 1;
+          if (reads === 2) throw new Error("late numeric read");
+        }
+        return target[key as keyof typeof target];
+      },
+    });
+
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({
+      telemetry: [{
+        deviceId: "phone-1",
+        payload: {
+          kind: "object",
+          fields: {
+            missionExecution: { kind: "string", value: "FINISHED" },
+            missionFileName: { kind: "string", value: "survey.kmz" },
+            missionRevision: delayedFailure,
+            missionDeviceGeneration: { kind: "number", value: "0" },
+          },
+        },
+      }],
+    })).toBeNull();
+  });
+
+  it("拒绝不完整、非整数、超限或读取不一致的受限 JSON 任务代际", () => {
+    const wrapped = (revision: unknown, generation: unknown = { kind: "number", value: "0" }) => ({
+      telemetry: [{
+        deviceId: "phone-1",
+        payload: {
+          kind: "object",
+          fields: {
+            missionExecution: { kind: "string", value: "FINISHED" },
+            missionFileName: { kind: "string", value: "survey.kmz" },
+            missionRevision: revision,
+            missionDeviceGeneration: generation,
+          },
+        },
+      }],
+    });
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates(wrapped(null))).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates(wrapped({ kind: "string", value: "1" }))).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates(wrapped({ kind: "number", value: 1 }))).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates(wrapped({ kind: "number", value: "1.5" }))).toBeNull();
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates(wrapped({ kind: "number", value: "9007199254740992" }))).toBeNull();
+
+    let payloadReads = 0;
+    const changingPayload = new Proxy({}, {
+      get(_target, key) {
+        if (key === "deviceId") return "phone-2";
+        if (key !== "payload") return undefined;
+        payloadReads += 1;
+        if (payloadReads === 1) return { missionExecution: "FINISHED" };
+        if (payloadReads === 2) return { missionFileName: "changing.kmz" };
+        return null;
+      },
+    });
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [changingPayload] })).toBeNull();
+
+    let fieldsReads = 0;
+    const changingFields = new Proxy({ kind: "object" }, {
+      get(target, key) {
+        if (key !== "fields") return target[key as keyof typeof target];
+        fieldsReads += 1;
+        if (fieldsReads === 1) return { missionExecution: { kind: "string", value: "FINISHED" } };
+        if (fieldsReads === 2) return { missionFileName: { kind: "string", value: "changing.kmz" } };
+        return null;
+      },
+    });
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({ telemetry: [{ deviceId: "phone-3", payload: changingFields }] })).toBeNull();
+  });
 });

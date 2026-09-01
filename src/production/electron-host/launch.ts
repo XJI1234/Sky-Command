@@ -124,7 +124,7 @@ async function launch(): Promise<void> {
     },
     mission: { createMissionId: (deviceId: string, routeId: string) => `mission-${deviceId}-${routeId}` },
     flight: { now: () => Date.now(), confirmation: { ttlMs: 15_000, createConfirmationId: () => `confirm-${++nextConfirmationId}` } },
-    hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: 5_000 },
+    hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true },
     now: () => Date.now(),
   });
   if (!created.ok) throw new Error("桌面应用配置无效");

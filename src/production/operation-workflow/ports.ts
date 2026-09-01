@@ -31,7 +31,6 @@ export type DeviceSettingsPort = Pick<DeviceSettingsPanelInstance, "snapshot" | 
 export interface HardwareReadinessPort {
   readonly lanAddressAvailable: boolean;
   readonly legacyMediaAvailable: boolean;
-  readonly sessionStableAfterMs: number;
 }
 
 export interface OperationWorkflowDependencies {

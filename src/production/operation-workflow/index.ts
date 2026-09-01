@@ -37,18 +37,17 @@ function create(dependencies: OperationWorkflowDependencies) {
   };
   const onlineIds = (): readonly string[] => freeze(deviceRecords().map((item) => item.deviceId));
   const sessionMap = (): Map<string, string | undefined> => new Map(deviceRecords().map((item) => [item.deviceId, item.sessionId]));
-  const clock = (): number | null => {
-    try {
-      const value = dependencies.now();
-      return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-    } catch { return null; }
-  };
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
-  const connectedSince = new Map<string, number>();
-  const initialConnectionTime = clock();
-  if (initialConnectionTime !== null) for (const deviceId of previousOnline) connectedSince.set(deviceId, initialConnectionTime);
-  const online = (deviceId: string): boolean => onlineIds().includes(deviceId);
+  const online = (deviceId: string): boolean => {
+    try {
+      const values = dependencies.relayOperations.devices();
+      return Array.isArray(values) && values.some((item) => {
+        const currentDeviceId = read(item, "deviceId");
+        return validId(currentDeviceId) && currentDeviceId === deviceId;
+      });
+    } catch { return false; }
+  };
   const route = (routeId: string): RecordValue | null => {
     try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? record(values.find((value) => read(value, "routeId") === routeId)) : null; } catch { return null; }
   };
@@ -73,7 +72,12 @@ function create(dependencies: OperationWorkflowDependencies) {
     const rawTelemetry = telemetryRaw(deviceId);
     return freeze({ deviceId, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: controlTelemetryRaw(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId) });
   }), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
-  const publish = (): void => { revision += 1; const current = snapshot(); for (const listener of [...listeners]) { try { listener(current); } catch { /* listener faults are isolated */ } } };
+  const publish = (): void => {
+    revision += 1;
+    if (listeners.size === 0) return;
+    const current = snapshot();
+    for (const listener of [...listeners]) { try { listener(current); } catch { /* listener faults are isolated */ } }
+  };
   const forgetVideo = (deviceId: string): void => {
     try { dependencies.liveStreamControl.recordDisconnected(deviceId); } catch { /* downstream retains its own failure state */ }
     if (selectedVideoDeviceId === deviceId) selectedVideoDeviceId = null;
@@ -81,7 +85,6 @@ function create(dependencies: OperationWorkflowDependencies) {
   const onDisconnects = (): void => {
     const current = new Set(onlineIds());
     const sessions = sessionMap();
-    const observedAt = clock();
     for (const deviceId of previousOnline) {
       const gone = !current.has(deviceId);
       const previousSession = previousSessions.get(deviceId);
@@ -91,17 +94,9 @@ function create(dependencies: OperationWorkflowDependencies) {
       // 设备消失或会话替换：危险确认与图传车道都必须作废，避免重连后点到旧确认。
       clearFlightConfirm(deviceId);
       if (gone) {
-        connectedSince.delete(deviceId);
         assignments.removeDevice(deviceId);
       }
       forgetVideo(deviceId);
-    }
-    for (const deviceId of current) {
-      const replaced = previousOnline.has(deviceId) && previousSessions.get(deviceId) !== undefined && sessions.get(deviceId) !== undefined && previousSessions.get(deviceId) !== sessions.get(deviceId);
-      if (!previousOnline.has(deviceId) || replaced) {
-        if (observedAt === null) connectedSince.delete(deviceId);
-        else connectedSince.set(deviceId, observedAt);
-      }
     }
     previousOnline = current;
     previousSessions = sessions;
@@ -122,31 +117,21 @@ function create(dependencies: OperationWorkflowDependencies) {
     const decision = CapabilityGate.evaluate({ operation, relayConnected: value !== null, sdkRegistered: read(payload, "sdkRegistered"), remoteControllerConnected: read(payload, "remoteControllerConnected"), flightControllerConnected: read(payload, "flightControllerConnected"), aircraftConnected: read(payload, "connected"), capabilities });
     return decision.ok === true && decision.value.enabled === true;
   };
-  const readiness = (deviceId: string, target: HardwareReadinessTarget, source: unknown = telemetryRaw(deviceId)): HardwareReadinessResult => {
+  const readiness = (deviceId: string, target: HardwareReadinessTarget, source: unknown = controlTelemetryRaw(deviceId)): HardwareReadinessResult => {
     let configuration: RecordValue | null;
     try { configuration = record(dependencies.hardwareReadiness); } catch { configuration = null; }
-    const configuredDelay = read(configuration, "sessionStableAfterMs");
-    const observedAt = clock();
-    const connectedAt = connectedSince.get(deviceId);
-    const waited = observedAt !== null && connectedAt !== undefined && typeof configuredDelay === "number" && Number.isFinite(configuredDelay) && configuredDelay >= 0 && observedAt - connectedAt >= configuredDelay;
     const payload = record(read(source, "payload")) ?? freeze({});
     const payloadFacts: Record<string, boolean> = {};
     for (const key of ["sdkRegistered", "remoteControllerConnected", "flightControllerConnected", "connected"]) {
       const value = read(payload, key);
       if (typeof value === "boolean") payloadFacts[key] = value;
     }
-    const factsComplete = payloadFacts.sdkRegistered === true
-      && payloadFacts.remoteControllerConnected === true
-      && payloadFacts.flightControllerConnected === true
-      && payloadFacts.connected === true;
-    const relayStable = factsComplete || waited;
     return HardwareReadiness.evaluate({
       desktop: {
         lanAddressAvailable: read(configuration, "lanAddressAvailable") as boolean,
         legacyMediaAvailable: read(configuration, "legacyMediaAvailable") as boolean,
       },
       relayConnected: online(deviceId),
-      relayStable,
       payload: payloadFacts,
     }, target);
   };
@@ -156,7 +141,7 @@ function create(dependencies: OperationWorkflowDependencies) {
     const seen = new Set<string>();
     const blockers: unknown[] = [];
     for (const result of [legacyVideo, flightControl]) for (const blocker of result.blockers) if (!seen.has(blocker.code)) { seen.add(blocker.code); blockers.push(blocker); }
-    return freeze({ ok: legacyVideo.ok && flightControl.ok, legacyVideo, flightControl, blockers: freeze(blockers) });
+    return freeze({ ok: blockers.length === 0, legacyVideo, flightControl, blockers: freeze(blockers) });
   };
   const actions = WorkflowActions.create({
     online,
@@ -168,16 +153,16 @@ function create(dependencies: OperationWorkflowDependencies) {
     settingsAllowed,
   });
   const refreshControl = async (deviceId: string): Promise<unknown | null> => {
-    if (!validId(deviceId) || !online(deviceId)) return null;
     try {
       const outcome = await dependencies.relayOperations.refreshTelemetry(deviceId);
       if (read(outcome, "status") !== "succeeded") return null;
       return controlTelemetryRaw(deviceId);
     } catch { return null; }
   };
+  const currentControl = (deviceId: string): unknown | null => controlTelemetryRaw(deviceId);
   const withCurrentControl = async (deviceId: string, operation: () => Promise<WorkflowResult>): Promise<WorkflowResult> => {
     if (!validId(deviceId) || !online(deviceId)) return operation();
-    return await refreshControl(deviceId) === null ? failure("CONTROL_STATE_UNAVAILABLE") : operation();
+    return currentControl(deviceId) === null ? failure("CONTROL_STATE_UNAVAILABLE") : operation();
   };
   const published = async (operation: () => Promise<WorkflowResult>): Promise<WorkflowResult> => {
     const result = await operation();
@@ -185,11 +170,8 @@ function create(dependencies: OperationWorkflowDependencies) {
     return result;
   };
   const stopFailedOnlineStreams = async (): Promise<void> => {
-    let streams: unknown[] = [];
-    try {
-      const listed = read(media(), "streams");
-      streams = Array.isArray(listed) ? listed : [];
-    } catch { return; }
+    const listed = read(media(), "streams");
+    const streams: unknown[] = Array.isArray(listed) ? listed : [];
     for (const entry of streams) {
       const deviceId = read(entry, "deviceId");
       if (!validId(deviceId) || read(entry, "phase") !== "failed" || !online(deviceId)) continue;
@@ -230,7 +212,7 @@ function create(dependencies: OperationWorkflowDependencies) {
     stage: (deviceId: string) => mission("stage", deviceId), upload: (deviceId: string) => mission("upload", deviceId), start: (deviceId: string) => mission("start", deviceId), pause: (deviceId: string) => mission("pause", deviceId), resume: (deviceId: string) => mission("resume", deviceId), stop: (deviceId: string) => mission("stop", deviceId),
     startStream: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
       if (!validId(deviceId) || !online(deviceId)) return actions.startStream(deviceId);
-      const control = await refreshControl(deviceId);
+      const control = currentControl(deviceId);
       if (control === null) return failure("CONTROL_STATE_UNAVAILABLE");
       const decision = readiness(deviceId, "legacy-video", control);
       return decision.ok ? actions.startStream(deviceId) : failure("HARDWARE_NOT_READY", decision);
@@ -270,7 +252,7 @@ function create(dependencies: OperationWorkflowDependencies) {
     writeCameraSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => withCurrentControl(deviceId, () => actions.writeCamera(deviceId, patch))),
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
-      const control = validId(deviceId) && online(deviceId) ? await refreshControl(deviceId) : null;
+      const control = validId(deviceId) && online(deviceId) ? currentControl(deviceId) : null;
       const decision = control === null ? null : readiness(deviceId, "flight-control", control);
       const result = validId(deviceId) && online(deviceId) && control === null
         ? failure("CONTROL_STATE_UNAVAILABLE")

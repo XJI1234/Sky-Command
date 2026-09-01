@@ -1,5 +1,5 @@
 export type DeviceOperation = "pairing" | "live-stream" | "waypoint-mission" | "transmission-settings" | "camera-settings" | "direct-flight";
-export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "AIRCRAFT_NOT_CONNECTED" | "AIRCRAFT_CONNECTION_UNKNOWN" | "PAIRING_NOT_NEEDED" | "CAPABILITY_UNKNOWN" | "LIVE_VIDEO_UNSUPPORTED" | "WAYPOINT_UNSUPPORTED";
+export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "AIRCRAFT_NOT_CONNECTED" | "AIRCRAFT_CONNECTION_UNKNOWN" | "PAIRING_NOT_NEEDED" | "CAPABILITY_UNKNOWN" | "LIVE_VIDEO_UNAVAILABLE" | "LIVE_VIDEO_UNSUPPORTED" | "WAYPOINT_UNSUPPORTED";
 export interface CapabilityDecision { readonly operation: DeviceOperation; readonly enabled: boolean; readonly reason: CapabilityReason | null; }
 export type CapabilityDecisionResult<T> = Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false; readonly error: Readonly<{ readonly code: "INVALID_INPUT"; readonly details: Readonly<{ readonly field: string; readonly reason: "invalid-value" | "unreadable" }> }> }>;
 
@@ -46,12 +46,14 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
   if (optionalBoolean(input.sdkRegistered) === null) return failure("sdkRegistered", "invalid-value");
   if (input.relayConnected !== true) return decision(operation, false, "RELAY_OFFLINE");
   if (input.sdkRegistered !== true) return decision(operation, false, "SDK_NOT_READY");
-  // `startStream` has no desktop-verifiable aircraft/RC/model precondition. DJI completion is authoritative.
-  if (operation === "live-stream") return decision(operation, true, null);
-  const fields = ["remoteControllerConnected", "flightControllerConnected", "aircraftConnected"] as const;
-  for (const field of fields) if (optionalBoolean(input[field]) === null) return failure(field, "invalid-value");
   const capabilities = readCapabilities(input.capabilities);
   if (capabilities === "invalid-value" || capabilities === "unreadable") return failure("capabilities.liveVideo", capabilities);
+  if (operation === "live-stream") {
+    if (capabilities === null || capabilities.liveVideo === undefined) return decision(operation, false, "CAPABILITY_UNKNOWN");
+    return capabilities.liveVideo ? decision(operation, true, null) : decision(operation, false, "LIVE_VIDEO_UNAVAILABLE");
+  }
+  const fields = ["remoteControllerConnected", "flightControllerConnected", "aircraftConnected"] as const;
+  for (const field of fields) if (optionalBoolean(input[field]) === null) return failure(field, "invalid-value");
   if (operation === "pairing") {
     if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
     if (input.aircraftConnected === true) return decision(operation, false, "PAIRING_NOT_NEEDED");

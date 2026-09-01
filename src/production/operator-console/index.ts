@@ -230,7 +230,10 @@ const streamStartIssueOf = (device: Record<string, unknown> | undefined): Stream
   if (device === undefined) return freeze({ label: "未选择图传机", reason: "请选择用于图传的飞机" });
   const connection = controlConnection(device);
   if (read(connection, "sdk") !== "ready") return freeze({ label: "等待手机就绪", reason: "手机尚未就绪，无法启动图传" });
-  return null;
+  const liveVideo = read(read(device, "capabilities"), "liveVideo");
+  if (liveVideo === "supported") return null;
+  if (liveVideo === "unsupported") return freeze({ label: "图传链路未就绪", reason: "手机端尚未确认 DJI 产品、AirLink 和主相机均已连接，无法启动图传" });
+  return freeze({ label: "图传状态未知", reason: "手机端尚未确认当前图传链路状态，请刷新设备状态后重试" });
 };
 const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean => {
   if (device === undefined) return false;

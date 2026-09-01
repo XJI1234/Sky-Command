@@ -33,13 +33,15 @@ const pose = (payload: unknown): Readonly<{ readonly latitude: number | null; re
 };
 const live = (payload: unknown) => {
   const streaming = read(payload, "liveStreaming");
-  if (streaming !== true) return freeze({ streaming: streaming === false ? false : null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null });
+  if (streaming !== true) return freeze({ streaming: streaming === false ? false : null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
   return freeze({
     streaming: true,
     resolution: safeText(read(payload, "liveResolution")),
     fps: boundedNumber(read(payload, "liveFps"), 0, 240),
     videoBitrateKbps: boundedNumber(read(payload, "liveVideoBitrateKbps"), 0, 100_000),
     rttMillis: boundedInteger(read(payload, "liveRttMillis"), 0, 60_000),
+    packetLoss: boundedInteger(read(payload, "livePacketLoss"), 0, 2_147_483_647),
+    packetCacheLength: boundedInteger(read(payload, "livePacketCacheLength"), 0, 2_147_483_647),
   });
 };
 const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
@@ -54,6 +56,8 @@ const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
     remoteController: linkState(read(payload, "remoteController")),
     flightController,
     aircraft: linkState(read(payload, "aircraft")),
+    airLink: linkState(read(payload, "airLink")),
+    camera: linkState(read(payload, "camera")),
     aircraftModel: safeText(read(payload, "aircraftModel")),
     remoteControllerModel: safeText(read(payload, "remoteControllerModel")),
     batteryPercent: flightFactsAvailable ? boundedInteger(read(payload, "batteryPercent"), 0, 100) : null,

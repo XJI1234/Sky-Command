@@ -62,4 +62,17 @@ describe("设备事实摘要", () => {
 
     expect(DeviceFactSummary.format(connection)).toBe("电量尚未取得 · 飞行状态尚未确认");
   });
+
+  it.each([
+    ["COUNTING_DOWN", "低电量返航正在倒计时"],
+    ["EXECUTED", "低电量返航已执行"],
+    ["CANCELLED", "低电量返航已取消"],
+  ])("保留 MSDK 返回的低电量返航状态 %s", async (lowBatteryRthState, expected) => {
+    const { DeviceFactSummary } = await import(summaryModule.href);
+    expect(DeviceFactSummary.format({
+      batteryPercent: 80,
+      lowBatteryRthState,
+      flightState: "grounded",
+    })).toContain(expected);
+  });
 });

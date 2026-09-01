@@ -38,15 +38,23 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: input.operation, enabled: false, reason } });
   });
 
-  it("图传不把瞬时控制遥测或旧能力字段当成型号不支持", () => {
-    for (const input of [
-      { operation: "live-stream", ...base, remoteControllerConnected: false, flightControllerConnected: false, aircraftConnected: false },
-      { operation: "live-stream", ...base, capabilities: null },
-      { operation: "live-stream", ...base, capabilities: {} },
-      { operation: "live-stream", ...base, capabilities: { ...base.capabilities, liveVideo: false } },
-    ]) {
-      expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
-    }
+  it("图传只依赖实时图传能力，不依赖飞控连接", () => {
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, remoteControllerConnected: false, flightControllerConnected: false, aircraftConnected: false })).toEqual({
+      ok: true,
+      value: { operation: "live-stream", enabled: true, reason: null },
+    });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: null })).toEqual({
+      ok: true,
+      value: { operation: "live-stream", enabled: false, reason: "CAPABILITY_UNKNOWN" },
+    });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: {} })).toEqual({
+      ok: true,
+      value: { operation: "live-stream", enabled: false, reason: "CAPABILITY_UNKNOWN" },
+    });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: { ...base.capabilities, liveVideo: false } })).toEqual({
+      ok: true,
+      value: { operation: "live-stream", enabled: false, reason: "LIVE_VIDEO_UNAVAILABLE" },
+    });
   });
 
   it("航线能力字段缺失不会被擅自当作支持", () => {
@@ -89,6 +97,21 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: null })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: false, reason: "CAPABILITY_UNKNOWN" } });
     expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMissionSupport: "supported" } })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: false, reason: "CAPABILITY_UNKNOWN" } });
     expect(CapabilityGate.evaluate({ operation: "transmission-settings", ...base, capabilities: null })).toEqual({ ok: true, value: { operation: "transmission-settings", enabled: true, reason: null } });
-    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, remoteControllerConnected: false, capabilities: { ...base.capabilities, liveVideo: false } })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, remoteControllerConnected: false, capabilities: { ...base.capabilities, liveVideo: false } })).toEqual({ ok: true, value: { operation: "live-stream", enabled: false, reason: "LIVE_VIDEO_UNAVAILABLE" } });
+  });
+
+  it.each([
+    ["remoteControllerConnected", "remoteControllerConnected"],
+    ["flightControllerConnected", "flightControllerConnected"],
+    ["aircraftConnected", "aircraftConnected"],
+  ] as const)("拒绝非布尔的 %s 飞行链路事实", (field, expectedField) => {
+    expect(CapabilityGate.evaluate({
+      operation: "direct-flight",
+      ...base,
+      [field]: "connected",
+    })).toEqual({
+      ok: false,
+      error: { code: "INVALID_INPUT", details: { field: expectedField, reason: "invalid-value" } },
+    });
   });
 });

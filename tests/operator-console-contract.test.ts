@@ -13,6 +13,8 @@ const device = (overrides: Record<string, unknown> = {}) => ({
     remoteController: "connected",
     flightController: "connected",
     aircraft: "connected",
+    airLink: "connected",
+    camera: "connected",
     batteryPercent: 90,
     flightState: "grounded",
     motorsOn: false,
@@ -56,7 +58,7 @@ describe("操作台投影", () => {
     expect(source).not.toContain('connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知")');
   });
 
-  it("设备详情以六个具名独立行呈现连接事实", () => {
+  it("设备详情以八个具名独立行呈现连接与图传源事实", () => {
     const source = renderer();
     expect(source).toContain('class="connection-status-list"');
     expect(source).toContain('statusRow("电脑到手机中继 [桌面 Relay Session]", "中继在线", true)');
@@ -65,6 +67,8 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)');
     expect(source).toContain('statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))');
     expect(source).toContain('statusRow("DJI 硬件产品连接 [ProductKey.KeyConnection]", connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知"), connected(connection, "aircraft"))');
+    expect(source).toContain('statusRow("AirLink 连接 [AirLinkKey.KeyConnection]", connectionLabel(connection, "airLink", "AirLink 已连接", "AirLink 未连接", "AirLink 状态未知"), connected(connection, "airLink"))');
+    expect(source).toContain('statusRow("主相机连接 [CameraKey.KeyConnection, LEFT_OR_MAIN]", connectionLabel(connection, "camera", "主相机已连接", "主相机未连接", "主相机状态未知"), connected(connection, "camera"))');
   });
 
   it("设备详情将动态事实、任务、手机推流和当前图传机的桌面播放逐行分开呈现", () => {
@@ -81,6 +85,8 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("高度 [FlightControllerKey.KeyAltitude]"');
     expect(source).toContain('statusRow("位置 [FlightControllerKey.KeyAircraftLocation]"');
     expect(source).toContain('statusRow("MSDK 图传观测 [手机 MSDK 图传运行观测]"');
+    expect(source).toContain('statusRow("图传丢包 [LiveStreamStatus.packetLoss]"');
+    expect(source).toContain('statusRow("图传缓存长度 [LiveStreamStatus.packetCacheLen]"');
     expect(source).toContain('statusRow("状态更新时间 [桌面接收时间]"');
     expect(source).toContain("runtimeStatusRows(inspected, view.streamDeviceId)");
     expect(source).toContain('statusRow("状态更新时间 [桌面接收时间]", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection))');
@@ -538,9 +544,18 @@ describe("操作台工作区", () => {
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(unknownCapability.streamLabel).toBe("图传可启动");
-    expect(unknownCapability.streamCanStart).toBe(true);
-    expect(OperatorConsole.evaluate("stream-start", unknownCapability)).toEqual({ ok: true });
+    expect(unknownCapability.streamLabel).toBe("图传未就绪：图传状态未知");
+    expect(unknownCapability.streamCanStart).toBe(false);
+    expect(OperatorConsole.evaluate("stream-start", unknownCapability)).toEqual({ ok: false, reason: "手机端尚未确认当前图传链路状态，请刷新设备状态后重试" });
+
+    const unavailableCapability = OperatorConsole.project({
+      snapshot: snapshot([device({ capabilities: { waypointMission: "supported", liveVideo: "unsupported" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(unavailableCapability.streamLabel).toBe("图传未就绪：图传链路未就绪");
+    expect(unavailableCapability.streamCanStart).toBe(false);
+    expect(OperatorConsole.evaluate("stream-start", unavailableCapability)).toEqual({ ok: false, reason: "手机端尚未确认 DJI 产品、AirLink 和主相机均已连接，无法启动图传" });
 
     const noAircraft = OperatorConsole.project({
       snapshot: snapshot([device({ connection: { ...device().connection, aircraft: "disconnected" } })]),

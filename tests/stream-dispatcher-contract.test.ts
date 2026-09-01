@@ -399,4 +399,56 @@ describe("StreamDispatcher", () => {
     await expect(starting).resolves.toMatchObject({ ok: true, state: { phase: "streaming" } });
     expect(value.sent).toEqual([]);
   });
+
+  it("在停止失败时以同一失败结果结算等待的重启且不伪造原因", async () => {
+    let calls = 0;
+    let finishStop!: (value: unknown) => void;
+    const value = fixture({
+      send: async () => {
+        calls += 1;
+        if (calls === 1) return { status: "succeeded" };
+        return await new Promise((resolve) => { finishStop = resolve; });
+      },
+    });
+
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, state: { phase: "streaming" } });
+    const stopping = value.dispatcher.stop("phone-1");
+    await Promise.resolve();
+    const restart = value.dispatcher.start("phone-1");
+    finishStop({ status: "rejected" });
+
+    await expect(stopping).resolves.toMatchObject({ ok: false, operation: "stop", code: "RELAY_REJECTED" });
+    await expect(restart).resolves.toEqual({
+      ok: false,
+      operation: "start",
+      code: "RELAY_REJECTED",
+      state: { deviceId: "phone-1", phase: "failed", lastOperation: "stop", failureCode: "RELAY_REJECTED", reason: null },
+    });
+  });
+
+  it("将中继给出的重启停止原因原样传给等待的启动请求", async () => {
+    let calls = 0;
+    let finishStop!: (value: unknown) => void;
+    const value = fixture({
+      send: async () => {
+        calls += 1;
+        if (calls === 1) return { status: "succeeded" };
+        return await new Promise((resolve) => { finishStop = resolve; });
+      },
+    });
+
+    await value.dispatcher.start("phone-1");
+    const stopping = value.dispatcher.stop("phone-1");
+    await Promise.resolve();
+    const restart = value.dispatcher.start("phone-1");
+    finishStop({ status: "rejected", detail: "Another video transport is active" });
+
+    await expect(stopping).resolves.toMatchObject({ reason: "ANOTHER_VIDEO_TRANSPORT_ACTIVE" });
+    await expect(restart).resolves.toMatchObject({
+      ok: false,
+      operation: "start",
+      code: "RELAY_REJECTED",
+      reason: "ANOTHER_VIDEO_TRANSPORT_ACTIVE",
+    });
+  });
 });

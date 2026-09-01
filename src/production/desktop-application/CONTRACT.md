@@ -29,11 +29,10 @@ application.dispose() -> Promise<void>
 hardwareReadiness: {
   lanAddressAvailable: boolean
   legacyMediaAvailable: boolean
-  sessionStableAfterMs: number
 }
 ```
 
-生产装配必须提供实际 LAN 与 HTTP-FLV 服务探测结果，且 `sessionStableAfterMs` 为 5,000。该值是桌面端为避免手机中继刚重连时误发开始型命令设置的保护窗口，不是 DJI 或 WebSocket 的协议要求。它们只交给 `operation-workflow` 的开始操作预检，不改变中继或媒体的启动和生命周期。
+生产装配必须提供实际 LAN 与 HTTP-FLV 服务探测结果。它们只交给 `operation-workflow` 的开始操作预检，不改变中继或媒体的启动和生命周期；MSDK 状态可信度只来自当前会话的持续订阅及首次异步硬件读取，不得以连接已持续的时间推定。
 
 `legacyMediaRequired?: boolean` 为可选启动策略，默认 `true`。生产桌面固定传 `true`；`false` 只保留给受控故障隔离测试，使中继可在媒体失败时保留运行，不会装配、启动或暴露替代媒体路径。
 

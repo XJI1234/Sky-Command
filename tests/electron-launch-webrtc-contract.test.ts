@@ -24,7 +24,7 @@ describe("Electron 主进程图传装配（HTTP-FLV 单路径）", () => {
 
   it("保留局域网选卡与中继超时", () => {
     const text = source();
-    expect(text).toContain("sessionStableAfterMs: 5_000");
+    expect(text).not.toContain("sessionStableAfterMs");
     expect(text).toContain("handshakeTimeoutMs: 15_000");
     expect(text).toContain("commandTimeoutMs: 120_000");
     expect(text).toContain("missionTimeoutMs: 600_000");

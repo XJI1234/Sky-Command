@@ -16,8 +16,22 @@ describe("connection-hold", () => {
   it("forget 清除设备滞回状态", () => {
     const hold = createConnectionHold(1_000);
     hold.hold("phone-1", "connected", true, 0);
+    hold.hold("phone-2", "connected", true, 0);
     hold.hold("phone-1", "connected", false, 10);
     hold.forget("phone-1");
     expect(hold.hold("phone-1", "connected", false, 20)).toBe(false);
+    expect(hold.hold("phone-2", "connected", false, 20)).toBe(true);
+  });
+
+  it("保留重复观测并可一次清空所有设备字段", () => {
+    const hold = createConnectionHold(1_000);
+    expect(hold.hold("phone-1", "remote", true, 0)).toBe(true);
+    expect(hold.hold("phone-1", "remote", true, 10)).toBe(true);
+    expect(hold.hold("phone-1", "aircraft", false, 10)).toBe(false);
+
+    hold.clear();
+
+    expect(hold.hold("phone-1", "remote", false, 20)).toBe(false);
+    expect(hold.hold("phone-1", "aircraft", true, 20)).toBe(true);
   });
 });

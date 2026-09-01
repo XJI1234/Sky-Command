@@ -171,7 +171,13 @@ describe("飞行任务控制模块契约", () => {
     await control.start("phone-1");
     receiveRelaySnapshot({
       devices: [{ deviceId: "phone-1", sessionId: "session-1" }],
-      missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 2, sequence: 2, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 2, deviceGeneration: 2, sequence: 2, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
+    });
+    expect(control.get("phone-1")).toMatchObject({ phase: "running" });
+
+    receiveRelaySnapshot({
+      devices: [{ deviceId: "phone-1", sessionId: "session-1" }],
+      missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 2, sequence: 9, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }],
     });
     expect(control.get("phone-1")).toMatchObject({ phase: "running" });
 

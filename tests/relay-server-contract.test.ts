@@ -165,6 +165,20 @@ describe("relay-server contract", () => {
     expect(events).toEqual(["state-changed", "state-changed", "connection-opened", "connection-paired"]);
   });
 
+  it("keeps a connection when reading its optional local address throws", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    await server.start();
+    const connection = new FakeConnection();
+    Object.defineProperty(connection, "localAddress", { get: () => { throw new Error("address unavailable"); } });
+
+    transport.connect(connection);
+
+    expect(server.snapshot().connections).toEqual([expect.objectContaining({ connectionId: "connection-1", phase: "awaiting-hello" })]);
+    expect(server.snapshot().connections[0]).not.toHaveProperty("localAddress");
+    await server.stop();
+  });
+
   it("rejects a non-hello or malformed first frame and closes only that connection", async () => {
     const transport = new FakeTransport();
     const server = createServer({ transport });

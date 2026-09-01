@@ -14,6 +14,8 @@ type MsdkPairingState = "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" |
 
 export interface DesktopRelayTelemetryPayload {
   readonly [key: string]: unknown;
+  /** Monotonic sequence of actual Android telemetry frames, scoped to the relay session. */
+  readonly telemetrySequence?: number;
   readonly sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED";
   /** Monotonic `DeviceStateStore` revision for the MSDK device Key observation. */
   readonly deviceRevision?: number;
@@ -24,6 +26,10 @@ export interface DesktopRelayTelemetryPayload {
   readonly flightController?: MsdkLinkState;
   /** Raw `ProductKey.KeyConnection` value from Android MSDK telemetry. */
   readonly aircraft?: MsdkLinkState;
+  /** Raw `AirLinkKey.KeyConnection` value from Android MSDK telemetry. */
+  readonly airLink?: MsdkLinkState;
+  /** Raw `CameraKey.KeyConnection(LEFT_OR_MAIN)` value from Android MSDK telemetry. */
+  readonly camera?: MsdkLinkState;
   /** Raw `RemoteControllerKey.KeyPairingStatus` value from Android MSDK telemetry. */
   readonly pairing?: MsdkPairingState;
   /** Compatibility projections for existing control gates. Do not use for device facts. */
@@ -48,6 +54,10 @@ export interface DesktopRelayTelemetryPayload {
   readonly liveFps?: number;
   readonly liveVideoBitrateKbps?: number;
   readonly liveRttMillis?: number;
+  /** Raw Android MSDK LiveStreamStatus.packetLoss value; no unit is inferred. */
+  readonly livePacketLoss?: number;
+  /** Raw Android MSDK LiveStreamStatus.packetCacheLen value; no unit is inferred. */
+  readonly livePacketCacheLength?: number;
   readonly missionRevision?: number;
   readonly missionDeviceGeneration?: number;
   readonly missionExecution?: "NOT_STARTED" | "STARTING" | "EXECUTING" | "PAUSED" | "STOPPING" | "FINISHED" | "FAILED";
@@ -215,6 +225,7 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   if (payload === null || capabilities === null) return null;
   const outputPayload: MutableDesktopRelayTelemetryPayload = {};
   const outputCapabilities: { liveVideo?: boolean; waypointMission?: boolean; waypointMissionSupport?: "supported" | "unsupported" } = {};
+  const telemetrySequence = positiveIntegerValue(payload.telemetrySequence); if (telemetrySequence !== undefined) outputPayload.telemetrySequence = telemetrySequence;
   const deviceRevision = positiveIntegerValue(payload.deviceRevision); if (deviceRevision !== undefined) outputPayload.deviceRevision = deviceRevision;
   const sdk = sdkAvailability(payload.sdkAvailability);
   if (sdk !== undefined) {
@@ -239,6 +250,8 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
     if (aircraft === "CONNECTED") outputPayload.connected = true;
     else if (aircraft === "DISCONNECTED") outputPayload.connected = false;
   }
+  const airLink = msdkLinkState(payload.airLink); if (airLink !== undefined) outputPayload.airLink = airLink;
+  const camera = msdkLinkState(payload.camera); if (camera !== undefined) outputPayload.camera = camera;
   const isFlying = boolean(payload.isFlying); if (isFlying !== undefined) outputPayload.isFlying = isFlying;
   const motorsOn = boolean(payload.motorsOn); if (motorsOn !== undefined) outputPayload.motorsOn = motorsOn;
   const batteryPercent = number(payload.batteryPercent); if (batteryPercent !== undefined) outputPayload.batteryPercent = batteryPercent;
@@ -267,6 +280,8 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
       const liveFps = boundedNumber(payload.liveFps, 0, 240); if (liveFps !== undefined) outputPayload.liveFps = liveFps;
       const liveVideoBitrateKbps = boundedNumber(payload.liveVideoBitrateKbps, 0, 100_000); if (liveVideoBitrateKbps !== undefined) outputPayload.liveVideoBitrateKbps = liveVideoBitrateKbps;
       const liveRttMillis = boundedInteger(payload.liveRttMillis, 0, 60_000); if (liveRttMillis !== undefined) outputPayload.liveRttMillis = liveRttMillis;
+      const livePacketLoss = boundedInteger(payload.livePacketLoss, 0, 2_147_483_647); if (livePacketLoss !== undefined) outputPayload.livePacketLoss = livePacketLoss;
+      const livePacketCacheLength = boundedInteger(payload.livePacketCacheLength, 0, 2_147_483_647); if (livePacketCacheLength !== undefined) outputPayload.livePacketCacheLength = livePacketCacheLength;
     }
   }
   const missionExecution = string(payload.missionExecution);
@@ -291,7 +306,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   const listeners = new Set<(snapshot: RelayOperationsSnapshot) => void>();
   let rawSnapshot: unknown = null;
   let disposed = false;
-  type CurrentObservation = Readonly<{ readonly sessionId: string; readonly deviceRevision: number; readonly telemetry: DesktopRelayTelemetry }>;
+  type CurrentObservation = Readonly<{ readonly sessionId: string; readonly telemetrySequence: number | null; readonly deviceRevision: number; readonly telemetry: DesktopRelayTelemetry }>;
   const observations = new Map<string, CurrentObservation>();
   const now = (): number | null => {
     try {
@@ -332,6 +347,10 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     const value = telemetry.payload.deviceRevision;
     return positiveInteger(value) ? value : null;
   };
+  const telemetrySequenceOf = (telemetry: DesktopRelayTelemetry): number | null => {
+    const value = telemetry.payload.telemetrySequence;
+    return positiveInteger(value) ? value : null;
+  };
   const completeDeviceFact = (telemetry: DesktopRelayTelemetry): boolean =>
     deviceRevisionOf(telemetry) !== null &&
     telemetry.payload.sdkAvailability !== undefined &&
@@ -345,8 +364,12 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     const deviceRevision = deviceRevisionOf(telemetry);
     if (deviceRevision === null || !completeDeviceFact(telemetry)) return null;
     const previous = observations.get(deviceId);
-    if (previous !== undefined && previous.sessionId === sessionId && previous.deviceRevision > deviceRevision) return previous.telemetry;
-    observations.set(deviceId, freeze({ sessionId, deviceRevision, telemetry }));
+    const telemetrySequence = telemetrySequenceOf(telemetry);
+    if (previous !== undefined && previous.sessionId === sessionId) {
+      if (previous.telemetrySequence !== null && (telemetrySequence === null || telemetrySequence <= previous.telemetrySequence)) return previous.telemetry;
+      if (previous.telemetrySequence === null && telemetrySequence === null && previous.deviceRevision > deviceRevision) return previous.telemetry;
+    }
+    observations.set(deviceId, freeze({ sessionId, telemetrySequence, deviceRevision, telemetry }));
     return telemetry;
   };
   const currentObservation = (deviceId: string): DesktopRelayTelemetry | null => {

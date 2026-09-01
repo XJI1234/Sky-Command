@@ -4,7 +4,6 @@ import { HardwareReadiness, type HardwareReadinessInput } from "../src/modules/h
 const ready = (): HardwareReadinessInput => ({
   desktop: { lanAddressAvailable: true, legacyMediaAvailable: true },
   relayConnected: true,
-  relayStable: true,
   payload: {
     sdkRegistered: true,
     remoteControllerConnected: true,
@@ -14,6 +13,10 @@ const ready = (): HardwareReadinessInput => ({
 });
 
 describe("hardware readiness contract", () => {
+  it("does not accept an elapsed-session proxy as an MSDK hardware fact", () => {
+    expect(HardwareReadiness.evaluate(ready(), "legacy-video")).toEqual({ ok: true, blockers: [] });
+  });
+
   it("allows legacy video with MSDK ready even when controller and flight telemetry are unavailable", () => {
     const result = HardwareReadiness.evaluate(ready(), "legacy-video");
 
@@ -30,7 +33,6 @@ describe("hardware readiness contract", () => {
     const result = HardwareReadiness.evaluate({
       desktop: { lanAddressAvailable: false, legacyMediaAvailable: false },
       relayConnected: false,
-      relayStable: false,
       payload: {
         sdkRegistered: false,
         remoteControllerConnected: false,
@@ -44,7 +46,6 @@ describe("hardware readiness contract", () => {
       "DESKTOP_NETWORK_UNAVAILABLE",
       "LEGACY_MEDIA_UNAVAILABLE",
       "PHONE_DISCONNECTED",
-      "PHONE_SESSION_UNSTABLE",
       "SDK_NOT_READY",
     ]);
     expect(result.blockers.every((blocker) => blocker.message.length > 0 && Object.isFrozen(blocker))).toBe(true);

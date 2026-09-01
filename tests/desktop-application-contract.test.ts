@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { WebSocket } from "ws";
 import { DesktopApplication } from "../src/production/desktop-application/index.js";
@@ -23,6 +24,23 @@ const nextMessage = async (socket: WebSocket): Promise<Uint8Array> => {
   const [payload] = await once(socket, "message");
   return payload instanceof Uint8Array ? payload : new Uint8Array(payload as ArrayBuffer);
 };
+const missionComplete = (socket: WebSocket): Promise<string> => new Promise((resolve) => {
+  let missionId: string | null = null;
+  const handler = (payload: unknown): void => {
+    const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload as ArrayBuffer);
+    const decoded = RelayFrameCodec.decode(bytes);
+    if (decoded.kind !== "decoded") return;
+    if (decoded.frame.type === "mission-begin") {
+      missionId = decoded.frame.id;
+      return;
+    }
+    if (decoded.frame.type === "mission-complete" && missionId === decoded.frame.id) {
+      socket.off("message", handler);
+      resolve(missionId);
+    }
+  };
+  socket.on("message", handler);
+});
 const text = (value: string) => ({ kind: "string" as const, value });
 const bool = (value: boolean) => ({ kind: "boolean" as const, value });
 const object = (fields: Record<string, unknown>) => ({ kind: "object" as const, fields });
@@ -55,7 +73,7 @@ const options = (relayPort: number, calls: string[], behavior: Readonly<{ readon
   },
   mission: { createMissionId: (deviceId: string, routeId: string) => `mission-${deviceId}-${routeId}` },
   flight: { now: () => 100, confirmation: { ttlMs: 1_000, createConfirmationId: () => "confirmation-1" } },
-  hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: 0 },
+  hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true },
   now: () => 100,
 });
 
@@ -78,7 +96,7 @@ describe("DesktopApplication", () => {
       { ...base, mission: null },
       { ...base, flight: null },
       { ...base, hardwareReadiness: null },
-      { ...base, hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true, sessionStableAfterMs: -1 } },
+      { ...base, hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: "yes" } },
       { ...base, now: null },
       { ...base, mission: { ...base.mission, createMissionId: null } },
       { ...base, flight: { ...base.flight, now: null } },
@@ -94,6 +112,12 @@ describe("DesktopApplication", () => {
     const raw = options(await reservePort(), []);
     Object.defineProperty(raw, "routeLibrary", { enumerable: true, get: () => { throw new Error("route configuration"); } });
     expect(DesktopApplication.create(raw)).toEqual({ ok: false, code: "DEPENDENCY_FAILURE" });
+  });
+
+  it("拒绝无法读取的硬件就绪配置", async () => {
+    const raw = options(await reservePort(), []);
+    Object.defineProperty(raw, "hardwareReadiness", { enumerable: true, get: () => { throw new Error("hardware configuration"); } });
+    expect(DesktopApplication.create(raw)).toEqual({ ok: false, code: "INVALID_CONFIGURATION" });
   });
 
   it("用真实中继和受控媒体按既定顺序启动、停止并释放", async () => {
@@ -291,16 +315,7 @@ describe("DesktopApplication", () => {
       socket.send(telemetry.value);
       await new Promise((resolve) => setTimeout(resolve, 20));
       const workflow = created.value.workflow();
-      const respondCurrentTelemetry = async (): Promise<void> => {
-        const telemetryRead = RelayFrameCodec.decode(await nextMessage(socket));
-        expect(telemetryRead).toMatchObject({ kind: "decoded", frame: { type: "command", command: { name: "telemetry.read" } } });
-        if (telemetryRead.kind !== "decoded" || telemetryRead.frame.type !== "command") throw new Error("telemetry read decoding failed");
-        const telemetryReadResult = RelayFrameCodec.encode({ type: "command-result", id: telemetryRead.frame.id, ok: true, detail: "ok", result: object({ ...telemetryPayload.fields, capabilities }) as never });
-        if (!telemetryReadResult.ok) throw new Error("telemetry read result encoding failed");
-        socket.send(telemetryReadResult.value);
-      };
       const flightRequest = workflow.requestFlightAction("settings-device", "takeoff");
-      await respondCurrentTelemetry();
       await expect(flightRequest).resolves.toMatchObject({ ok: true, value: { ok: true, code: "CONFIRMATION_REQUIRED" } });
       const commands = [
         ["device.settings.camera.read", undefined],
@@ -313,7 +328,6 @@ describe("DesktopApplication", () => {
           : name.endsWith("camera.write") ? workflow.writeCameraSettings("settings-device", { focusMode: "AUTO" })
           : name.endsWith("transmission.read") ? workflow.readTransmissionSettings("settings-device")
           : workflow.writeTransmissionSettings("settings-device", { bandwidth: "BANDWIDTH_20MHZ" });
-        await respondCurrentTelemetry();
         const command = RelayFrameCodec.decode(await nextMessage(socket));
         expect(command).toMatchObject({ kind: "decoded", frame: { type: "command", command: { name } } });
         if (command.kind !== "decoded" || command.frame.type !== "command") throw new Error("command decoding failed");
@@ -340,5 +354,43 @@ describe("DesktopApplication", () => {
     expect(source).toContain("best-effort stop on desktop shutdown");
     expect(source).toMatch(/\["starting"[^\]]*"disconnected"[^\]]*\]/u);
     expect(source).not.toContain('requestFlightAction');
+  });
+
+  it("桌面停止时只收尾已暂存航线，不会发起上传、执行或飞行动作", async () => {
+    const relayPort = await reservePort();
+    const created = DesktopApplication.create(options(relayPort, []));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await expect(created.value.start()).resolves.toMatchObject({ ok: true });
+    const socket = new WebSocket(`ws://127.0.0.1:${relayPort}/relay`);
+    try {
+      await once(socket, "open");
+      const hello = RelayFrameCodec.encode({ type: "hello", deviceId: "shutdown-device", protocolVersion: "1" });
+      if (!hello.ok) throw new Error("hello encoding failed");
+      socket.send(hello.value);
+      expect(RelayFrameCodec.decode(await nextMessage(socket))).toMatchObject({ kind: "decoded", frame: { type: "paired" } });
+
+      const workflow = created.value.workflow();
+      const imported = await workflow.importRoute({
+        fileName: "shutdown-route.kmz",
+        bytes: new Uint8Array(readFileSync(new URL("./fixtures/dji-canonical-hangzhou-orbit.kmz", import.meta.url))),
+      });
+      expect(imported).toMatchObject({ ok: true, value: { status: "imported", route: { classification: "upload-candidate" } } });
+      expect(workflow.assignRoute("shutdown-device", "route-1")).toMatchObject({ ok: true });
+
+      const completed = missionComplete(socket);
+      const staging = workflow.stage("shutdown-device");
+      const missionId = await completed;
+      const result = RelayFrameCodec.encode({ type: "mission-result", id: missionId, ok: true, detail: "staged" });
+      if (!result.ok) throw new Error("mission result encoding failed");
+      socket.send(result.value);
+      await expect(staging).resolves.toMatchObject({ ok: true, value: { ok: true, state: { phase: "staged" } } });
+
+      await expect(created.value.stop()).resolves.toMatchObject({ ok: true, value: { phase: "idle" } });
+    } finally {
+      socket.close();
+      await once(socket, "close");
+      await created.value.dispose();
+    }
   });
 });

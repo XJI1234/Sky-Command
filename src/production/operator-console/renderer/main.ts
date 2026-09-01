@@ -67,6 +67,7 @@ const operatorNotice = (value: unknown): string => {
   if (code === "CAPABILITY_BLOCKED") {
     if (reason === "RELAY_OFFLINE") return "手机已离线，无法发送图传命令";
     if (reason === "SDK_NOT_READY") return "手机端 DJI 尚未就绪，无法启动图传";
+    if (reason === "LIVE_VIDEO_UNAVAILABLE") return "图传链路当前未就绪，请确认 DJI 产品、AirLink 和主相机均已连接后刷新状态";
     return "图传启动条件刚发生变化，请刷新设备状态后重试";
   }
   if (code === "OPERATION_IN_PROGRESS") return "上一条命令还在处理，请稍候";
@@ -379,6 +380,8 @@ const deviceFactRows = (connection: unknown): string => {
   const fps = finiteNumber(read(live, "fps"));
   const bitrate = finiteNumber(read(live, "videoBitrateKbps"));
   const rtt = finiteNumber(read(live, "rttMillis"));
+  const packetLoss = finiteNumber(read(live, "packetLoss"));
+  const packetCacheLength = finiteNumber(read(live, "packetCacheLength"));
   const flightState = read(connection, "flightState") === "grounded" ? "地面" : read(connection, "flightState") === "flying" ? "飞行中" : "尚未确认";
   const motors = read(connection, "motorsOn") === true ? "已启动" : read(connection, "motorsOn") === false ? "已关闭" : "尚未确认";
   const streaming = read(live, "streaming") === true ? "MSDK 报告正在推流" : read(live, "streaming") === false ? "MSDK 报告未推流" : "尚未取得";
@@ -397,6 +400,8 @@ const deviceFactRows = (connection: unknown): string => {
     statusRow("图传分辨率 [手机 MSDK 图传运行观测]", resolution ?? "尚未取得", resolution !== null),
     statusRow("图传帧率 [手机 MSDK 图传运行观测]", fps === null ? "尚未取得" : `${fps} fps`, fps !== null),
     statusRow("图传码率 [手机 MSDK 图传运行观测]", bitrate === null ? "尚未取得" : `${bitrate} Kbps`, bitrate !== null),
+    statusRow("图传丢包 [LiveStreamStatus.packetLoss]", packetLoss === null ? "尚未取得" : String(packetLoss), packetLoss !== null),
+    statusRow("图传缓存长度 [LiveStreamStatus.packetCacheLen]", packetCacheLength === null ? "尚未取得" : String(packetCacheLength), packetCacheLength !== null),
     statusRow("图传往返时间 [手机 MSDK 图传运行观测]", rtt === null ? "尚未取得" : `${rtt} ms`, rtt !== null),
     statusRow("状态更新时间 [桌面接收时间]", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection)),
   ].join("");
@@ -559,6 +564,8 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
         ${statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)}
         ${statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))}
         ${statusRow("DJI 硬件产品连接 [ProductKey.KeyConnection]", connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知"), connected(connection, "aircraft"))}
+        ${statusRow("AirLink 连接 [AirLinkKey.KeyConnection]", connectionLabel(connection, "airLink", "AirLink 已连接", "AirLink 未连接", "AirLink 状态未知"), connected(connection, "airLink"))}
+        ${statusRow("主相机连接 [CameraKey.KeyConnection, LEFT_OR_MAIN]", connectionLabel(connection, "camera", "主相机已连接", "主相机未连接", "主相机状态未知"), connected(connection, "camera"))}
       </div>
       <h3 class="device-status-heading">动态飞行事实</h3>
       <div class="connection-status-list" aria-label="动态飞行事实">${deviceFactRows(connection)}</div>
@@ -652,7 +659,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
       : `${view.streamLabel}。要结束请点「停止图传」`;
     streamReady.classList.add("ok");
   } else if (view.streamCanStart) {
-    streamReady.textContent = "图传可请求启动：电脑、中继和手机 MSDK 已就绪，真实推流结果以手机 DJI 和首帧为准";
+    streamReady.textContent = "图传可请求启动：电脑、中继、手机 MSDK、DJI 产品、AirLink 和主相机均已就绪，真实推流结果以手机 DJI 和首帧为准";
     streamReady.classList.add("ok");
   } else {
     streamReady.textContent = view.streamLabel.startsWith("图传未就绪")

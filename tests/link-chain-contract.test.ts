@@ -102,4 +102,15 @@ describe("设备链路状态契约", () => {
       value: { overall: "degraded", phoneToRemoteController: "connected", remoteControllerToAircraft: "disconnected" }
     });
   });
+
+  it("遥控器在线但两项飞行器事实均未知时保留未知", () => {
+    expect(LinkChain.evaluate({
+      deviceId: "phone-1",
+      relayConnected: true,
+      telemetry: { sdkRegistered: true, remoteControllerConnected: true },
+    })).toMatchObject({
+      ok: true,
+      value: { phoneToRemoteController: "connected", remoteControllerToAircraft: "unknown" },
+    });
+  });
 });

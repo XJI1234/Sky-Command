@@ -301,6 +301,37 @@ describe("node websocket relay adapter contract", () => {
     await listener.close();
   });
 
+  it("closes only a paired socket whose keepalive ping throws", async () => {
+    class ThrowingPingSocket extends Socket {
+      ping(): void { throw new Error("ping unavailable"); }
+    }
+    const timers: Array<() => void> = [];
+    const server = new Server();
+    const transport = NodeWebSocketRelayTransport.create({
+      factory: { openState: 1, create: () => server },
+      pingIntervalMs: 1,
+      scheduler: {
+        setInterval: (callback: () => void) => { timers.push(callback); return timers.length; },
+        clearInterval: () => undefined,
+      },
+    });
+    const reasons: string[] = [];
+    const listening = transport.listen({ host: "127.0.0.1", port: 18 }, (connection) => {
+      connection.onClose((reason) => reasons.push(reason ?? ""));
+    });
+    server.emit("listening");
+    const listener = await listening;
+    const socket = new ThrowingPingSocket();
+    server.sockets.push(socket);
+    server.emit("connection", socket);
+
+    timers[0]!();
+
+    expect(socket.readyState).toBe(3);
+    expect(reasons).toEqual(["transport-error"]);
+    await listener.close();
+  });
+
   it("clears keepalive timers, accepts pongs, and handles both supported timer handle shapes", async () => {
     class PingSocket extends Socket {
       pings = 0;

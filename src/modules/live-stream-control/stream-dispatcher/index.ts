@@ -129,7 +129,6 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     }
     void beginStart(deviceId, lane).then(
       (outcome) => settleRestartResolvers(resolvers, outcome),
-      () => settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "DEPENDENCY_FAILURE")),
     );
   };
   return freeze({

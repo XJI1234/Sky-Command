@@ -32,7 +32,7 @@ instance.subscribe(listener) -> unsubscribe
 1. 校验设备标识和同设备互斥；
 2. 读取 `media-pipeline` 快照，只有 `phase === "running"` 且存在有效 `endpoint.host`、`endpoint.port` 时继续；
 3. 调用 `stream-protocol-config.createRtmpTarget`，获得唯一的 RTMP 目标；
-4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。这个门禁只验证中继和 MSDK 生命周期；不把遥控器、飞控、飞机或 `liveVideo` 遥测解释为型号支持性；
+4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。开始要求中继、MSDK 以及手机端实时推导的 `capabilities.liveVideo === true`；飞控不参与。能力未知或当前未就绪时不发送命令；
 5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。
 
 当同一设备正处于 `stopping` 时，`start(deviceId)` 不是并发命令：它登记一次“停止后重启”意图，并等待现有停止命令的终态。停止成功后，调度器必须重新执行上述全部启动检查，再发送唯一一条 `live-stream.start`；停止失败或设备断线时，不得发送启动命令，所有已登记调用必须得到该终态失败。处于 `starting` 的同设备 `start`、以及所有其他忙碌冲突，仍返回 `OPERATION_IN_PROGRESS`。多个停止期间的启动请求可以合并为一次实际启动，但每个调用都必须收到该次启动的最终结果。

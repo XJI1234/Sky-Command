@@ -231,6 +231,8 @@ describe("飞行作业工作流内部模块", () => {
             liveFps: 29.97,
             liveVideoBitrateKbps: 1802,
             liveRttMillis: 42,
+            livePacketLoss: 6,
+            livePacketCacheLength: 108,
           },
           capabilities: {},
         },
@@ -249,7 +251,7 @@ describe("飞行作业工作流内部模块", () => {
       lowBatteryRthState: "IDLE",
       remainingFlightTimeSeconds: 1085,
       pose: { latitude: 30.27415, longitude: 120.15515, altitudeMeters: 12.3 },
-      live: { streaming: true, resolution: "1920x1080", fps: 29.97, videoBitrateKbps: 1802, rttMillis: 42 },
+      live: { streaming: true, resolution: "1920x1080", fps: 29.97, videoBitrateKbps: 1802, rttMillis: 42, packetLoss: 6, packetCacheLength: 108 },
     });
   });
 
@@ -275,6 +277,8 @@ describe("飞行作业工作流内部模块", () => {
             liveFps: 30,
             liveVideoBitrateKbps: 1802,
             liveRttMillis: 42,
+            livePacketLoss: 4,
+            livePacketCacheLength: 72,
           },
           capabilities: {},
         },
@@ -292,7 +296,7 @@ describe("飞行作业工作流内部模块", () => {
       lowBatteryRthState: "unknown",
       remainingFlightTimeSeconds: null,
       pose: null,
-      live: { streaming: true, resolution: "1920x1080", fps: 30, videoBitrateKbps: 1802, rttMillis: 42 },
+      live: { streaming: true, resolution: "1920x1080", fps: 30, videoBitrateKbps: 1802, rttMillis: 42, packetLoss: 4, packetCacheLength: 72 },
     });
   });
 
@@ -326,7 +330,7 @@ describe("飞行作业工作流内部模块", () => {
       flightMode: null,
       lowBatteryRthState: "unknown",
       remainingFlightTimeSeconds: null,
-      live: { streaming: false, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null },
+      live: { streaming: false, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null },
     });
 
     expect(create({
@@ -335,8 +339,10 @@ describe("飞行作业工作流内部模块", () => {
       liveFps: 241,
       liveVideoBitrateKbps: -1,
       liveRttMillis: 1.5,
-    })?.live).toEqual({ streaming: true, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null });
-    expect(create({})?.live).toEqual({ streaming: null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null });
+      livePacketLoss: -1,
+      livePacketCacheLength: 2_147_483_648,
+    })?.live).toEqual({ streaming: true, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
+    expect(create({})?.live).toEqual({ streaming: null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
 
     const snapshot = WorkflowSnapshot.create({
       devices: [device({})], routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0,

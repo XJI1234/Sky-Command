@@ -195,6 +195,34 @@ describe("preflight check contract", () => {
     });
   });
 
+  it("上传预检拒绝无效输入并分别报告每一项不可用硬件事实", () => {
+    expect(PreflightCheck.evaluateUpload({} as never)).toMatchObject({
+      ok: false,
+      blockers: [{ code: "INVALID_INPUT" }],
+    });
+    expect(PreflightCheck.evaluateUpload({
+      ...ready(),
+      relayConnected: false,
+      payload: {
+        ...ready().payload,
+        sdkRegistered: false,
+        remoteControllerConnected: false,
+        flightControllerConnected: true,
+        connected: false,
+      },
+      capabilities: { waypointMission: true, waypointMissionSupport: "unsupported" },
+    })).toMatchObject({
+      ok: false,
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ code: "RELAY_DISCONNECTED" }),
+        expect.objectContaining({ code: "SDK_NOT_READY" }),
+        expect.objectContaining({ code: "REMOTE_CONTROLLER_DISCONNECTED" }),
+        expect.objectContaining({ code: "AIRCRAFT_DISCONNECTED" }),
+        expect.objectContaining({ code: "WAYPOINT_UNSUPPORTED" }),
+      ]),
+    });
+  });
+
   it("fails closed for malformed direct-flight actions and policies", () => {
     const action: FlightActionPreflightInput = {
       relayConnected: true,
