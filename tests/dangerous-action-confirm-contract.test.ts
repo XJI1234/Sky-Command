@@ -20,6 +20,12 @@ describe("DangerousActionConfirm", () => {
     expect(confirmations.consume("phone-1", "takeoff", "confirm-1", 102)).toMatchObject({ ok: false, code: "NO_PENDING_CONFIRMATION" });
   });
 
+  it("accepts the two explicit MSDK stop actions as independent confirmations", () => {
+    const confirmations = create();
+    expect(confirmations.begin("phone-1", "stop-takeoff", 100)).toMatchObject({ ok: true, confirmation: { action: "stop-takeoff" } });
+    expect(confirmations.begin("phone-1", "stop-auto-landing", 101)).toMatchObject({ ok: true, confirmation: { action: "stop-auto-landing" } });
+  });
+
   it("replaces an old request without permitting a mismatched device or action to consume it", () => {
     let next = 0;
     const confirmations = create({ createConfirmationId: () => `confirm-${++next}` });

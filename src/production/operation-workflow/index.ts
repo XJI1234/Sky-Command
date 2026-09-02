@@ -18,6 +18,7 @@ const failure = (code: string, value?: unknown): WorkflowResult => freeze({ ok: 
 function create(dependencies: OperationWorkflowDependencies) {
   const assignments = AssignmentRegistry.create();
   const pending = new Map<string, string>();
+  const landingIntents = new Map<string, "requested" | "stopped">();
   const listeners = new Set<(snapshot: unknown) => void>();
   let selectedRouteId: string | null = null;
   let selectedVideoDeviceId: string | null = null;
@@ -70,7 +71,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
   const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => {
     const rawTelemetry = telemetryRaw(deviceId);
-    return freeze({ deviceId, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: controlTelemetryRaw(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId) });
+    return freeze({ deviceId, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: controlTelemetryRaw(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId), landingIntent: landingIntents.get(deviceId) });
   }), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
   const publish = (): void => {
     revision += 1;
@@ -93,6 +94,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!gone && !replaced) continue;
       // 设备消失或会话替换：危险确认与图传车道都必须作废，避免重连后点到旧确认。
       clearFlightConfirm(deviceId);
+      landingIntents.delete(deviceId);
       if (gone) {
         assignments.removeDevice(deviceId);
       }
@@ -114,17 +116,20 @@ function create(dependencies: OperationWorkflowDependencies) {
     const value = controlTelemetryRaw(deviceId);
     const payload = read(value, "payload");
     const capabilities = read(value, "capabilities");
-    const decision = CapabilityGate.evaluate({ operation, relayConnected: value !== null, sdkRegistered: read(payload, "sdkRegistered"), remoteControllerConnected: read(payload, "remoteControllerConnected"), flightControllerConnected: read(payload, "flightControllerConnected"), capabilities });
+    const facts: Record<string, unknown> = { operation, relayConnected: value !== null, capabilities,
+      sdkAvailability: read(payload, "sdkAvailability"), remoteController: read(payload, "remoteController"), flightController: read(payload, "flightController"),
+      sdkRegistered: read(payload, "sdkRegistered"), remoteControllerConnected: read(payload, "remoteControllerConnected"), flightControllerConnected: read(payload, "flightControllerConnected") };
+    const decision = CapabilityGate.evaluate(facts);
     return decision.ok === true && decision.value.enabled === true;
   };
   const readiness = (deviceId: string, target: HardwareReadinessTarget, source: unknown = controlTelemetryRaw(deviceId)): HardwareReadinessResult => {
     let configuration: RecordValue | null;
     try { configuration = record(dependencies.hardwareReadiness); } catch { configuration = null; }
     const payload = record(read(source, "payload")) ?? freeze({});
-    const payloadFacts: Record<string, boolean> = {};
-    for (const key of ["sdkRegistered", "remoteControllerConnected", "flightControllerConnected", "connected"]) {
+    const payloadFacts: Record<string, unknown> = {};
+    for (const key of ["sdkAvailability", "remoteController", "flightController", "sdkRegistered", "remoteControllerConnected", "flightControllerConnected"]) {
       const value = read(payload, key);
-      if (typeof value === "boolean") payloadFacts[key] = value;
+      if (value !== undefined) payloadFacts[key] = value;
     }
     return HardwareReadiness.evaluate({
       desktop: {
@@ -253,6 +258,7 @@ function create(dependencies: OperationWorkflowDependencies) {
     writeCameraSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => withCurrentControl(deviceId, () => actions.writeCamera(deviceId, patch))),
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
+      if (action === "land" && landingIntents.get(deviceId) === "requested") return failure("LANDING_IN_PROGRESS");
       const control = validId(deviceId) && online(deviceId) ? currentControl(deviceId) : null;
       const decision = control === null ? null : readiness(deviceId, "flight-control", control);
       const result = validId(deviceId) && online(deviceId) && control === null
@@ -269,7 +275,16 @@ function create(dependencies: OperationWorkflowDependencies) {
     confirmFlightAction: async (deviceId: string, confirmationId: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
       const result = await withCurrentControl(deviceId, () => actions.confirmFlight(deviceId, confirmationId));
-      if (result.ok) pending.delete(deviceId);
+      if (result.ok) {
+        pending.delete(deviceId);
+        const inner = read(result, "value");
+        if (read(inner, "ok") === true && read(inner, "code") === "SUCCEEDED") {
+          const action = read(inner, "action");
+          if (action === "land" || action === "confirm-landing") landingIntents.set(deviceId, "requested");
+          else if (action === "stop-auto-landing") landingIntents.set(deviceId, "stopped");
+          else if (action === "takeoff" || action === "return-home" || action === "stop-takeoff") landingIntents.delete(deviceId);
+        }
+      }
       publish(); return result;
     },
     cancelFlightAction: (deviceId: string, confirmationId: string): WorkflowResult => {
@@ -278,7 +293,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); landingIntents.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
   });
 }
 

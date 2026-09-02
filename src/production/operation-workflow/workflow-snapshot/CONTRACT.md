@@ -31,6 +31,7 @@ WorkflowSnapshot.create(input) -> OperationWorkflowSnapshot
   - 坐标与高度都不可用时 `pose` 为 `null`
   - 不得把 JSON 空值或残缺坐标显示成 `0`
 - `live`：只读直播指标，固定为 `{ streaming, resolution, fps, videoBitrateKbps, rttMillis }`。`streaming` 仅保留布尔值；`resolution` 仅保留上述安全文本；`fps` 仅保留 `0..240` 的有限数值；`videoBitrateKbps` 仅保留 `0..100,000` 的有限数值；`rttMillis` 仅保留 `0..60,000` 的安全整数；其余均为 `null`。这些是手机已上报的观测值，不得改变图传状态机、触发播放器行为或替代 `stream` 的命令状态。
+- `gpsSignalLevel`、`gpsSatelliteCount`、`visionSensorUsed`、`visionSystemWarning`、`visionPositioningEnabled`、`landingProtectionState`、`landingConfirmationNeeded`、`takeoffFailureError` 和 `motorStartFailureError`：逐项读取同名 Android MSDK 遥测字段。布尔值、非负整数及受限枚举名称保留，缺失/畸形值为 `null` 或内部 `unknown`；不得以任一值推导“室内安全”、自动起飞、自动降落或自动继续降落。飞控明确断开时，全部清空。
 - 飞控**明确断开**时，`lowBatteryRthState`、`remainingFlightTimeSeconds`、`flightState`、`motorsOn`、`flightMode` 和 `pose` 均必须为未知或 `null`；不得展示先前连接留下的飞控动态数据。`batteryPercent` 由独立的 `battery` 状态决定，飞控状态未知时保持既有遥测投影语义。`live` 属于独立的当前图传观测，不能作为飞行事实或用于改变飞控状态。
 
 ## 验收

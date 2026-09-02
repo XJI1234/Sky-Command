@@ -25,7 +25,10 @@ instance.isBusy(deviceId) -> boolean
 | --- | --- |
 | `takeoff` | `flight.takeoff` |
 | `land` | `flight.land` |
+| `confirm-landing` | `flight.confirm-landing` |
 | `return-home` | `flight.return-home` |
+| `stop-takeoff` | `flight.stop-takeoff` |
+| `stop-auto-landing` | `flight.stop-auto-landing` |
 
 所有命令字段固定为冻结的 `{ confirm: true }`；不允许桌面端传入其他飞行参数。
 
@@ -35,7 +38,7 @@ instance.isBusy(deviceId) -> boolean
 
 `FlightCommandResult` 只能是：`SUCCEEDED`、`PREFLIGHT_BLOCKED`、`CAPABILITY_BLOCKED`、`RELAY_REJECTED`、`DEPENDENCY_FAILURE`、`OPERATION_IN_PROGRESS`、`INVALID_INPUT`。中继只在 `status === "succeeded"` 时表示成功；其它合法或异常返回值均为 `RELAY_REJECTED` 或 `DEPENDENCY_FAILURE`，绝不抛出。
 
-手机端已注册三条飞控命令，生产组合必须通过 `relay-operations-adapter` 编码 `{ confirm: true }`，不得直接传递协议 JSON 或生成其他 `flight.*` 命令。
+手机端已注册六条飞控命令，生产组合必须通过 `relay-operations-adapter` 编码 `{ confirm: true }`，不得直接传递协议 JSON 或生成其他 `flight.*` 命令。
 
 ## 4. 并发与依赖
 
@@ -45,4 +48,4 @@ instance.isBusy(deviceId) -> boolean
 
 ## 5. 验证
 
-测试必须覆盖全部三个映射、检查顺序、预检/能力拒绝无发送、重检、防御性错误处理、同设备互斥、多设备并行、冻结结果和确认字段发送；类型和架构测试必须阻止协议帧/平台类型及不允许的导入，模块范围覆盖率、性能和 Stryker 必须为 100%。
+测试必须覆盖全部六个映射、检查顺序、预检/能力拒绝无发送、重检、防御性错误处理、同设备互斥、多设备并行、冻结结果和确认字段发送；类型和架构测试必须阻止协议帧/平台类型及不允许的导入，模块范围覆盖率、性能和 Stryker 必须为 100%。

@@ -68,14 +68,17 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)');
     expect(source).not.toContain("ProductKey.KeyConnection");
     expect(source).toContain("const flightControllerStatusRows = (connection: unknown): string => {");
+    expect(source).toContain("const flightAssistantStatusRows = (connection: unknown): string => {");
     expect(source).toContain("const videoTransportStatusRows = (connection: unknown): string => {");
     expect(source).toContain("const batteryStatusRows = (connection: unknown): string => {");
     expect(source).toContain("const deviceInformationRows = (connection: unknown): string => {");
     expect(source).toContain('<h3 class="device-status-heading">飞控状态 [FlightControllerKey]</h3>');
+    expect(source).toContain('<h3 class="device-status-heading">飞行辅助状态 [FlightAssistantKey]</h3>');
     expect(source).toContain('<h3 class="device-status-heading">图传状态 [AirLinkKey / CameraKey]</h3>');
     expect(source).toContain('<h3 class="device-status-heading">电池状态 [BatteryKey]</h3>');
     expect(source).toContain('<h3 class="device-status-heading">设备信息</h3>');
     expect(source).toContain("flightControllerStatusRows(connection)");
+    expect(source).toContain("flightAssistantStatusRows(connection)");
     expect(source).toContain("videoTransportStatusRows(connection)");
     expect(source).toContain("batteryStatusRows(connection)");
     expect(source).toContain("deviceInformationRows(connection)");
@@ -96,6 +99,15 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("低电量返航状态 [FlightControllerKey.KeyLowBatteryRTHInfo]"');
     expect(source).toContain('statusRow("低电量返航预估 [FlightControllerKey.KeyLowBatteryRTHInfo]"');
     expect(source).toContain('statusRow("飞行模式 [FlightControllerKey.KeyFCFlightMode]"');
+    expect(source).toContain('statusRow("GPS 信号 [FlightControllerKey.KeyGPSSignalLevel]"');
+    expect(source).toContain('statusRow("GPS 卫星数 [FlightControllerKey.KeyGPSSatelliteCount]"');
+    expect(source).toContain('statusRow("视觉传感器 [FlightControllerKey.KeyIsVisionSensorUsed]"');
+    expect(source).toContain('statusRow("降落确认 [FlightControllerKey.KeyIsLandingConfirmationNeeded]"');
+    expect(source).toContain('statusRow("起飞失败原因 [FlightControllerKey.KeyTakeoffFailureError]"');
+    expect(source).toContain('statusRow("电机启动失败原因 [FlightControllerKey.KeyMotorStartFailureError]"');
+    expect(source).toContain('statusRow("视觉系统警告 [FlightAssistantKey.KeyVisionSystemWarning]"');
+    expect(source).toContain('statusRow("视觉定位 [FlightAssistantKey.KeyVisionPositioningEnabled]"');
+    expect(source).toContain('statusRow("降落保护状态 [FlightAssistantKey.KeyLandingProtectionState]"');
     expect(source).toContain('statusRow("相对起飞点高度 [FlightControllerKey.KeyAltitude]"');
     expect(source).toContain('statusRow("位置 [FlightControllerKey.KeyAircraftLocation]"');
     expect(source).toContain('statusRow("MSDK 图传观测 [手机 MSDK 图传运行观测]"');
@@ -108,6 +120,7 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("手机推流 [手机图传运行状态]", streamRuntimeLabel(device), false)');
     expect(source).toContain('statusRow("桌面播放 [桌面播放器运行状态]", playbackRuntimeLabel(device, streamDeviceId), false)');
     expect(source).toContain('if (value === "UNKNOWN") return "未知（MSDK 返回 UNKNOWN）";');
+    expect(source).toContain('code === "LANDING_IN_PROGRESS"');
     expect(source).toContain('await bridge().invoke("stream-select", { deviceId: view.streamDeviceId })');
   });
 
@@ -682,6 +695,47 @@ describe("操作台工作区", () => {
       ok: false,
       reason: "飞机已在地面，不能返航",
     });
+  });
+
+  it("降落命令已被 DJI 接受后，在落地确认前禁止重复下发", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        connection: { ...device().connection, flightState: "flying", flightMode: "AUTO_LANDING" },
+        landing: { phase: "awaiting-msdk" },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("flight-land", view)).toEqual({
+      ok: false,
+      reason: "降落命令已发送，等待 MSDK 确认落地",
+    });
+  });
+
+  it("停止自动起飞和自动降落只接受对应的原始 MSDK 飞行模式", () => {
+    const flight = (flightMode: string) => OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, flightMode } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("flight-stop-takeoff", flight("AUTO_TAKE_OFF"))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("AUTO_LANDING"))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("CONFIRM_LANDING"))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-stop-takeoff", flight("GPS_NORMAL"))).toMatchObject({ ok: false });
+    expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("GPS_NORMAL"))).toMatchObject({ ok: false });
+  });
+
+  it("只在飞控明确要求继续降落时允许发送确认降落", () => {
+    const allowed = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, flightState: "flying", landingConfirmationNeeded: true } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" }, workspace: "flight",
+    });
+    const blocked = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, flightState: "flying", landingConfirmationNeeded: false } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" }, workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("flight-confirm-landing", allowed)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-confirm-landing", blocked)).toEqual({ ok: false, reason: "MSDK 未要求确认继续降落" });
   });
 });
 

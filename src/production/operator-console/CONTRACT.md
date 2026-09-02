@@ -13,7 +13,8 @@
 设备详情按 MSDK 组件与运行归属分区呈现，取代此前把 Key 与事实混入同一个「连接状态」或「动态飞行事实」列表的布局：
 
 - **连接状态**：仅显示电脑到手机中继、MSDK 生命周期、遥控器连接和对频状态。
-- **飞控状态 `[FlightControllerKey]`**：显示 `KeyConnection`、飞行状态、电机、低电量返航状态与预估、飞行模式、相对起飞点高度和位置。
+- **飞控状态 `[FlightControllerKey]`**：显示 `KeyConnection`、飞行状态、电机、低电量返航状态与预估、飞行模式、相对起飞点高度、位置、GPS、视觉传感器、降落确认及起飞/电机失败原始事实。
+- **飞行辅助状态 `[FlightAssistantKey]`**：显示视觉系统告警、视觉定位开关和降落保护的原始事实。
 - **图传状态 `[AirLinkKey / CameraKey]`**：显示 AirLink 和主相机的 `KeyConnection`，以及手机 MSDK 图传运行观测、分辨率、帧率、码率、丢包、缓存长度和 RTT。
 - **电池状态 `[BatteryKey]`**：显示主电池 `KeyConnection` 和电量；电池值不因飞控明确断开而被渲染层隐藏。
 - **设备信息**：显示机型、遥控器型号和桌面接收时间；接收时间只说明观察到达桌面的时刻，不参与按钮授权。
@@ -29,7 +30,7 @@
 
 ### 事实来源标注
 
-动态 MSDK 事实也必须逐行标出精确来源：机型 `[ProductKey.KeyProductType]`、遥控器型号 `[RemoteControllerKey.KeyRemoteControllerType]`、飞行状态 `[FlightControllerKey.KeyIsFlying]`、电机 `[FlightControllerKey.KeyAreMotorsOn]`、电量 `[BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]`、低电量返航状态和预估 `[FlightControllerKey.KeyLowBatteryRTHInfo]`、飞行模式 `[FlightControllerKey.KeyFCFlightMode]`、相对起飞点高度 `[FlightControllerKey.KeyAltitude]`、位置 `[FlightControllerKey.KeyAircraftLocation]`。图传观测、分辨率、帧率、码率、RTT、任务、播放器和桌面接收时间不是 MSDK Key，必须如实注明其运行时来源，不能伪造 Key。
+动态 MSDK 事实也必须逐行标出精确来源：机型 `[ProductKey.KeyProductType]`、遥控器型号 `[RemoteControllerKey.KeyRemoteControllerType]`、飞行状态 `[FlightControllerKey.KeyIsFlying]`、电机 `[FlightControllerKey.KeyAreMotorsOn]`、电量 `[BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]`、低电量返航状态和预估 `[FlightControllerKey.KeyLowBatteryRTHInfo]`、飞行模式 `[FlightControllerKey.KeyFCFlightMode]`、相对起飞点高度 `[FlightControllerKey.KeyAltitude]`、位置 `[FlightControllerKey.KeyAircraftLocation]`、GPS 信号 `[FlightControllerKey.KeyGPSSignalLevel]`、GPS 卫星数 `[FlightControllerKey.KeyGPSSatelliteCount]`、视觉传感器使用 `[FlightControllerKey.KeyIsVisionSensorUsed]`、降落确认请求 `[FlightControllerKey.KeyIsLandingConfirmationNeeded]`、起飞失败原因 `[FlightControllerKey.KeyTakeoffFailureError]`、电机启动失败原因 `[FlightControllerKey.KeyMotorStartFailureError]`、视觉告警 `[FlightAssistantKey.KeyVisionSystemWarning]`、视觉定位开关 `[FlightAssistantKey.KeyVisionPositioningEnabled]` 与降落保护 `[FlightAssistantKey.KeyLandingProtectionState]`。图传观测、分辨率、帧率、码率、RTT、任务、播放器和桌面接收时间不是 MSDK Key，必须如实注明其运行时来源，不能伪造 Key。
 
 设备页显示与控制门禁读取同一 Relay 会话的当前 MSDK 设备事实。稳定事实不能仅因没有新事件或接收时间变旧而降级；会话替换、MSDK 观察重建和明确的未知/断开事件才会更新其可用性。状态更新时间只说明桌面何时收到该观察，不参与按钮授权。
 
@@ -49,7 +50,7 @@
 - `starting` 必须说明仅启动调用已受理、仍等待飞机实际进入航线；只有 `running` 才是「正在执行航线」。暂停、恢复或停止待确认时必须说明不能重复同一命令；暂停/恢复待确认时仍必须允许停止作为唯一保守处置。断线必须说明飞机状态未知，不能写成已停止。
 - 图传只有 `video.phase === ready` 才是可播放；手机接受推流不是实时图传。生产只保留经典 RTMP/HTTP-FLV；低延迟 WHIP 已封存，`evaluate("webrtc-*")` 必须拒绝并引导使用「启动图传」。空闲时 `streamLabel` 必须写明是否可启动及阻塞原因（如「图传状态未知」或「图传链路未就绪」），不得笼统写成「空闲」；不得将遥控器或飞控断开写成图传启动阻塞原因。
 - 旧图传由飞行页 `flv.js` 播放本机 HTTP-FLV。媒体管线 `ready` 只表示 RTMP 已到达且 HTTP-FLV 可取；渲染器成功附着当前图传机时必须同步播放器选择，只有同一渲染器观察到 `video` 正持续出帧才可显示「正在播放」。其他设备必须显示未被当前播放器选择，不能把另一台手机的播放状态投射过来。播放抖动时优先 `unload/load` 软恢复，连续失败才退避重挂；已附着但长时间未出画或画面停住必须看门狗恢复。面向操作员的状态栏不得展示 `readyState`、错误码或英文动作名。
-- `evaluate("stream-start")` 要求已选图传机、MSDK 已就绪且手机实时 `capabilities.liveVideo === true`；桌面图传预检还会验证媒体服务与在线稳定中继。`liveVideo` 由手机端的 MSDK 就绪状态、AirLink Key 和主相机 Key 当前三态推导；飞控与遥控器不参与。能力未知或 false 必须禁用按钮并分别明确为「图传状态未知」或「图传链路未就绪」，不得写成「当前机不支持图传」。真实推流与收流结果仍由 DJI 回调和既有图传状态机明确呈现。`streamCanStart` 与该门槛对齐。`streamPhase === "stopping"` 时必须优先显示「正在停止图传」，不得被遗留的播放器 `ready` 状态写成「图传播放中」；若启动门禁已满足，启动按钮必须表示“停止后重启”，其请求只会在手机确认停止后由控制调度器重新预检并下发。`streamPhase` 已是 starting/streaming 但 `video.phase` 尚非 ready 时，文案须写成「电脑还没收到画面」，不得暗示已有实时图传。`evaluate("flight-takeoff")` 必须确认电量不少于 20%、飞机在地面且电机关闭；`evaluate("flight-land"|"flight-return-home")` 必须先确认飞行状态为在空中，不得对未知或已在地面状态弹出确认。飞行页不展示低延迟按钮。
+- `evaluate("stream-start")` 要求已选图传机、MSDK 已就绪且手机实时 `capabilities.liveVideo === true`；桌面图传预检还会验证媒体服务与在线稳定中继。`liveVideo` 由手机端的 MSDK 就绪状态、AirLink Key 和主相机 Key 当前三态推导；飞控与遥控器不参与。能力未知或 false 必须禁用按钮并分别明确为「图传状态未知」或「图传链路未就绪」，不得写成「当前机不支持图传」。真实推流与收流结果仍由 DJI 回调和既有图传状态机明确呈现。`streamCanStart` 与该门槛对齐。`streamPhase === "stopping"` 时必须优先显示「正在停止图传」，不得被遗留的播放器 `ready` 状态写成「图传播放中」；若启动门禁已满足，启动按钮必须表示“停止后重启”，其请求只会在手机确认停止后由控制调度器重新预检并下发。`streamPhase` 已是 starting/streaming 但 `video.phase` 尚非 ready 时，文案须写成「电脑还没收到画面」，不得暗示已有实时图传。`evaluate("flight-takeoff")` 必须确认电量不少于 20%、飞机在地面且电机关闭；`evaluate("flight-land"|"flight-return-home")` 必须先确认飞行状态为在空中，不得对未知或已在地面状态弹出确认；`evaluate("flight-confirm-landing")` 仅在原始 `FlightControllerKey.KeyIsLandingConfirmationNeeded=true` 且 `KeyIsFlying=true` 时可确认，且对应 DJI `KeyConfirmLanding`。`evaluate("flight-stop-takeoff")` 只在原始飞行模式为 `AUTO_TAKE_OFF` 时可确认，`evaluate("flight-stop-auto-landing")` 只在 `AUTO_LANDING` 或 `CONFIRM_LANDING` 时可确认。`KeyStartAutoLanding` 成功后状态必须写为「等待 MSDK 确认落地」；只有 `KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 才写为「已确认落地」。飞行页不展示低延迟按钮。
 - 对频由手机完成。`evaluate("pairing-start")` / `evaluate("pairing-stop")` 必须说明该事实，不得假装桌面已经发出对频命令。
 - `mission-stage` 只要求已选可执行航线和在线手机，且任务阶段为 `idle`、`completed`、`failed` 或 `disconnected`；KMZ 传到手机不依赖飞机已连接。`mission-upload` 仅在阶段为 `staged`、MSDK 已就绪、遥控器和飞控都明确已连接、并已上报航线能力时允许；实际发送前后端仍会重新读取控制遥测。六个航线按钮均须直接使用 `evaluate` 的结果禁用和显示原因，渲染层不得自行放宽阶段规则。
 - `mission-pause` 仅 `running`，`mission-resume` 仅 `paused`，`mission-stop` 仅 `starting`、`running`、`pausing`、`paused`、`resuming` 或已重新在线设备的 `disconnected` 任务。暂停、恢复和停止不应先被飞控或飞机的显示状态阻断；它们仍由后端确认手机命令链路可达。后者是断线后的保守处置，不恢复或重发启动。上传完成未开始执行时不得发 `wayline.stop`。`mission-start` 还要求手机就绪、遥控器已连接、飞机与飞控已连接，飞行状态已确认为在地面且电机明确关闭；未知、在空中或电机已启动都不得启动航线。对频不是日常前置条件，只有接入新飞机或更换遥控器时才应在手机端作为独立维护操作。点击「执行航线」只能创建本地确认意图；确认时必须重新读取快照，且目标手机、`missionId` 与任务 `routeId` 三者仍完全匹配才可发送启动命令。

@@ -132,6 +132,7 @@
     .direct-flight-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
     .direct-flight-actions button[data-action="flight-takeoff"] { border-color: #668661; }
     .direct-flight-actions button[data-action="flight-land"], .direct-flight-actions button[data-action="flight-return-home"] { border-color: #704044; color: var(--danger); }
+    .direct-flight-actions button[data-action="flight-stop-takeoff"], .direct-flight-actions button[data-action="flight-stop-auto-landing"] { border-color: #d8b456; color: #f3d58d; }
     .operation-status { margin: 0; padding: 13px 20px 18px; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
     @media (max-width: 860px) {
       body { overflow: auto; }
@@ -316,8 +317,11 @@
         </div>
         <div class="direct-flight-actions">
           <button data-action="flight-takeoff">起飞</button>
-          <button data-action="flight-land">降落</button>
+           <button data-action="flight-land">降落</button>
+           <button data-action="flight-confirm-landing">确认继续降落</button>
           <button data-action="flight-return-home">返航</button>
+          <button data-action="flight-stop-takeoff">停止自动起飞</button>
+          <button data-action="flight-stop-auto-landing">停止自动降落</button>
         </div>
         <div id="confirm" class="flight-confirmation" hidden>
           <p id="confirm-text"></p>
@@ -325,8 +329,9 @@
             <button id="confirm-yes">确认</button>
             <button id="confirm-no">取消</button>
           </div>
-        </div>
-        <p id="guidance" class="notice" style="margin: 12px 0 0;"></p>
+          </div>
+          <p id="landing-status" class="notice" aria-live="polite">未请求降落</p>
+          <p id="guidance" class="notice" style="margin: 12px 0 0;"></p>
       </div>
       <p id="status" class="operation-status" aria-live="polite"></p>
     </section>

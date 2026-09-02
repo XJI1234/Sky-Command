@@ -70,7 +70,15 @@ instance.dispose() -> void
 | `pairing` | `pairing`、`pairingState` | 原始受限枚举 `UNKNOWN`、`IDLE`、`PAIRING`、`PAIRED`、`STOPPING`、`FAILED` 必须原样保留为 `pairing`；`pairingState` 仅为既有调用方的兼容别名 |
 | `latitude` / `longitude` | 同名字段 | 仅在两者都是有限数值且分别落在 `[-90,90]`、`[-180,180]` 时成对保留；缺一、越界、JSON null 均省略，不得写成 `0` |
 | `altitudeMeters` | 同名字段 | `FlightControllerKey.KeyAltitude` 的相对起飞点高度；仅保留有限数值，不受电池 `0..100` 范围限制，不换算为海拔或下视测距高度 |
-| `liveStreaming` | 同名字段 | 仅保留布尔值；它是当前只读观测，不能改变桌面图传状态机 |
+| `gpsSignalLevel` | 同名字段 | 仅保留 `FlightControllerKey.KeyGPSSignalLevel` 的受限原始枚举名称：`LEVEL_0..LEVEL_5`、`LEVEL_10`、`LEVEL_NONE`、`UNKNOWN`；不把它解释为可飞或室内安全 |
+| `gpsSatelliteCount` | 同名字段 | 仅保留 `FlightControllerKey.KeyGPSSatelliteCount` 的非负安全整数原值；它不是定位已可用的推导结论 |
+| `visionSensorUsed` | 同名字段 | 仅保留 `FlightControllerKey.KeyIsVisionSensorUsed` 的原始布尔值；`true` 只表示 SDK 报告正在使用视觉传感器 |
+| `visionSystemWarning` | 同名字段 | 仅保留 `FlightAssistantKey.KeyVisionSystemWarning` 的受限原始枚举 `INVALID`、`SAFE`、`DANGEROUS`、`UNKNOWN`；不得据此自动授权起飞或降落 |
+| `visionPositioningEnabled` | 同名字段 | 仅保留 `FlightAssistantKey.KeyVisionPositioningEnabled` 的原始布尔值；这是设置开关，不等于视觉定位正在工作或环境安全 |
+| `landingProtectionState` | 同名字段 | 仅保留 `FlightAssistantKey.KeyLandingProtectionState` 的受限原始枚举 `NONE`、`ANALYZING`、`ANALYSIS_FAILED`、`SAFE_TO_LAND`、`NOT_SAFE_TO_LAND`、`UNKNOWN` |
+| `landingConfirmationNeeded` | 同名字段 | 仅保留 `FlightControllerKey.KeyIsLandingConfirmationNeeded` 的原始布尔值；本程序不因该字段自动调用 `KeyConfirmLanding` |
+| `takeoffFailureError`、`motorStartFailureError` | 同名字段 | 仅保留 `FlightControllerKey.KeyTakeoffFailureError`、`KeyMotorStartFailureError` 的安全 MSDK 枚举名称；包括 `NONE`、`UNKNOWN` 与每个 SDK 定义的失败码，不翻译或合并 |
+| `liveStreaming` | 同名字段 | 仅保留 Android `LiveStreamStatus.isStreaming` 的原始布尔值；缺失/JSON null 表示尚未取得或已失效，不能由 `live-stream.start`/`stop` 命令结果、桌面图传状态机或媒体指标推断 |
 | `liveResolution` | 同名字段 | 仅在 `liveStreaming=true` 时保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
 | `liveFps` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..240` 的有限数值 |
 | `liveVideoBitrateKbps` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..100,000` 的有限数值 |
@@ -85,9 +93,9 @@ instance.dispose() -> void
 | `capabilities.waypointMission` | 同名字段 | 仅保留布尔值；字段名不得改写 |
 | `capabilities.waypointMissionSupport` | 同名字段 | 线协议 `SUPPORTED` / `UNSUPPORTED` 归一为桌面门禁词表 `supported` / `unsupported`；其他值为 `undefined`。这不是改字段名。 |
 
-投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera`、`battery` 与 `pairing` 是设备页的只读 MSDK 原始状态事实：显示链路必须直接消费这些枚举，不能改读兼容布尔值、别名、合并多个字段或施加显示保持。`batteryPercent` 只由同一帧的 `battery=CONNECTED` 授权，不能被飞控连接状态清除或放行。`aircraft` 与兼容布尔值 `connected` 的唯一来源是 `ProductKey.KeyConnection`，只留在适配器诊断遥测中，不能显示或被读取为飞机物理连接。`sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected` 与 `pairingState` 是既有调用方的兼容投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
+投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera`、`battery`、`pairing` 和新增的飞控/飞控辅助 Key 是设备页的只读 MSDK 原始状态事实：显示链路必须直接消费这些值，不能改读兼容布尔值、别名、合并多个字段或施加显示保持。`batteryPercent` 只由同一帧的 `battery=CONNECTED` 授权，不能被飞控连接状态清除或放行。`aircraft` 与兼容布尔值 `connected` 的唯一来源是 `ProductKey.KeyConnection`，只留在适配器诊断遥测中，不能显示或被读取为飞机物理连接。`sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected` 与 `pairingState` 是既有调用方的兼容投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
 
-`liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。
+`liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。该字段与桌面图传调度的“开始已接受”和媒体管线的“已播放”独立：它们只能分别显示，互不推导或授权。
 
 `telemetry(deviceId)` 与 `controlTelemetry(deviceId)` 必须读取同一份“当前会话设备事实”，两者不得维护不同来源、不同值或不同的显示保持期。该事实以 Android MSDK Key 的持续订阅为主，手机组合根为每次实际发布的 `TelemetryFrame` 赋予单调 `telemetrySequence`；设备页显式 `telemetry.read` 只读取并回传当前已订阅的快照，不重建任何 MSDK Key 观察。订阅遥测必须同时携带 `relay-link` 为它绑定的 `sessionId`，且与当前 `{ deviceId, sessionId }` 完全一致；缺失或不一致时整条遥测不得显示、不得写入观察、不得授权控制。`controlTelemetry` 的结构化基线只要求 `sdkAvailability`、遥控器、飞控与正 `deviceRevision`；`ProductKey.KeyConnection` 可留在原始诊断遥测，但不得影响完整性或控制。AirLink 和主相机是图传能力与设备显示的原始事实，不能因缺失而阻断航线或飞控操作。图传开始则必须由 `capabilities.liveVideo` 单独实行失效关闭的门禁。有 `telemetrySequence` 的同一会话内，只有严格更大的序号才能替换当前事实；未带序号的旧兼容帧不得覆盖已带序号的事实。仅旧兼容帧之间才可回退到 `deviceRevision` 比较。一次有效 `telemetry.read` 结果可在尚未收到订阅帧时成为当前事实，但不能覆盖更高序号的订阅事实；随后抵达的新订阅帧继续替换该事实。
 
@@ -110,9 +118,10 @@ instance.dispose() -> void
 | 图传开始 | `live-stream.start` | `{ rtmpUrl: string }` |
 | 图传停止 | `live-stream.stop` | `{}` |
 | 起飞/降落/返航 | `flight.takeoff` / `flight.land` / `flight.return-home` | `{ confirm: true }` |
+| 停止自动起飞/停止自动降落 | `flight.stop-takeoff` / `flight.stop-auto-landing` | `{ confirm: true }` |
 | 相机与图传设置 | `device.settings.*` | 由 `relay-device-settings` 契约规定的字段 |
 
-除表中三条飞控命令外，不得生成其他 `flight.*` 命令。调用方传入无效字段时，适配器在本地返回稳定拒绝且不产生网络效果。
+除表中五条飞控命令外，不得生成其他 `flight.*` 命令。调用方传入无效字段时，适配器在本地返回稳定拒绝且不产生网络效果。
 
 ## 结果与状态语义
 
@@ -121,7 +130,7 @@ instance.dispose() -> void
 - `wayline.start` 成功只表示 DJI 接受启动请求；只有有效且属于当前任务代际的 `ROUTE_EXECUTION_STARTED` 才能使任务状态进入执行中。
 - DJI `missionExecution=FINISHED` 或 `FAILED` 只在文件名、`missionRevision`、`missionDeviceGeneration` 和当前任务身份均匹配时才能使桌面任务进入终态；它们不补造 `ROUTE_EXECUTION_STARTED`。
 - 暂停、继续、停止在等待命令结果时必须保留“请求中”状态；命令成功后才进入对应已确认状态。
-- `live-stream.start` 成功只表示手机接受 RTMP 推流；播放成功只能由媒体管线确认本机 HTTP-FLV 已就绪并由播放器附着后产生。
+- `live-stream.start` 成功只表示 DJI 接受 RTMP 启动请求；`liveStreaming=true` 只由后续 `LiveStreamStatus.isStreaming=true` 确认；播放成功只能由媒体管线确认本机 HTTP-FLV 已就绪并由播放器附着后产生。
 - `flight.*` 成功只表示 DJI 已完成该调用；飞行状态必须仍由后续遥测显示。
 - `telemetry.read` 的命令 `status=succeeded` 只表示手机已回复。返回的 `snapshot` 还必须说明本次快照是否可作为当前会话事实：`accepted` 表示完整解码并采用，`already-current` 表示完整解码但桌面已持有更新的同会话订阅事实，`invalid` 表示结果缺失、畸形或不可采纳，`session-changed` 表示请求期间会话替换，`unavailable` 表示命令未成功。只有 `accepted` 或 `already-current` 才能向设备页报告刷新成功。手机不重建硬件 Key 观察，也不启动 DJI、航线、图传或飞控操作。适配器仅在请求前后仍为同一 `deviceId + sessionId`、结构化 `result` 可按本契约完整解码且携带正 `deviceRevision` 时，才可在尚无较高 `telemetrySequence` 订阅事实的条件下将它写入该会话的当前设备事实。读取失败、超时、畸形或会话变化不得覆盖现有订阅事实，也不得制造控制授权；调用方仍必须逐项执行各自的门禁。
 - 设置读写成功必须携带可解码的 `command-result.result` 完整快照；缺失或畸形结果是 `invalid-result`，不得乐观更新。
@@ -148,7 +157,7 @@ instance.dispose() -> void
 
 1. Android 全部已知遥测枚举到桌面布尔与能力字段的映射；
 2. JSON null、缺失字段、未知枚举、畸形 JSON 值和恶意 getter 的安全拒绝；
-3. 每条命令的精确名称和字段，尤其三条飞控命令的 `{ confirm: true }`；
+3. 每条命令的精确名称和字段，尤其五条飞控命令的 `{ confirm: true }`；
 4. 设置 `result` 解码和错误结果保留；
 5. 启动确认与 `ROUTE_EXECUTION_STARTED` 的严格分离；
 6. 暂停、继续、停止的请求中与确认后状态；

@@ -30,6 +30,8 @@ instance.clearAll() -> void
 
 `consumeCurrent` 在同一个原子操作内读取当前动作并按标识消费，供一级组合根使用，以保留过期和不匹配的精确结果。
 
+`action` 只能是 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff` 或 `stop-auto-landing`。后三项仍是危险飞控操作，和前三项完全使用相同的一次性二次确认边界；本模块不解释它们的 DJI 语义。
+
 开始、消费、取消及读取操作均不能返回内部状态引用。所有结果、记录均冻结。`nowMs` 必须是有限安全整数；无效时间一律稳定拒绝。
 
 ## 4. 错误语义

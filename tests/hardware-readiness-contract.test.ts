@@ -74,4 +74,9 @@ describe("hardware readiness contract", () => {
       payload: { ...ready().payload, connected: false },
     }, "flight-control")).toEqual({ ok: true, blockers: [] });
   });
+
+  it("uses raw MSDK states when compatibility booleans disagree", () => {
+    expect(HardwareReadiness.evaluate({ ...ready(), payload: { ...ready().payload, sdkAvailability: "STARTING", sdkRegistered: true } as never }, "legacy-video")).toEqual({ ok: false, blockers: [{ code: "SDK_NOT_READY", message: "手机端 DJI 尚未就绪，请在手机上确认已启动。" }] });
+    expect(HardwareReadiness.evaluate({ ...ready(), payload: { ...ready().payload, sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "DISCONNECTED", remoteControllerConnected: true, flightControllerConnected: true } as never }, "flight-control")).toEqual({ ok: false, blockers: [{ code: "FLIGHT_CONTROLLER_DISCONNECTED", message: "飞机飞控未连接，请确认飞机已开机。" }] });
+  });
 });

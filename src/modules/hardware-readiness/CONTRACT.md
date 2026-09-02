@@ -26,12 +26,14 @@ interface HardwareReadinessInput {
   };
   readonly relayConnected: boolean;
   readonly payload: {
-    readonly sdkRegistered?: boolean;
-    readonly remoteControllerConnected?: boolean;
-    readonly flightControllerConnected?: boolean;
+    readonly sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
+    readonly remoteController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
+    readonly flightController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
   };
 }
 ```
+
+三个 MSDK 原始字段是唯一硬件事实来源：`sdkAvailability` 来自 Android SDK 生命周期，`remoteController` 来自 `RemoteControllerKey.KeyConnection`，`flightController` 来自 `FlightControllerKey.KeyConnection`。旧的 `*Connected` 布尔投影仅为迁移兼容保留，原始字段存在时一律忽略；缺失、`UNKNOWN`、非就绪或畸形值都不能放行开始型操作。
 
 旧图传检查桌面局域网与媒体服务事实；飞控检查不要求这两项。两种检查都要求手机当前在线和 MSDK 已就绪。飞控动作额外要求遥控器和飞控连接事实均明确为已连接；旧图传不把遥控器、飞控或航线遥测当作桌面端推流门闩。中继在线经过的时间不能替代任何 MSDK Key 事实。`ProductKey.KeyConnection` 的原始值保留在 Relay 诊断遥测中，但不属于本模块输入，也不参与任何就绪结论。
 

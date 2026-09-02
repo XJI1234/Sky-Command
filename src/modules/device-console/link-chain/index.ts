@@ -1,6 +1,11 @@
 export type LinkStatus = "connected" | "disconnected" | "unknown";
+type LinkChainSdkAvailability = "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
+type LinkChainMsdkLinkState = "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
 
 export interface LinkChainTelemetry {
+  readonly sdkAvailability?: LinkChainSdkAvailability;
+  readonly remoteController?: LinkChainMsdkLinkState;
+  readonly flightController?: LinkChainMsdkLinkState;
   readonly sdkRegistered?: boolean;
   readonly remoteControllerConnected?: boolean;
   readonly flightControllerConnected?: boolean;
@@ -48,9 +53,18 @@ function readTelemetry(value: unknown): Readonly<LinkChainTelemetry> | null | Re
   if (typeof value !== "object") return freeze({ field: "telemetry", reason: "invalid-container" });
   try {
     const telemetry = value as LinkChainTelemetry;
+    const sdk = telemetry.sdkAvailability;
+    if (sdk !== undefined && sdk !== "STOPPED" && sdk !== "STARTING" && sdk !== "READY" && sdk !== "FAILED" && sdk !== "UNKNOWN") return freeze({ field: "telemetry.sdkAvailability", reason: "invalid-type" });
+    const remote = telemetry.remoteController;
+    if (remote !== undefined && remote !== "CONNECTED" && remote !== "DISCONNECTED" && remote !== "UNKNOWN") return freeze({ field: "telemetry.remoteController", reason: "invalid-type" });
+    const flight = telemetry.flightController;
+    if (flight !== undefined && flight !== "CONNECTED" && flight !== "DISCONNECTED" && flight !== "UNKNOWN") return freeze({ field: "telemetry.flightController", reason: "invalid-type" });
     const fields = ["sdkRegistered", "remoteControllerConnected", "flightControllerConnected"] as const;
     for (const field of fields) if (telemetry[field] !== undefined && typeof telemetry[field] !== "boolean") return freeze({ field: `telemetry.${field}`, reason: "invalid-type" });
     return freeze({
+      ...(sdk === undefined ? {} : { sdkAvailability: sdk }),
+      ...(remote === undefined ? {} : { remoteController: remote }),
+      ...(flight === undefined ? {} : { flightController: flight }),
       // Stryker disable next-line ConditionalExpression: omitted optional telemetry fields and explicit undefined have identical public link semantics.
       ...(telemetry.sdkRegistered === undefined ? {} : { sdkRegistered: telemetry.sdkRegistered }),
       // Stryker disable next-line ConditionalExpression: omitted optional telemetry fields and explicit undefined have identical public link semantics.
@@ -72,16 +86,17 @@ function evaluate(value: unknown): LinkChainResult<LinkChainSnapshot> {
   const telemetry = readTelemetry(input.telemetry);
   if (telemetry !== null && "field" in telemetry) return failure(telemetry.field, telemetry.reason);
   if (!input.relayConnected) return success(freeze({ deviceId: input.deviceId, overall: "offline" as const, computerToPhone: "disconnected" as const, phoneToRemoteController: "unknown" as const, remoteControllerToAircraft: "unknown" as const }));
-  if (telemetry === null || telemetry.sdkRegistered !== true) return success(freeze({ deviceId: input.deviceId, overall: "degraded" as const, computerToPhone: "connected" as const, phoneToRemoteController: "unknown" as const, remoteControllerToAircraft: "unknown" as const }));
-  const remoteController = telemetry.remoteControllerConnected === true
+  const sdkReady = telemetry !== null && (telemetry.sdkAvailability === undefined ? telemetry.sdkRegistered === true : telemetry.sdkAvailability === "READY");
+  if (telemetry === null || !sdkReady) return success(freeze({ deviceId: input.deviceId, overall: "degraded" as const, computerToPhone: "connected" as const, phoneToRemoteController: "unknown" as const, remoteControllerToAircraft: "unknown" as const }));
+  const remoteController = telemetry.remoteController === "CONNECTED" || (telemetry.remoteController === undefined && telemetry.remoteControllerConnected === true)
     ? "connected" as const
-    : telemetry.remoteControllerConnected === false
+    : telemetry.remoteController === "DISCONNECTED" || (telemetry.remoteController === undefined && telemetry.remoteControllerConnected === false)
       ? "disconnected" as const
       : "unknown" as const;
   const aircraft = remoteController === "connected"
-    ? telemetry.flightControllerConnected === true
+    ? telemetry.flightController === "CONNECTED" || (telemetry.flightController === undefined && telemetry.flightControllerConnected === true)
       ? "connected" as const
-      : telemetry.flightControllerConnected === false
+      : telemetry.flightController === "DISCONNECTED" || (telemetry.flightController === undefined && telemetry.flightControllerConnected === false)
         ? "disconnected" as const
         : "unknown" as const
     : "unknown" as const;

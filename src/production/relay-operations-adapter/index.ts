@@ -67,6 +67,24 @@ export interface DesktopRelayTelemetryPayload {
   readonly livePacketLoss?: number;
   /** Raw Android MSDK LiveStreamStatus.packetCacheLen value; no unit is inferred. */
   readonly livePacketCacheLength?: number;
+  /** Raw Android MSDK FlightControllerKey.KeyGPSSignalLevel enum name. */
+  readonly gpsSignalLevel?: string;
+  /** Raw Android MSDK FlightControllerKey.KeyGPSSatelliteCount value. */
+  readonly gpsSatelliteCount?: number;
+  /** Raw Android MSDK FlightControllerKey.KeyIsVisionSensorUsed value. */
+  readonly visionSensorUsed?: boolean;
+  /** Raw Android MSDK FlightAssistantKey.KeyVisionSystemWarning enum name. */
+  readonly visionSystemWarning?: string;
+  /** Raw Android MSDK FlightAssistantKey.KeyVisionPositioningEnabled value. */
+  readonly visionPositioningEnabled?: boolean;
+  /** Raw Android MSDK FlightAssistantKey.KeyLandingProtectionState enum name. */
+  readonly landingProtectionState?: string;
+  /** Raw Android MSDK FlightControllerKey.KeyIsLandingConfirmationNeeded value. */
+  readonly landingConfirmationNeeded?: boolean;
+  /** Raw Android MSDK FlightControllerKey.KeyTakeoffFailureError enum name. */
+  readonly takeoffFailureError?: string;
+  /** Raw Android MSDK FlightControllerKey.KeyMotorStartFailureError enum name. */
+  readonly motorStartFailureError?: string;
   readonly missionRevision?: number;
   readonly missionDeviceGeneration?: number;
   readonly missionExecution?: "NOT_STARTED" | "STARTING" | "EXECUTING" | "PAUSED" | "STOPPING" | "FINISHED" | "FAILED";
@@ -104,7 +122,7 @@ export interface WhipStreamRelayGateway {
 }
 export interface AdapterFlightRelay extends FlightRelay {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "flight.takeoff" | "flight.land" | "flight.return-home"; readonly fields: Readonly<{ readonly confirm: true }> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing"; readonly fields: Readonly<{ readonly confirm: true }> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
 }
 export interface RelaySettingsGateway {
   readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "device.settings.camera.read" | "device.settings.camera.write" | "device.settings.transmission.read" | "device.settings.transmission.write"; readonly fields: Readonly<Record<string, JsonValue>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail: string; readonly result?: JsonValue }>>;
@@ -295,6 +313,15 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
       const livePacketCacheLength = boundedInteger(payload.livePacketCacheLength, 0, 2_147_483_647); if (livePacketCacheLength !== undefined) outputPayload.livePacketCacheLength = livePacketCacheLength;
     }
   }
+  const gpsSignalLevel = safeText(string(payload.gpsSignalLevel)); if (gpsSignalLevel !== undefined) outputPayload.gpsSignalLevel = gpsSignalLevel;
+  const gpsSatelliteCount = nonNegativeIntegerValue(payload.gpsSatelliteCount); if (gpsSatelliteCount !== undefined) outputPayload.gpsSatelliteCount = gpsSatelliteCount;
+  const visionSensorUsed = boolean(payload.visionSensorUsed); if (visionSensorUsed !== undefined) outputPayload.visionSensorUsed = visionSensorUsed;
+  const visionSystemWarning = safeText(string(payload.visionSystemWarning)); if (visionSystemWarning !== undefined) outputPayload.visionSystemWarning = visionSystemWarning;
+  const visionPositioningEnabled = boolean(payload.visionPositioningEnabled); if (visionPositioningEnabled !== undefined) outputPayload.visionPositioningEnabled = visionPositioningEnabled;
+  const landingProtectionState = safeText(string(payload.landingProtectionState)); if (landingProtectionState !== undefined) outputPayload.landingProtectionState = landingProtectionState;
+  const landingConfirmationNeeded = boolean(payload.landingConfirmationNeeded); if (landingConfirmationNeeded !== undefined) outputPayload.landingConfirmationNeeded = landingConfirmationNeeded;
+  const takeoffFailureError = safeText(string(payload.takeoffFailureError)); if (takeoffFailureError !== undefined) outputPayload.takeoffFailureError = takeoffFailureError;
+  const motorStartFailureError = safeText(string(payload.motorStartFailureError)); if (motorStartFailureError !== undefined) outputPayload.motorStartFailureError = motorStartFailureError;
   const missionExecution = string(payload.missionExecution);
   if (missionExecution === "NOT_STARTED" || missionExecution === "STARTING" || missionExecution === "EXECUTING" || missionExecution === "PAUSED" || missionExecution === "STOPPING" || missionExecution === "FINISHED" || missionExecution === "FAILED") outputPayload.missionExecution = missionExecution;
   const missionFileName = string(payload.missionFileName); if (validMissionFileName(missionFileName)) outputPayload.missionFileName = missionFileName;
@@ -499,7 +526,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   });
   const flightGateway: AdapterFlightRelay = freeze({
     latestTelemetry: controlTelemetry,
-    sendCommand: async (deviceId, request) => (request.name === "flight.takeoff" || request.name === "flight.land" || request.name === "flight.return-home") && request.fields.confirm === true ? send(deviceId, request.name, { confirm: bool(true) }) : commandFailure()
+    sendCommand: async (deviceId, request) => (request.name === "flight.takeoff" || request.name === "flight.land" || request.name === "flight.confirm-landing" || request.name === "flight.return-home" || request.name === "flight.stop-takeoff" || request.name === "flight.stop-auto-landing") && request.fields.confirm === true ? send(deviceId, request.name, { confirm: bool(true) }) : commandFailure()
   });
   const settingsGateway: RelaySettingsGateway = freeze({
     sendCommand: async (deviceId, request) => {

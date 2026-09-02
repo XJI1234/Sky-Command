@@ -111,9 +111,9 @@ const confirmationOf = (device: Record<string, unknown> | undefined): OperatorCo
     : null;
 };
 const telemetryBits = (connection: unknown) => freeze({
-  ...(read(connection, "sdk") === "ready" ? { sdkRegistered: true } : read(connection, "sdk") === "not-ready" ? { sdkRegistered: false } : {}),
-  ...(read(connection, "remoteController") === "connected" ? { remoteControllerConnected: true } : read(connection, "remoteController") === "disconnected" ? { remoteControllerConnected: false } : {}),
-  ...(read(connection, "flightController") === "connected" ? { flightControllerConnected: true } : read(connection, "flightController") === "disconnected" ? { flightControllerConnected: false } : {}),
+  ...(read(connection, "msdk") === "ready" ? { sdkAvailability: "READY" } : read(connection, "msdk") === "starting" ? { sdkAvailability: "STARTING" } : read(connection, "msdk") === "stopped" ? { sdkAvailability: "STOPPED" } : read(connection, "msdk") === "failed" ? { sdkAvailability: "FAILED" } : {}),
+  ...(read(connection, "remoteController") === "connected" ? { remoteController: "CONNECTED" } : read(connection, "remoteController") === "disconnected" ? { remoteController: "DISCONNECTED" } : {}),
+  ...(read(connection, "flightController") === "connected" ? { flightController: "CONNECTED" } : read(connection, "flightController") === "disconnected" ? { flightController: "DISCONNECTED" } : {}),
 });
 const controlConnection = (device: Record<string, unknown> | undefined): unknown => {
   if (device === undefined) return null;
@@ -343,9 +343,21 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
     return accept();
   }
   if (name === "flight-confirm" || name === "flight-cancel") return accept();
-  if (name === "flight-takeoff" || name === "flight-land" || name === "flight-return-home") {
+  if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing") {
     const linkIssue = controlLinkIssue(device);
     if (linkIssue !== null) return reject(linkIssue);
+    if (name === "flight-confirm-landing") {
+      const connection = read(device, "connection");
+      if (read(connection, "flightState") !== "flying") return reject("尚未确认飞机正在空中，不能确认继续降落");
+      if (read(connection, "landingConfirmationNeeded") !== true) return reject("MSDK 未要求确认继续降落");
+      return accept();
+    }
+    if (name === "flight-land") {
+      const landingPhase = text(read(read(device, "landing"), "phase"));
+      if (landingPhase === "awaiting-msdk" || landingPhase === "confirmation-required") {
+        return reject("降落命令已发送，等待 MSDK 确认落地");
+      }
+    }
     if (name === "flight-takeoff") {
       const battery = batteryPercent(device);
       if (battery === null) return reject("尚未取得所选飞机的电池遥测");
@@ -361,6 +373,13 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
       const flightState = read(read(device, "connection"), "flightState");
       if (flightState === "unknown" || flightState === null || flightState === undefined) return reject("尚未确认飞机是否在空中");
       if (flightState === "grounded") return reject(name === "flight-land" ? "飞机已在地面，无需降落" : "飞机已在地面，不能返航");
+    }
+    if (name === "flight-stop-takeoff" && read(read(device, "connection"), "flightMode") !== "AUTO_TAKE_OFF") {
+      return reject("MSDK 未报告正在自动起飞，不能停止自动起飞");
+    }
+    if (name === "flight-stop-auto-landing") {
+      const flightMode = read(read(device, "connection"), "flightMode");
+      if (flightMode !== "AUTO_LANDING" && flightMode !== "CONFIRM_LANDING") return reject("MSDK 未报告正在自动降落，不能停止自动降落");
     }
     return accept();
   }

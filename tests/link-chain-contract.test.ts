@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { LinkChain } from "../src/modules/device-console/link-chain/index.js";
 
 describe("设备链路状态契约", () => {
+  it("拒绝非法的原始 MSDK 生命周期和链路枚举", () => {
+    const base = { deviceId: "phone-1", relayConnected: true };
+    expect(LinkChain.evaluate({ ...base, telemetry: { sdkAvailability: "BROKEN" } })).toMatchObject({ ok: false, error: { details: { field: "telemetry.sdkAvailability" } } });
+    expect(LinkChain.evaluate({ ...base, telemetry: { remoteController: "BROKEN" } })).toMatchObject({ ok: false, error: { details: { field: "telemetry.remoteController" } } });
+    expect(LinkChain.evaluate({ ...base, telemetry: { flightController: "BROKEN" } })).toMatchObject({ ok: false, error: { details: { field: "telemetry.flightController" } } });
+  });
+
   it("三段物理链路已连接时不受对频状态影响", () => {
     expect(LinkChain.evaluate({
       deviceId: "phone-1",
@@ -111,6 +118,24 @@ describe("设备链路状态契约", () => {
     })).toMatchObject({
       ok: true,
       value: { phoneToRemoteController: "connected", remoteControllerToAircraft: "unknown" },
+    });
+  });
+
+  it("链路摘要优先使用原始 MSDK 状态", () => {
+    expect(LinkChain.evaluate({
+      deviceId: "phone-1",
+      relayConnected: true,
+      telemetry: {
+        sdkAvailability: "READY",
+        remoteController: "CONNECTED",
+        flightController: "DISCONNECTED",
+        sdkRegistered: true,
+        remoteControllerConnected: true,
+        flightControllerConnected: true,
+      } as never,
+    })).toMatchObject({
+      ok: true,
+      value: { overall: "degraded", phoneToRemoteController: "connected", remoteControllerToAircraft: "disconnected" },
     });
   });
 });

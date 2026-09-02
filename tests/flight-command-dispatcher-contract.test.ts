@@ -29,7 +29,10 @@ describe("FlightCommandDispatcher", () => {
   it.each([
     ["takeoff", "flight.takeoff"],
     ["land", "flight.land"],
-    ["return-home", "flight.return-home"]
+    ["confirm-landing", "flight.confirm-landing"],
+    ["return-home", "flight.return-home"],
+    ["stop-takeoff", "flight.stop-takeoff"],
+    ["stop-auto-landing", "flight.stop-auto-landing"]
   ] as const)("maps %s to %s with frozen confirmation fields", async (action, command) => {
     const value = fixture();
     await expect(value.dispatcher.dispatch("phone-1", action)).resolves.toMatchObject({ ok: true, code: "SUCCEEDED", deviceId: "phone-1", action });

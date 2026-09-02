@@ -1,4 +1,4 @@
-export type FlightAction = "takeoff" | "land" | "return-home";
+export type FlightAction = "takeoff" | "land" | "confirm-landing" | "return-home" | "stop-takeoff" | "stop-auto-landing";
 export type ConfirmationSuccessCode = "PENDING" | "CONSUMED" | "CANCELLED";
 export type ConfirmationFailureCode = "INVALID_INPUT" | "CONFIGURATION_INVALID" | "ID_UNAVAILABLE" | "NO_PENDING_CONFIRMATION" | "CONFIRMATION_MISMATCH" | "CONFIRMATION_EXPIRED";
 
@@ -25,7 +25,7 @@ export interface DangerousActionConfirmInstance {
   readonly clearAll: () => void;
 }
 
-const actions: readonly FlightAction[] = ["takeoff", "land", "return-home"];
+const actions: readonly FlightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"];
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const validText = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const validTime = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

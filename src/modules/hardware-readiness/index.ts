@@ -1,4 +1,6 @@
 export type HardwareReadinessTarget = "legacy-video" | "flight-control";
+type HardwareMsdkSdkAvailability = "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
+type HardwareMsdkLinkState = "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
 
 export interface HardwareReadinessInput {
   readonly desktop: {
@@ -7,6 +9,9 @@ export interface HardwareReadinessInput {
   };
   readonly relayConnected: boolean;
   readonly payload: {
+    readonly sdkAvailability?: HardwareMsdkSdkAvailability;
+    readonly remoteController?: HardwareMsdkLinkState;
+    readonly flightController?: HardwareMsdkLinkState;
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
@@ -47,6 +52,9 @@ interface NormalizedInput {
   readonly lanAddressAvailable: unknown;
   readonly legacyMediaAvailable: unknown;
   readonly relayConnected: unknown;
+  readonly sdkAvailability: unknown;
+  readonly remoteController: unknown;
+  readonly flightController: unknown;
   readonly sdkRegistered: unknown;
   readonly remoteControllerConnected: unknown;
   readonly flightControllerConnected: unknown;
@@ -60,6 +68,9 @@ const normalize = (value: unknown): NormalizedInput | null => {
       lanAddressAvailable: value.desktop.lanAddressAvailable,
       legacyMediaAvailable: value.desktop.legacyMediaAvailable,
       relayConnected: value.relayConnected,
+      sdkAvailability: value.payload.sdkAvailability,
+      remoteController: value.payload.remoteController,
+      flightController: value.payload.flightController,
       sdkRegistered: value.payload.sdkRegistered,
       remoteControllerConnected: value.payload.remoteControllerConnected,
       flightControllerConnected: value.payload.flightControllerConnected,
@@ -75,6 +86,8 @@ const result = (codes: readonly HardwareReadinessBlockerCode[]): HardwareReadine
     ? freeze({ ok: true as const, blockers: freeze([]) as readonly [] })
     : freeze({ ok: false as const, blockers });
 };
+const validSdk = (value: unknown): value is HardwareMsdkSdkAvailability => value === "STOPPED" || value === "STARTING" || value === "READY" || value === "FAILED" || value === "UNKNOWN";
+const validLink = (value: unknown): value is HardwareMsdkLinkState => value === "CONNECTED" || value === "DISCONNECTED" || value === "UNKNOWN";
 
 export const HardwareReadiness = freeze({
   evaluate: (input: HardwareReadinessInput, target: HardwareReadinessTarget): HardwareReadinessResult => {
@@ -84,11 +97,14 @@ export const HardwareReadiness = freeze({
     if (target === "legacy-video" && normalized.lanAddressAvailable !== true) codes.push("DESKTOP_NETWORK_UNAVAILABLE");
     if (target === "legacy-video" && normalized.legacyMediaAvailable !== true) codes.push("LEGACY_MEDIA_UNAVAILABLE");
     if (normalized.relayConnected !== true) codes.push("PHONE_DISCONNECTED");
-    if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
+    const sdkReady = normalized.sdkAvailability === undefined ? normalized.sdkRegistered === true : validSdk(normalized.sdkAvailability) && normalized.sdkAvailability === "READY";
+    if (!sdkReady) codes.push("SDK_NOT_READY");
     // DJI 直播管理器的实际结果由异步回调确认；旧图传只要求能调用已就绪 MSDK。
     if (target === "flight-control") {
-      if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-      if (normalized.flightControllerConnected !== true) codes.push("FLIGHT_CONTROLLER_DISCONNECTED");
+      const remoteConnected = normalized.remoteController === undefined ? normalized.remoteControllerConnected === true : validLink(normalized.remoteController) && normalized.remoteController === "CONNECTED";
+      const flightConnected = normalized.flightController === undefined ? normalized.flightControllerConnected === true : validLink(normalized.flightController) && normalized.flightController === "CONNECTED";
+      if (!remoteConnected) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
+      if (!flightConnected) codes.push("FLIGHT_CONTROLLER_DISCONNECTED");
     }
     return result(codes);
   },

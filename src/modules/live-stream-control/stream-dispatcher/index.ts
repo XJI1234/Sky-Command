@@ -62,7 +62,18 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     const payload = telemetry === null ? freeze({ ok: true as const, value: {} }) : attempt(() => telemetry.payload);
     const capabilities = telemetry === null ? freeze({ ok: true as const, value: {} }) : attempt(() => telemetry.capabilities);
     if (!payload.ok || !capabilities.ok) return freeze({ ok: false as const, code: "DEPENDENCY_FAILURE" as const });
-    const gate = attempt(() => dependencies.capabilityGate.evaluate({ operation: "live-stream", relayConnected: telemetry !== null, sdkRegistered: record(payload.value) ? payload.value.sdkRegistered : undefined, remoteControllerConnected: record(payload.value) ? payload.value.remoteControllerConnected : undefined, flightControllerConnected: record(payload.value) ? payload.value.flightControllerConnected : undefined, capabilities: capabilities.value }));
+    const gate = attempt(() => {
+      const facts: Record<string, unknown> = { operation: "live-stream", relayConnected: telemetry !== null, capabilities: capabilities.value };
+      if (record(payload.value)) {
+        facts.sdkAvailability = payload.value.sdkAvailability;
+        facts.remoteController = payload.value.remoteController;
+        facts.flightController = payload.value.flightController;
+        facts.sdkRegistered = payload.value.sdkRegistered;
+        facts.remoteControllerConnected = payload.value.remoteControllerConnected;
+        facts.flightControllerConnected = payload.value.flightControllerConnected;
+      }
+      return dependencies.capabilityGate.evaluate(facts);
+    });
     if (!gate.ok || !record(gate.value) || gate.value.ok !== true || !record(gate.value.value) || typeof gate.value.value.enabled !== "boolean") return freeze({ ok: false as const, code: "DEPENDENCY_FAILURE" as const });
     if (!gate.value.value.enabled) return freeze({ ok: false as const, code: "CAPABILITY_BLOCKED" as const, reason: typeof gate.value.value.reason === "string" ? gate.value.value.reason : "CAPABILITY_UNKNOWN" });
     return freeze({ ok: true as const });

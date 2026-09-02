@@ -16,7 +16,7 @@
 6. 设备断连、航线删除、释放时的跨模块清理和状态失效；
 7. 不泄露传输、DJI 或文件系统细节的只读工作流快照。
 
-它不解析、生成或编辑 KMZ/WPML；不创建 WebSocket、Android 或 DJI 对象；不启动 Electron 窗口、定义 IPC 或渲染页面；不直接操作地图引擎、RTMP、FFmpeg 或文件系统；不保存设置；不重新实现任务、图传、飞控、能力门禁或预检状态机；也不自动发送起飞、降落、返航、上传、启动、暂停、恢复、停止或图传命令。
+它不解析、生成或编辑 KMZ/WPML；不创建 WebSocket、Android 或 DJI 对象；不启动 Electron 窗口、定义 IPC 或渲染页面；不直接操作地图引擎、RTMP、FFmpeg 或文件系统；不保存设置；不重新实现任务、图传、飞控、能力门禁或预检状态机；也不自动发送起飞、降落、返航、停止自动起飞、停止自动降落、上传、启动、暂停、恢复、停止或图传命令。
 
 航线必须由 Wayline 项目生成后导入。Sky Command 的职责限于导入、预览、分配与执行。
 
@@ -182,6 +182,7 @@ interface WorkflowDevice {
       readonly altitudeMeters: number | null;
     } | null;
     readonly live: {
+      /** Android MSDK LiveStreamStatus.isStreaming；null 表示当前图传尚未收到该原始观测。 */
       readonly streaming: boolean | null;
       readonly resolution: string | null;
       readonly fps: number | null;
@@ -206,6 +207,10 @@ interface WorkflowDevice {
   };
   readonly settings: DeviceSettingsSnapshot;
   readonly pendingFlightAction: PendingConfirmation | null;
+  readonly landing: {
+    /** 只表示桌面已看到 `flight.land` 的 DJI Action 成功回调，不表示已经着陆。 */
+    readonly phase: "idle" | "awaiting-msdk" | "confirmation-required" | "confirmed-grounded" | "state-unknown" | "stopped";
+  };
 }
 ```
 
@@ -281,9 +286,9 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 1. `requestFlightAction` 在委托 `flightControl.request` 前必须取得当前同会话控制遥测，再通过基于该事实的 `flight-control` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且不得创建确认或向手机发送飞控请求。预检未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`。通过后只委托 `flightControl.request`，从不直接发送命令。
 2. `confirmFlightAction` 在消费确认、可能发送飞控命令之前，必须再次取得当前同会话控制遥测；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且必须保留原待确认动作，以便操作者在恢复控制状态后重试或显式取消。只有已实际委托确认或确认本身被下游拒绝、过期时才可清除该待确认动作。`cancelFlightAction` 不需要控制遥测或实机预检。确认不可跨设备、跨动作、重复或过期复用。
-3. 起飞、降落、返航始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。
-4. 飞控命令成功只表示 DJI 调用完成；工作流必须等待后续遥测再显示飞机实际飞行状态。
-5. 工作流只保存由 `requestFlightAction` 返回的待确认 ID。设备断连时，如该动作仍未确认，工作流只能调用既有 `flightControl.cancel(deviceId, confirmationId)` 取消确认；它绝不补发飞控命令。已经发送中的 DJI 调用不可由本模块撤销，其迟到结果也不得让离线设备重新出现在工作流快照中。
+3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 只能在下游预检读取的原始 `FlightControllerKey.KeyIsLandingConfirmationNeeded=true` 且 `KeyIsFlying=true` 时请求，映射 `KeyConfirmLanding`；它永不由降落命令自动触发。停止自动起飞/降落只能在下游预检读取的原始 `FlightControllerKey.KeyFCFlightMode` 分别为 `AUTO_TAKE_OFF`、`AUTO_LANDING|CONFIRM_LANDING` 时请求；它们分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`，不表示停机、立即落地或已经悬停。
+4. `flight.land` 的 DJI Action 成功只使该设备的 `landing.phase` 进入 `awaiting-msdk`。在该意图仍为 `requested` 且尚未观察到 `confirmed-grounded` 之前，新的 `land` 请求必须返回 `LANDING_IN_PROGRESS`，不得重复创建确认或再次调用 DJI。其后只能由同一会话的持续 MSDK 遥测改变：`KeyIsLandingConfirmationNeeded=true` 为 `confirmation-required`，`KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 为 `confirmed-grounded`，任一所需事实未知或飞控断开为 `state-unknown`。它绝不因时间流逝、命令回调、页面刷新或旧缓存显示为已落地。`flight.stop-auto-landing` 成功才进入 `stopped`；其它成功的直接飞行动作重置为 `idle`。
+5. 工作流只保存由 `requestFlightAction` 返回的待确认 ID 和上述已接受降落的最小意图。设备断连或会话替换时，如动作仍未确认，工作流只能调用既有 `flightControl.cancel(deviceId, confirmationId)` 取消确认，并丢弃该会话的降落意图；它绝不补发飞控命令。已经发送中的 DJI 调用不可由本模块撤销，其迟到结果也不得让离线设备重新出现在工作流快照中。
 
 ## 11. 断连、异常与释放
 

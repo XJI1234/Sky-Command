@@ -21,12 +21,14 @@ LinkChain.evaluate(input: unknown) -> LinkChainResult<LinkChainSnapshot>
   deviceId: string;
   relayConnected: boolean;
   telemetry: null | {
-    sdkRegistered?: boolean;
-    remoteControllerConnected?: boolean;
-    flightControllerConnected?: boolean;
+    sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
+    remoteController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
+    flightController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
   };
 }
 ```
+
+生产输入直接使用 Android MSDK 原始字段。旧的布尔字段仅作为迁移兼容读取，原始字段一旦存在就具有优先级；`UNKNOWN` 或缺失保持为 `unknown`，不能被缓存布尔值改写。
 
 `deviceId` 是已配对手机的稳定设备标识，必须是 `1..128` 个 Unicode code point 的非空白、无控制字符字符串。`relayConnected` 只表示电脑到手机的中继会话是否在线；它绝不能被误读为 DJI 飞行器已连接。`telemetry: null` 表示该手机当前没有可用遥测，而不是任一设备连接为 false。
 

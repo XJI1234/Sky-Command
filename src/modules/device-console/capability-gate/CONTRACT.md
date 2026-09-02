@@ -24,9 +24,12 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
 {
   operation: "pairing" | "live-stream" | "waypoint-mission" | "transmission-settings" | "camera-settings";
   relayConnected: boolean;
-  sdkRegistered: boolean | undefined;
-  remoteControllerConnected: boolean | undefined;
-  flightControllerConnected: boolean | undefined;
+  /** Android SdkLifecycle 的原始封闭状态；缺失表示尚未收到事实。 */
+  sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
+  /** RemoteControllerKey.KeyConnection 的原始状态。 */
+  remoteController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
+  /** FlightControllerKey.KeyConnection 的原始状态。 */
+  flightController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
   capabilities: null | {
     liveVideo?: boolean;
     waypointMission?: boolean;
@@ -35,6 +38,8 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
   };
 }
 ```
+
+`sdkAvailability`、`remoteController` 和 `flightController` 是生产门禁的唯一事实来源。为兼容旧的非生产调用方，适配层可以暂时提供 `sdkRegistered`、`remoteControllerConnected` 和 `flightControllerConnected`；它们不得覆盖已存在的原始字段，也不得由生产装配传入。原始字段缺失时只能按未知处理，不能推定为已连接。
 
 输出为冻结对象 `{ operation, enabled, reason }`。`enabled: true` 时 `reason` 固定为 `null`；否则为以下之一：`RELAY_OFFLINE`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_OFFLINE`、`FLIGHT_CONTROLLER_OFFLINE`、`FLIGHT_CONTROLLER_CONNECTION_UNKNOWN`、`PAIRING_NOT_NEEDED`、`CAPABILITY_UNKNOWN`、`LIVE_VIDEO_UNAVAILABLE`、`LIVE_VIDEO_UNSUPPORTED`、`WAYPOINT_UNSUPPORTED`。`LIVE_VIDEO_UNAVAILABLE` 表示手机端当前未确认满足图传启动门禁，绝不表示机型不支持。
 

@@ -125,4 +125,20 @@ describe("设备操作能力门禁契约", () => {
       value: { operation: "live-stream", enabled: true, reason: null },
     });
   });
+
+  it("原始 MSDK 状态优先于兼容布尔值", () => {
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "STARTING", remoteController: "CONNECTED", flightController: "CONNECTED" })).toEqual({ ok: true, value: { operation: "direct-flight", enabled: false, reason: "SDK_NOT_READY" } });
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "READY", remoteController: "DISCONNECTED", flightController: "CONNECTED" })).toEqual({ ok: true, value: { operation: "direct-flight", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "DISCONNECTED" })).toEqual({ ok: true, value: { operation: "direct-flight", enabled: false, reason: "FLIGHT_CONTROLLER_OFFLINE" } });
+  });
+
+  it("原始未知状态不会被兼容布尔值伪装成可用", () => {
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "UNKNOWN", remoteController: "UNKNOWN", flightController: "UNKNOWN" })).toEqual({ ok: true, value: { operation: "direct-flight", enabled: false, reason: "SDK_NOT_READY" } });
+  });
+
+  it("拒绝原始 MSDK 生命周期和链路枚举中的非法值", () => {
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "BROKEN" })).toMatchObject({ ok: false, error: { details: { field: "sdkAvailability" } } });
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, remoteController: "BROKEN" })).toMatchObject({ ok: false, error: { details: { field: "remoteController" } } });
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, flightController: "BROKEN" })).toMatchObject({ ok: false, error: { details: { field: "flightController" } } });
+  });
 });

@@ -129,6 +129,92 @@ describe("飞行作业工作流模块契约", () => {
     expect({ uploads, streamStarts, flightRequests }).toEqual({ uploads: 0, streamStarts: 0, flightRequests: 0 });
   });
 
+  it("降落命令已成功下发后，在 MSDK 确认落地前拒绝重复请求", async () => {
+    let requests = 0;
+    const workflow = workflowWith({
+      flightControl: {
+        request: () => {
+          requests += 1;
+          return { ok: true, code: "CONFIRMATION_REQUIRED", confirmation: { deviceId: "relay-a", action: "land", confirmationId: "confirm-land", expiresAtMs: 10_000 } };
+        },
+        confirm: async () => ({ ok: true, code: "SUCCEEDED", action: "land" }),
+        cancel: () => ({ ok: true }),
+        get: () => null,
+        subscribe: () => () => undefined,
+        dispose: () => undefined,
+      },
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
+        telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true }, capabilities: {} }),
+        controlTelemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true }, capabilities: {} }),
+        subscribe: () => () => undefined,
+      },
+    });
+
+    await expect(workflow.requestFlightAction("relay-a", "land")).resolves.toMatchObject({ ok: true });
+    await expect(workflow.confirmFlightAction("relay-a", "confirm-land")).resolves.toMatchObject({ ok: true });
+    await expect(workflow.requestFlightAction("relay-a", "land")).resolves.toEqual({ ok: false, code: "LANDING_IN_PROGRESS" });
+    expect(requests).toBe(1);
+  });
+
+  it("停止自动降落成功后记录已停止意图并允许后续状态投影", async () => {
+    const workflow = workflowWith({
+      flightControl: {
+        request: () => ({ ok: true, code: "CONFIRMATION_REQUIRED", confirmation: { deviceId: "relay-a", action: "stop-auto-landing", confirmationId: "confirm-stop", expiresAtMs: 10_000 } }),
+        confirm: async () => ({ ok: true, code: "SUCCEEDED", action: "stop-auto-landing" }),
+        cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined,
+      },
+    });
+    await expect(workflow.requestFlightAction("relay-a", "stop-auto-landing")).resolves.toMatchObject({ ok: true });
+    await expect(workflow.confirmFlightAction("relay-a", "confirm-stop")).resolves.toMatchObject({ ok: true });
+    expect(workflow.snapshot().devices[0]?.landing).toEqual({ phase: "stopped" });
+  });
+
+  it("其它成功的直接飞行动作清除之前的降落意图", async () => {
+    let currentAction = "land";
+    const workflow = workflowWith({
+      flightControl: {
+        request: (_deviceId: string, action: string) => {
+          currentAction = action;
+          return { ok: true, code: "CONFIRMATION_REQUIRED", confirmation: { deviceId: "relay-a", action, confirmationId: `confirm-${action}`, expiresAtMs: 10_000 } };
+        },
+        confirm: async () => ({ ok: true, code: "SUCCEEDED", action: currentAction }),
+        cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined,
+      },
+    });
+    for (const action of ["takeoff", "return-home", "stop-takeoff"]) {
+      await workflow.requestFlightAction("relay-a", action);
+      await workflow.confirmFlightAction("relay-a", `confirm-${action}`);
+    }
+    expect(workflow.snapshot().devices[0]?.landing).toEqual({ phase: "idle" });
+  });
+
+  it("下游返回非成功飞行结果时不伪造已降落或停止", async () => {
+    const workflow = workflowWith({
+      flightControl: {
+        request: (_deviceId: string, action: string) => ({ ok: true, code: "CONFIRMATION_REQUIRED", confirmation: { deviceId: "relay-a", action, confirmationId: `confirm-${action}`, expiresAtMs: 10_000 } }),
+        confirm: async () => ({ ok: true, code: "RELAY_REJECTED", action: "land" }),
+        cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined,
+      },
+    });
+    await workflow.requestFlightAction("relay-a", "land");
+    await workflow.confirmFlightAction("relay-a", "confirm-land");
+    expect(workflow.snapshot().devices[0]?.landing).toEqual({ phase: "idle" });
+  });
+
+  it("下游返回未知飞行动作时不改写降落意图", async () => {
+    const workflow = workflowWith({
+      flightControl: {
+        request: () => ({ ok: true, code: "CONFIRMATION_REQUIRED", confirmation: { deviceId: "relay-a", action: "land", confirmationId: "confirm-land", expiresAtMs: 10_000 } }),
+        confirm: async () => ({ ok: true, code: "SUCCEEDED", action: "not-a-flight-action" }),
+        cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined,
+      },
+    });
+    await workflow.requestFlightAction("relay-a", "land");
+    await workflow.confirmFlightAction("relay-a", "confirm-land");
+    expect(workflow.snapshot().devices[0]?.landing).toEqual({ phase: "idle" });
+  });
+
   it("设备页刷新只读取一次当前状态，不触发任务、图传或飞控操作", async () => {
     let refreshes = 0;
     let control: unknown = null;

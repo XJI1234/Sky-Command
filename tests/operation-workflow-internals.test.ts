@@ -22,6 +22,25 @@ describe("飞行作业工作流内部模块", () => {
     expect(snapshot.devices[0]?.connection).toMatchObject({ battery: "connected", batteryPercent: 86, flightState: "unknown" });
   });
 
+  it("仅在 MSDK 同时确认已落地且电机关闭后才完成已接受的降落", () => {
+    const project = (payload: Record<string, unknown>) => WorkflowSnapshot.create({
+      devices: [{
+        deviceId: "relay-1",
+        telemetry: { payload, capabilities: {} },
+        assignment: { routeId: null, routeName: null }, mission: { phase: "idle" }, stream: { phase: "idle" }, settings: {}, pendingFlightAction: null,
+        landingIntent: "requested",
+      }],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 1, media: { streams: [] }, disposed: false,
+    } as never);
+
+    expect(project({ flightController: "CONNECTED", isFlying: true, motorsOn: true }).devices[0]?.landing).toEqual({ phase: "awaiting-msdk" });
+    expect(project({ flightController: "CONNECTED", isFlying: true, motorsOn: true, landingConfirmationNeeded: true }).devices[0]?.landing).toEqual({ phase: "confirmation-required" });
+    expect(project({ flightController: "CONNECTED", isFlying: false, motorsOn: false }).devices[0]?.landing).toEqual({ phase: "confirmed-grounded" });
+    expect(project({ flightController: "CONNECTED", isFlying: true }).devices[0]?.landing).toEqual({ phase: "state-unknown" });
+    expect(project({ flightController: "CONNECTED", motorsOn: false }).devices[0]?.landing).toEqual({ phase: "state-unknown" });
+    expect(project({ flightController: "UNKNOWN", isFlying: false, motorsOn: false }).devices[0]?.landing).toEqual({ phase: "state-unknown" });
+  });
+
   it("为已知生产依赖声明最小 Port 契约", () => {
     const ports = resolve(process.cwd(), "src/production/operation-workflow/ports.ts");
 
@@ -221,6 +240,7 @@ describe("飞行作业工作流内部模块", () => {
     expect(create({ pairing: "IDLE" })?.pairingState).toBe("IDLE");
     expect(create({ pairing: "PAIRING" })?.pairingState).toBe("PAIRING");
     expect(create({ pairing: "UNKNOWN" })?.pairingState).toBe("UNKNOWN");
+    expect(create({ pairing: "NOT_A_DJI_PAIRING_STATE" })?.pairingState).toBe("unknown");
   });
 
   it("投影已确认的设备、飞行和当前图传事实", () => {
@@ -249,6 +269,8 @@ describe("飞行作业工作流内部模块", () => {
             liveRttMillis: 42,
             livePacketLoss: 6,
             livePacketCacheLength: 108,
+            visionSensorUsed: false,
+            visionPositioningEnabled: false,
           },
           capabilities: {},
         },
@@ -267,6 +289,8 @@ describe("飞行作业工作流内部模块", () => {
       lowBatteryRthState: "IDLE",
       remainingFlightTimeSeconds: 1085,
       pose: { latitude: 30.27415, longitude: 120.15515, altitudeMeters: 12.3 },
+      visionSensorUsed: false,
+      visionPositioningEnabled: false,
       live: { streaming: true, resolution: "1920x1080", fps: 29.97, videoBitrateKbps: 1802, rttMillis: 42, packetLoss: 6, packetCacheLength: 108 },
     });
   });
@@ -295,6 +319,15 @@ describe("飞行作业工作流内部模块", () => {
             liveRttMillis: 42,
             livePacketLoss: 4,
             livePacketCacheLength: 72,
+            gpsSignalLevel: "LEVEL_4",
+            gpsSatelliteCount: 17,
+            visionSensorUsed: true,
+            visionSystemWarning: "TOO_DARK",
+            visionPositioningEnabled: true,
+            landingProtectionState: "SAFE_TO_LAND",
+            landingConfirmationNeeded: true,
+            takeoffFailureError: "NONE",
+            motorStartFailureError: "NONE",
           },
           capabilities: {},
         },
@@ -309,6 +342,15 @@ describe("飞行作业工作流内部模块", () => {
       flightState: "unknown",
       motorsOn: null,
       flightMode: null,
+      gpsSignalLevel: null,
+      gpsSatelliteCount: null,
+      visionSensorUsed: null,
+      visionSystemWarning: null,
+      visionPositioningEnabled: null,
+      landingProtectionState: null,
+      landingConfirmationNeeded: null,
+      takeoffFailureError: null,
+      motorStartFailureError: null,
       lowBatteryRthState: "unknown",
       remainingFlightTimeSeconds: null,
       pose: null,

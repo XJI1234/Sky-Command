@@ -9,6 +9,7 @@ import { mobileProjectRoot } from "./helpers/mobile-project-root.js";
 
 const text = (value: string) => ({ kind: "string" as const, value });
 const bool = (value: boolean) => ({ kind: "boolean" as const, value });
+const nil = () => ({ kind: "null" as const });
 
 const settleDji = async <T>(host: Awaited<ReturnType<typeof DesktopTestHost.start>>, operation: Promise<T>, deviceId?: string): Promise<T> => {
   const timer = setInterval(() => host.sendControl("ADVANCE 0", deviceId), 25);
@@ -581,7 +582,7 @@ describe("跨运行时桌面测试宿主", () => {
 
       expect(start.status).toBe("rejected");
       expect(telemetry.status).toBe("succeeded");
-      expect(telemetry.result?.fields.liveStreaming).toEqual(bool(false));
+      expect(telemetry.result?.fields.liveStreaming).toEqual(nil());
     } finally {
       await host.close();
     }

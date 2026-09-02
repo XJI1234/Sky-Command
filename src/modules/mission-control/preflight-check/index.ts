@@ -13,10 +13,15 @@ export type MissionPreflightPhase =
   | "completed"
   | "failed"
   | "disconnected";
+type PreflightMsdkSdkAvailability = "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
+type PreflightMsdkLinkState = "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
 
 export interface PreflightInput {
   readonly relayConnected: boolean;
   readonly payload: {
+    readonly sdkAvailability?: PreflightMsdkSdkAvailability;
+    readonly remoteController?: PreflightMsdkLinkState;
+    readonly flightController?: PreflightMsdkLinkState;
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
@@ -35,16 +40,21 @@ export interface PreflightPolicy {
   readonly minimumBatteryPercent: number;
 }
 
-export type FlightActionPreflightAction = "takeoff" | "land" | "return-home";
+export type FlightActionPreflightAction = "takeoff" | "land" | "confirm-landing" | "return-home" | "stop-takeoff" | "stop-auto-landing";
 export interface FlightActionPreflightInput {
   readonly relayConnected: boolean;
   readonly payload: {
+    readonly sdkAvailability?: PreflightMsdkSdkAvailability;
+    readonly remoteController?: PreflightMsdkLinkState;
+    readonly flightController?: PreflightMsdkLinkState;
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
     readonly isFlying?: boolean;
     readonly motorsOn?: boolean;
     readonly batteryPercent?: number;
+    readonly flightMode?: string;
+    readonly landingConfirmationNeeded?: boolean;
   };
   readonly capabilities: object;
   readonly action: FlightActionPreflightAction;
@@ -65,7 +75,10 @@ export type PreflightBlockerCode =
   | "AIRCRAFT_ALREADY_FLYING"
   | "MOTOR_STATE_UNKNOWN"
   | "MOTORS_RUNNING"
-  | "AIRCRAFT_ON_GROUND";
+  | "AIRCRAFT_ON_GROUND"
+  | "TAKEOFF_NOT_ACTIVE"
+  | "AUTO_LANDING_NOT_ACTIVE"
+  | "LANDING_CONFIRMATION_NOT_REQUIRED";
 
 export interface PreflightBlocker {
   readonly code: PreflightBlockerCode;
@@ -90,7 +103,10 @@ const messages: Readonly<Record<PreflightBlockerCode, string>> = Object.freeze({
   AIRCRAFT_ALREADY_FLYING: "The aircraft is already flying.",
   MOTOR_STATE_UNKNOWN: "Aircraft motor state is unknown.",
   MOTORS_RUNNING: "Aircraft motors are running.",
-  AIRCRAFT_ON_GROUND: "The aircraft is already on the ground."
+  AIRCRAFT_ON_GROUND: "The aircraft is already on the ground.",
+  TAKEOFF_NOT_ACTIVE: "Automatic takeoff is not active.",
+  AUTO_LANDING_NOT_ACTIVE: "Automatic landing is not active.",
+  LANDING_CONFIRMATION_NOT_REQUIRED: "DJI has not requested landing confirmation."
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
@@ -106,6 +122,9 @@ const validPolicy = (value: unknown): value is PreflightPolicy => {
 
 interface NormalizedInput {
   readonly relayConnected: boolean;
+  readonly sdkAvailability: unknown;
+  readonly remoteController: unknown;
+  readonly flightController: unknown;
   readonly sdkRegistered: unknown;
   readonly remoteControllerConnected: unknown;
   readonly flightControllerConnected: unknown;
@@ -115,6 +134,8 @@ interface NormalizedInput {
   readonly batteryPercent: unknown;
   readonly isFlying: unknown;
   readonly motorsOn: unknown;
+  readonly flightMode: unknown;
+  readonly landingConfirmationNeeded: unknown;
 }
 
 function normalize(input: unknown): NormalizedInput | null {
@@ -122,6 +143,9 @@ function normalize(input: unknown): NormalizedInput | null {
     if (!isRecord(input) || !isRecord(input.payload) || !isRecord(input.capabilities)) return null;
     return Object.freeze({
       relayConnected: input.relayConnected === true,
+      sdkAvailability: input.payload.sdkAvailability,
+      remoteController: input.payload.remoteController,
+      flightController: input.payload.flightController,
       sdkRegistered: input.payload.sdkRegistered,
       remoteControllerConnected: input.payload.remoteControllerConnected,
       flightControllerConnected: input.payload.flightControllerConnected,
@@ -130,7 +154,9 @@ function normalize(input: unknown): NormalizedInput | null {
       missionPhase: input.missionPhase,
       batteryPercent: input.payload.batteryPercent,
       isFlying: input.payload.isFlying,
-      motorsOn: input.payload.motorsOn
+      motorsOn: input.payload.motorsOn,
+      flightMode: input.payload.flightMode,
+      landingConfirmationNeeded: input.payload.landingConfirmationNeeded,
     });
   } catch {
     return null;
@@ -142,7 +168,7 @@ const result = (codes: readonly PreflightBlockerCode[]): PreflightResult => {
   const blockers = Object.freeze(codes.map(blocker));
   return blockers.length === 0 ? Object.freeze({ ok: true as const, blockers: Object.freeze([]) as readonly [] }) : Object.freeze({ ok: false as const, blockers });
 };
-const flightActions: readonly FlightActionPreflightAction[] = ["takeoff", "land", "return-home"];
+const flightActions: readonly FlightActionPreflightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"];
 const flightActionOf = (value: unknown): FlightActionPreflightAction | null => {
   try {
     if (!isRecord(value) || typeof value.action !== "string") return null;
@@ -151,6 +177,11 @@ const flightActionOf = (value: unknown): FlightActionPreflightAction | null => {
     return null;
   }
 };
+const validSdk = (value: unknown): value is PreflightMsdkSdkAvailability => value === "STOPPED" || value === "STARTING" || value === "READY" || value === "FAILED" || value === "UNKNOWN";
+const validLink = (value: unknown): value is PreflightMsdkLinkState => value === "CONNECTED" || value === "DISCONNECTED" || value === "UNKNOWN";
+const sdkReady = (input: NormalizedInput): boolean => input.sdkAvailability === undefined ? input.sdkRegistered === true : validSdk(input.sdkAvailability) && input.sdkAvailability === "READY";
+const remoteConnected = (input: NormalizedInput): boolean => input.remoteController === undefined ? input.remoteControllerConnected === true : validLink(input.remoteController) && input.remoteController === "CONNECTED";
+const flightConnected = (input: NormalizedInput): boolean => input.flightController === undefined ? input.flightControllerConnected === true : validLink(input.flightController) && input.flightController === "CONNECTED";
 
 function evaluate(input: PreflightInput, policy: PreflightPolicy = DEFAULT_POLICY): PreflightResult {
   const normalized = normalize(input);
@@ -159,9 +190,9 @@ function evaluate(input: PreflightInput, policy: PreflightPolicy = DEFAULT_POLIC
 
   const codes: PreflightBlockerCode[] = [];
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
-  if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
-  if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-  if (normalized.flightControllerConnected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+  if (!sdkReady(normalized)) codes.push("SDK_NOT_READY");
+  if (!remoteConnected(normalized)) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
+  if (!flightConnected(normalized)) codes.push("AIRCRAFT_DISCONNECTED");
   if (normalized.waypointMission !== true || normalized.waypointMissionSupport !== "supported") codes.push("WAYPOINT_UNSUPPORTED");
   if (normalized.missionPhase !== "uploaded") codes.push("MISSION_NOT_UPLOADED");
   const battery = normalized.batteryPercent;
@@ -180,9 +211,9 @@ function evaluateUpload(input: PreflightInput): PreflightResult {
 
   const codes: PreflightBlockerCode[] = [];
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
-  if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
-  if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-  if (normalized.flightControllerConnected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+  if (!sdkReady(normalized)) codes.push("SDK_NOT_READY");
+  if (!remoteConnected(normalized)) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
+  if (!flightConnected(normalized)) codes.push("AIRCRAFT_DISCONNECTED");
   if (normalized.waypointMission !== true || normalized.waypointMissionSupport !== "supported") codes.push("WAYPOINT_UNSUPPORTED");
   return result(codes);
 }
@@ -195,9 +226,9 @@ function evaluateFlightAction(input: FlightActionPreflightInput, policy: Preflig
 
   const codes: PreflightBlockerCode[] = [];
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
-  if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
-  if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-  if (normalized.flightControllerConnected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+  if (!sdkReady(normalized)) codes.push("SDK_NOT_READY");
+  if (!remoteConnected(normalized)) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
+  if (!flightConnected(normalized)) codes.push("AIRCRAFT_DISCONNECTED");
 
   if (action === "takeoff") {
     const battery = normalized.batteryPercent;
@@ -207,6 +238,13 @@ function evaluateFlightAction(input: FlightActionPreflightInput, policy: Preflig
     else if (normalized.isFlying) codes.push("AIRCRAFT_ALREADY_FLYING");
     if (normalized.motorsOn !== false && normalized.motorsOn !== true) codes.push("MOTOR_STATE_UNKNOWN");
     else if (normalized.motorsOn) codes.push("MOTORS_RUNNING");
+  } else if (action === "stop-takeoff") {
+    if (normalized.flightMode !== "AUTO_TAKE_OFF") codes.push("TAKEOFF_NOT_ACTIVE");
+  } else if (action === "stop-auto-landing") {
+    if (normalized.flightMode !== "AUTO_LANDING" && normalized.flightMode !== "CONFIRM_LANDING") codes.push("AUTO_LANDING_NOT_ACTIVE");
+  } else if (action === "confirm-landing") {
+    if (normalized.isFlying !== true) codes.push(normalized.isFlying === false ? "AIRCRAFT_ON_GROUND" : "FLIGHT_STATE_UNKNOWN");
+    if (normalized.landingConfirmationNeeded !== true) codes.push("LANDING_CONFIRMATION_NOT_REQUIRED");
   } else if (normalized.isFlying !== true) {
     codes.push(normalized.isFlying === false ? "AIRCRAFT_ON_GROUND" : "FLIGHT_STATE_UNKNOWN");
   }

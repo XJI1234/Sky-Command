@@ -23,9 +23,9 @@ PreflightCheck.evaluateUpload(input) -> PreflightResult
 interface PreflightInput {
   readonly relayConnected: boolean;
   readonly payload: {
-    readonly sdkRegistered?: boolean;
-    readonly remoteControllerConnected?: boolean;
-    readonly flightControllerConnected?: boolean;
+    readonly sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
+    readonly remoteController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
+    readonly flightController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
     readonly isFlying?: boolean;
     readonly motorsOn?: boolean;
     readonly batteryPercent?: number;
@@ -38,6 +38,8 @@ interface PreflightInput {
 }
 ```
 
+`sdkAvailability`、`remoteController` 和 `flightController` 必须直接来自同一次手机 MSDK 遥测。预检只把 `READY`、`CONNECTED` 视为满足条件；`UNKNOWN`、缺失或非 MSDK 值均阻塞。旧的 `sdkRegistered`、`remoteControllerConnected` 和 `flightControllerConnected` 只允许迁移期兼容输入，不能覆盖存在的原始字段。
+
 缺失或畸形的安全字段一律视为阻塞，不得采用“默认安全”。`missionPhase` 必须为 `uploaded`；本模块绝不推进状态机。
 
 `evaluateUpload(input)` 复用同一输入结构，但只评估中继、MSDK、遥控器、飞控与航线能力；它不读取任务阶段、电量、飞行状态或电机状态。它是航线从手机上传到飞机前的唯一纯门禁，避免把启动航线的地面条件错误施加到上传阶段。
@@ -48,10 +50,12 @@ interface PreflightInput {
 PreflightCheck.evaluateFlightAction(input, policy?) -> PreflightResult
 ```
 
-`input.action` 只能是 `takeoff`、`land` 或 `return-home`。它不读取任务阶段或航线能力，但仍要求中继、MSDK、遥控器、飞控和飞行器均明确可用。其余要求按动作分离，不能复用航线预检后再删除部分阻塞项：
+`input.action` 只能是 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff` 或 `stop-auto-landing`。它不读取任务阶段或航线能力，但仍要求中继、MSDK、遥控器、飞控和飞行器均明确可用。其余要求按动作分离，不能复用航线预检后再删除部分阻塞项：
 
 - `takeoff` 必须有有效电量且不低于策略下限、明确 `isFlying === false`、明确 `motorsOn === false`。飞行状态未知为 `FLIGHT_STATE_UNKNOWN`；已在飞行为 `AIRCRAFT_ALREADY_FLYING`；电机状态未知为 `MOTOR_STATE_UNKNOWN`；电机已开为 `MOTORS_RUNNING`。
 - `land` 和 `return-home` 必须明确 `isFlying === true`。飞行状态未知为 `FLIGHT_STATE_UNKNOWN`；已在地面为 `AIRCRAFT_ON_GROUND`。它们绝不因电量低、未知电量或电机状态未知而被拦截，避免把需要收尾的飞行器困在空中。
+- `confirm-landing` 必须明确 `isFlying === true` 且 `landingConfirmationNeeded === true`。任何缺失、false 或畸形的确认需求均为 `LANDING_CONFIRMATION_NOT_REQUIRED`；它绝不自动放行。
+- `stop-takeoff` 必须明确 `flightMode === "AUTO_TAKE_OFF"`；`stop-auto-landing` 必须明确 `flightMode === "AUTO_LANDING"` 或 `"CONFIRM_LANDING"`。不满足时分别返回 `AUTOMATIC_TAKEOFF_NOT_ACTIVE` 或 `AUTOMATIC_LANDING_NOT_ACTIVE`，绝不发送一个不对应当前 MSDK 自动过程的停止 Action。这两个动作不根据电量或电机状态阻断。
 
 直接飞行动作仍必须由 `flight-control` 创建一次性确认。确认消费前，调度器重新读取原始遥测并再次调用本接口；任一状态变为未知、断开或失败时均不得发送命令。
 
@@ -73,7 +77,8 @@ PreflightCheck.evaluateFlightAction(input, policy?) -> PreflightResult
 12. `AIRCRAFT_ALREADY_FLYING`
 13. `MOTOR_STATE_UNKNOWN`
 14. `MOTORS_RUNNING`
-15. `AIRCRAFT_ON_GROUND`（仅 `land` 与 `return-home`）
+15. `AIRCRAFT_ON_GROUND`（仅 `land`、`confirm-landing` 与 `return-home`）
+16. `LANDING_CONFIRMATION_NOT_REQUIRED`（仅 `confirm-landing`）
 
 `evaluateUpload` 仅可返回前七项中的 `RELAY_DISCONNECTED`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_DISCONNECTED`、`AIRCRAFT_DISCONNECTED`、`WAYPOINT_UNSUPPORTED`；它不产生 `MISSION_NOT_UPLOADED` 或任何动态飞行事实阻塞项。
 

@@ -51,7 +51,7 @@ function format(connection: unknown): string {
 
   const live = read(connection, "live");
   if (read(live, "streaming") === true) {
-    parts.push("图传中");
+    parts.push("DJI 图传已确认推流");
     const resolution = safeText(read(live, "resolution"));
     if (resolution !== null) parts.push(resolution);
     const fps = boundedNumber(read(live, "fps"), 0, 240);
@@ -60,6 +60,8 @@ function format(connection: unknown): string {
     if (bitrate !== null) parts.push(`${rounded(bitrate, 0)} kbps`);
     const rtt = boundedInteger(read(live, "rttMillis"), 0, 60_000);
     if (rtt !== null) parts.push(`RTT ${rtt} ms`);
+  } else if (read(live, "streaming") === false) {
+    parts.push("DJI 图传已确认停止");
   }
   return parts.join(" · ");
 }

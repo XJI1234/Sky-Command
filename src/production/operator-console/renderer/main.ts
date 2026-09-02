@@ -42,7 +42,10 @@ const show = (message: string): void => { el("status").textContent = message; };
 const flightActionLabel = (action: unknown): string => {
   if (action === "takeoff") return "起飞";
   if (action === "land") return "降落";
+  if (action === "confirm-landing") return "确认继续降落";
   if (action === "return-home" || action === "returnHome" || action === "rth") return "返航";
+  if (action === "stop-takeoff") return "停止自动起飞";
+  if (action === "stop-auto-landing") return "停止自动降落";
   return typeof action === "string" && action.length > 0 ? action : "该动作";
 };
 
@@ -64,6 +67,8 @@ const operatorNotice = (value: unknown): string => {
   if (reason === "VIDEO_TRANSPORT_FAILED") return "图传未能完成";
   if (reason === "VIDEO_TRANSPORT_UNAVAILABLE") return "图传当前不可用";
   if (code === "RELAY_REJECTED") return "手机拒绝了该命令，请在手机上看原因后重试";
+  if (read(inner, "ok") === true && read(inner, "action") === "land") return "DJI 已接受自动降落，正在等待 MSDK 回报落地或继续确认";
+  if (code === "LANDING_IN_PROGRESS") return "降落正在进行，请等待 MSDK 确认落地";
   if (code === "CAPABILITY_BLOCKED") {
     if (reason === "RELAY_OFFLINE") return "手机已离线，无法发送图传命令";
     if (reason === "SDK_NOT_READY") return "手机端 DJI 尚未就绪，无法启动图传";
@@ -355,6 +360,16 @@ const lowBatteryRthLabel = (value: unknown): string | null => {
   if (value === "UNKNOWN") return "未知（MSDK 返回 UNKNOWN）";
   return null;
 };
+const msdkEnumLabel = (value: unknown): string | null => {
+  const raw = optionalText(value);
+  if (raw === null) return null;
+  return raw === "UNKNOWN" ? "未知（MSDK 返回 UNKNOWN）" : raw;
+};
+const msdkBooleanLabel = (value: unknown): string | null => {
+  if (value === true) return "是（MSDK 返回 true）";
+  if (value === false) return "否（MSDK 返回 false）";
+  return null;
+};
 const flightFactsUnconfirmed = (connection: unknown): boolean => read(connection, "flightController") === "unknown";
 const telemetryTimeKnown = (connection: unknown): boolean => finiteNumber(read(connection, "telemetryReceivedAtMs")) !== null;
 const telemetryTimeLabel = (connection: unknown): string => {
@@ -371,13 +386,18 @@ const flightControllerStatusRows = (connection: unknown): string => {
   const rthStateValue = read(connection, "lowBatteryRthState");
   const rthState = lowBatteryRthLabel(rthStateValue);
   const remaining = rthStateValue === "UNKNOWN" || rthState === null ? null : durationLabel(read(connection, "remainingFlightTimeSeconds"));
-  const flightModeValue = optionalText(read(connection, "flightMode"));
-  const flightMode = flightModeValue === "UNKNOWN" ? "未知（MSDK 返回 UNKNOWN）" : flightModeValue;
+  const flightMode = msdkEnumLabel(read(connection, "flightMode"));
   const altitude = finiteNumber(read(pose, "altitudeMeters"));
   const latitude = finiteNumber(read(pose, "latitude"));
   const longitude = finiteNumber(read(pose, "longitude"));
   const flightState = read(connection, "flightState") === "grounded" ? "地面" : read(connection, "flightState") === "flying" ? "飞行中" : "尚未确认";
   const motors = read(connection, "motorsOn") === true ? "已启动" : read(connection, "motorsOn") === false ? "已关闭" : "尚未确认";
+  const gpsSignal = msdkEnumLabel(read(connection, "gpsSignalLevel"));
+  const satelliteCount = finiteNumber(read(connection, "gpsSatelliteCount"));
+  const visionSensor = msdkBooleanLabel(read(connection, "visionSensorUsed"));
+  const landingConfirmation = msdkBooleanLabel(read(connection, "landingConfirmationNeeded"));
+  const takeoffFailure = msdkEnumLabel(read(connection, "takeoffFailureError"));
+  const motorStartFailure = msdkEnumLabel(read(connection, "motorStartFailureError"));
   return [
     statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController")),
     statusRow("飞行状态 [FlightControllerKey.KeyIsFlying]", flightState, false),
@@ -385,8 +405,25 @@ const flightControllerStatusRows = (connection: unknown): string => {
     statusRow("低电量返航状态 [FlightControllerKey.KeyLowBatteryRTHInfo]", rthState ?? "尚未取得", rthState !== null),
     statusRow("低电量返航预估 [FlightControllerKey.KeyLowBatteryRTHInfo]", rthStateValue === "UNKNOWN" ? "不适用（无有效返航预估）" : remaining ?? "尚未取得", remaining !== null),
     statusRow("飞行模式 [FlightControllerKey.KeyFCFlightMode]", flightMode ?? "尚未取得", flightMode !== null),
+    statusRow("GPS 信号 [FlightControllerKey.KeyGPSSignalLevel]", gpsSignal ?? "尚未取得", gpsSignal !== null),
+    statusRow("GPS 卫星数 [FlightControllerKey.KeyGPSSatelliteCount]", satelliteCount === null ? "尚未取得" : String(satelliteCount), satelliteCount !== null),
+    statusRow("视觉传感器 [FlightControllerKey.KeyIsVisionSensorUsed]", visionSensor ?? "尚未取得", visionSensor !== null),
+    statusRow("降落确认 [FlightControllerKey.KeyIsLandingConfirmationNeeded]", landingConfirmation ?? "尚未取得", landingConfirmation !== null),
+    statusRow("起飞失败原因 [FlightControllerKey.KeyTakeoffFailureError]", takeoffFailure ?? "尚未取得", takeoffFailure !== null),
+    statusRow("电机启动失败原因 [FlightControllerKey.KeyMotorStartFailureError]", motorStartFailure ?? "尚未取得", motorStartFailure !== null),
     statusRow("相对起飞点高度 [FlightControllerKey.KeyAltitude]", altitude === null ? "尚未取得" : `${altitude.toFixed(1)} 米`, altitude !== null),
     statusRow("位置 [FlightControllerKey.KeyAircraftLocation]", latitude === null || longitude === null ? "尚未取得" : `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`, latitude !== null && longitude !== null),
+  ].join("");
+};
+
+const flightAssistantStatusRows = (connection: unknown): string => {
+  const visionSystemWarning = msdkEnumLabel(read(connection, "visionSystemWarning"));
+  const visionPositioning = msdkBooleanLabel(read(connection, "visionPositioningEnabled"));
+  const landingProtection = msdkEnumLabel(read(connection, "landingProtectionState"));
+  return [
+    statusRow("视觉系统警告 [FlightAssistantKey.KeyVisionSystemWarning]", visionSystemWarning ?? "尚未取得", visionSystemWarning !== null),
+    statusRow("视觉定位 [FlightAssistantKey.KeyVisionPositioningEnabled]", visionPositioning ?? "尚未取得", visionPositioning !== null),
+    statusRow("降落保护状态 [FlightAssistantKey.KeyLandingProtectionState]", landingProtection ?? "尚未取得", landingProtection !== null),
   ].join("");
 };
 
@@ -589,6 +626,8 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
       </div>
       <h3 class="device-status-heading">飞控状态 [FlightControllerKey]</h3>
       <div class="connection-status-list" aria-label="飞控状态">${flightControllerStatusRows(connection)}</div>
+      <h3 class="device-status-heading">飞行辅助状态 [FlightAssistantKey]</h3>
+      <div class="connection-status-list" aria-label="飞行辅助状态">${flightAssistantStatusRows(connection)}</div>
       <h3 class="device-status-heading">图传状态 [AirLinkKey / CameraKey]</h3>
       <div class="connection-status-list" aria-label="图传状态">${videoTransportStatusRows(connection)}</div>
       <h3 class="device-status-heading">电池状态 [BatteryKey]</h3>
@@ -707,10 +746,23 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   }
   const guidance = view.guidance as { message?: string } | null;
   el("guidance").textContent = guidance?.message ?? "";
+  for (const action of ["flight-takeoff", "flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"]) {
+    const button = document.querySelector(`button[data-action="${action}"]`);
+    if (!(button instanceof HTMLButtonElement)) continue;
+    const decision = OperatorConsole.evaluate(action, view);
+    button.disabled = !decision.ok;
+    button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
+  }
+  const landingDevice = devices.find((device) => device.deviceId === view.missionDeviceId);
+  const landing = read(landingDevice, "landing");
+  const landingPhase = text(read(landing, "phase"));
+  const landingLabel = landingPhase === "awaiting-msdk" ? "降落已请求，等待 MSDK 确认" : landingPhase === "confirmation-required" ? "MSDK 要求确认继续降落" : landingPhase === "confirmed-grounded" ? "已确认落地（飞行关闭，电机关闭）" : landingPhase === "state-unknown" ? "降落状态未知" : landingPhase === "stopped" ? "自动降落已停止" : "未请求降落";
+  const landingStatus = document.getElementById("landing-status");
+  if (landingStatus !== null) landingStatus.textContent = landingLabel;
   const confirm = el("confirm");
   if (view.confirmation !== null) {
     confirm.hidden = false;
-    el("confirm-text").textContent = `确认让 ${view.confirmation.deviceId} ${flightActionLabel(view.confirmation.action)}？此操作会立刻下发到飞机；停止航线不会自动返航。`;
+    el("confirm-text").textContent = `确认让 ${view.confirmation.deviceId} ${flightActionLabel(view.confirmation.action)}？此操作会立刻下发到飞控；命令完成不等于飞机状态已经改变。`;
     confirm.dataset.deviceId = view.confirmation.deviceId;
     confirm.dataset.confirmationId = view.confirmation.confirmationId;
   } else {
@@ -922,7 +974,10 @@ el("route-remove").addEventListener("click", async () => {
       "stream-stop": "stream-stop",
       "flight-takeoff": "flight-request",
       "flight-land": "flight-request",
+      "flight-confirm-landing": "flight-request",
       "flight-return-home": "flight-request",
+      "flight-stop-takeoff": "flight-request",
+      "flight-stop-auto-landing": "flight-request",
     };
     const invokeName = names[action];
     if (invokeName === undefined) return;
