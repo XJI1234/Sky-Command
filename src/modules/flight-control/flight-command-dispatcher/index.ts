@@ -64,7 +64,7 @@ function create(dependencies: FlightCommandDispatcherDependencies): FlightComman
       return freeze({ ok: false as const, code: "PREFLIGHT_BLOCKED" as const, blockers: blockersAttempt.value });
     }
     // Stryker disable next-line ObjectLiteral, ConditionalExpression, EqualityOperator: exact gate facts are asserted at the seam.
-    const gate = attempt(() => dependencies.capabilityGate.evaluate({ operation: "direct-flight", relayConnected: telemetry !== null, sdkRegistered: isRecord(payload) ? payload.sdkRegistered : undefined, remoteControllerConnected: isRecord(payload) ? payload.remoteControllerConnected : undefined, flightControllerConnected: isRecord(payload) ? payload.flightControllerConnected : undefined, aircraftConnected: isRecord(payload) ? payload.connected : undefined, capabilities }));
+    const gate = attempt(() => dependencies.capabilityGate.evaluate({ operation: "direct-flight", relayConnected: telemetry !== null, sdkRegistered: isRecord(payload) ? payload.sdkRegistered : undefined, remoteControllerConnected: isRecord(payload) ? payload.remoteControllerConnected : undefined, flightControllerConnected: isRecord(payload) ? payload.flightControllerConnected : undefined, capabilities }));
     // Stryker disable next-line LogicalOperator, ConditionalExpression: malformed gate values normalize identically.
     if (!gate.ok || !isRecord(gate.value) || gate.value.ok !== true || !isRecord(gate.value.value) || typeof gate.value.value.enabled !== "boolean") return invalid("DEPENDENCY_FAILURE");
     if (gate.value.value.enabled !== true) return freeze({ ok: false as const, code: "CAPABILITY_BLOCKED" as const, reason: typeof gate.value.value.reason === "string" ? gate.value.value.reason : "CAPABILITY_UNKNOWN" });

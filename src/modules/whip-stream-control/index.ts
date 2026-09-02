@@ -143,7 +143,6 @@ function create(dependencies: WhipStreamControlDependencies): WhipStreamControlI
       sdkRegistered: record(payload.value) ? payload.value.sdkRegistered : undefined,
       remoteControllerConnected: record(payload.value) ? payload.value.remoteControllerConnected : undefined,
       flightControllerConnected: record(payload.value) ? payload.value.flightControllerConnected : undefined,
-      aircraftConnected: record(payload.value) ? payload.value.connected : undefined,
       capabilities: capabilities.value,
     };
     const gate = attempt(() => dependencies.capabilityGate.evaluate(input));

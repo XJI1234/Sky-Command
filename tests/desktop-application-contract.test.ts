@@ -307,7 +307,7 @@ describe("DesktopApplication", () => {
       socket.send(hello.value);
       expect(RelayFrameCodec.decode(await nextMessage(socket))).toMatchObject({ kind: "decoded", frame: { type: "paired" } });
       const telemetryPayload = object({
-        deviceRevision: { kind: "number" as const, value: "1" }, sdkAvailability: text("READY"), remoteController: text("CONNECTED"), flightController: text("CONNECTED"), aircraft: text("CONNECTED"), connected: bool(true), isFlying: bool(false), motorsOn: bool(false), batteryPercent: { kind: "number" as const, value: "80" },
+        deviceRevision: { kind: "number" as const, value: "1" }, sdkAvailability: text("READY"), remoteController: text("CONNECTED"), flightController: text("CONNECTED"), aircraft: text("CONNECTED"), battery: text("CONNECTED"), connected: bool(true), isFlying: bool(false), motorsOn: bool(false), batteryPercent: { kind: "number" as const, value: "80" },
       });
       const capabilities = object({ liveVideo: bool(true), waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") });
       const telemetry = RelayFrameCodec.encode({ type: "telemetry", payload: telemetryPayload as never, capabilities: capabilities as never });

@@ -114,7 +114,7 @@ function create(dependencies: OperationWorkflowDependencies) {
     const value = controlTelemetryRaw(deviceId);
     const payload = read(value, "payload");
     const capabilities = read(value, "capabilities");
-    const decision = CapabilityGate.evaluate({ operation, relayConnected: value !== null, sdkRegistered: read(payload, "sdkRegistered"), remoteControllerConnected: read(payload, "remoteControllerConnected"), flightControllerConnected: read(payload, "flightControllerConnected"), aircraftConnected: read(payload, "connected"), capabilities });
+    const decision = CapabilityGate.evaluate({ operation, relayConnected: value !== null, sdkRegistered: read(payload, "sdkRegistered"), remoteControllerConnected: read(payload, "remoteControllerConnected"), flightControllerConnected: read(payload, "flightControllerConnected"), capabilities });
     return decision.ok === true && decision.value.enabled === true;
   };
   const readiness = (deviceId: string, target: HardwareReadinessTarget, source: unknown = controlTelemetryRaw(deviceId)): HardwareReadinessResult => {
@@ -155,7 +155,8 @@ function create(dependencies: OperationWorkflowDependencies) {
   const refreshControl = async (deviceId: string): Promise<unknown | null> => {
     try {
       const outcome = await dependencies.relayOperations.refreshTelemetry(deviceId);
-      if (read(outcome, "status") !== "succeeded") return null;
+      const snapshot = read(outcome, "snapshot");
+      if (read(outcome, "status") !== "succeeded" || (snapshot !== "accepted" && snapshot !== "already-current")) return null;
       return controlTelemetryRaw(deviceId);
     } catch { return null; }
   };
@@ -244,7 +245,7 @@ function create(dependencies: OperationWorkflowDependencies) {
     },
     refreshDeviceState: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
       if (!validId(deviceId) || !online(deviceId)) return failure("DEVICE_OFFLINE");
-      return await refreshControl(deviceId) === null ? failure("CONTROL_STATE_UNAVAILABLE") : success();
+      return await refreshControl(deviceId) === null ? failure("STATUS_REFRESH_FAILED") : success();
     }),
     readTransmissionSettings: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => withCurrentControl(deviceId, () => actions.readTransmission(deviceId))),
     writeTransmissionSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => withCurrentControl(deviceId, () => actions.writeTransmission(deviceId, patch))),

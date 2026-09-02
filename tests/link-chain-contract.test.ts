@@ -6,7 +6,7 @@ describe("设备链路状态契约", () => {
     expect(LinkChain.evaluate({
       deviceId: "phone-1",
       relayConnected: true,
-      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, pairingState: "IDLE" },
+      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, pairingState: "IDLE" },
     })).toEqual({
       ok: true,
       value: { deviceId: "phone-1", overall: "ready", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "connected" },
@@ -14,7 +14,7 @@ describe("设备链路状态契约", () => {
     expect(LinkChain.evaluate({
       deviceId: "phone-1",
       relayConnected: true,
-      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, pairingState: "PAIRED" },
+      telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, pairingState: "PAIRED" },
     })).toMatchObject({ ok: true, value: { overall: "ready" } });
   });
 
@@ -22,7 +22,7 @@ describe("设备链路状态契约", () => {
     expect(LinkChain.evaluate({
       deviceId: "phone-1",
       relayConnected: true,
-      telemetry: { sdkRegistered: true, flightControllerConnected: true, connected: true },
+      telemetry: { sdkRegistered: true, flightControllerConnected: true },
     })).toEqual({
       ok: true,
       value: { deviceId: "phone-1", overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "unknown", remoteControllerToAircraft: "unknown" },
@@ -30,11 +30,11 @@ describe("设备链路状态契约", () => {
   });
 
   it.each([
-    [{ deviceId: "phone-1", relayConnected: false, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true } }, { overall: "offline", computerToPhone: "disconnected", phoneToRemoteController: "unknown", remoteControllerToAircraft: "unknown" }],
+    [{ deviceId: "phone-1", relayConnected: false, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true } }, { overall: "offline", computerToPhone: "disconnected", phoneToRemoteController: "unknown", remoteControllerToAircraft: "unknown" }],
     [{ deviceId: "phone-1", relayConnected: true, telemetry: null }, { overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "unknown", remoteControllerToAircraft: "unknown" }],
     [{ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: false } }, { overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "unknown", remoteControllerToAircraft: "unknown" }],
-    [{ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: false, flightControllerConnected: true, connected: true } }, { overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "disconnected", remoteControllerToAircraft: "unknown" }],
-    [{ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: false } }, { overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "disconnected" }]
+    [{ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: false, flightControllerConnected: true } }, { overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "disconnected", remoteControllerToAircraft: "unknown" }],
+    [{ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: false } }, { overall: "ready", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "connected" }]
   ])("保留各段链路事实而不把缺失误作断开", (input, expected) => {
     expect(LinkChain.evaluate(input)).toEqual({ ok: true, value: { deviceId: "phone-1", ...expected } });
   });
@@ -75,7 +75,7 @@ describe("设备链路状态契约", () => {
     expect(LinkChain.evaluate({ deviceId: "phone-1", relayConnected: true, telemetry: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: false, connected: true } })).toEqual({ ok: true, value: { deviceId: "phone-1", overall: "degraded", computerToPhone: "connected", phoneToRemoteController: "connected", remoteControllerToAircraft: "disconnected" } });
   });
 
-  it("飞控存在但飞机明确断开时保留飞行器段的明确断开事实", () => {
+  it("保留的 ProductKey 断开不能覆盖飞控已连接的链路事实", () => {
     expect(LinkChain.evaluate({
       deviceId: "phone-1",
       relayConnected: true,
@@ -84,10 +84,10 @@ describe("设备链路状态契约", () => {
       ok: true,
       value: {
         deviceId: "phone-1",
-        overall: "degraded",
+        overall: "ready",
         computerToPhone: "connected",
         phoneToRemoteController: "connected",
-        remoteControllerToAircraft: "disconnected"
+        remoteControllerToAircraft: "connected"
       }
     });
   });

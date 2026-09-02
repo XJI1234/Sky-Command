@@ -9,6 +9,13 @@ type JsonValue = Readonly<{ readonly kind: "null" }>
   | Readonly<{ readonly kind: "object"; readonly fields: Readonly<Record<string, JsonValue>> }>;
 
 type CommandStatus = "succeeded" | "rejected" | "timed-out" | "disconnected" | "transport-failed";
+export type TelemetryRefreshSnapshot = "accepted" | "already-current" | "invalid" | "session-changed" | "unavailable";
+export interface TelemetryRefreshResult {
+  readonly status: CommandStatus;
+  /** Whether this response contained a protocol-valid snapshot for the same relay session. */
+  readonly snapshot: TelemetryRefreshSnapshot;
+  readonly result?: JsonValue;
+}
 type MsdkLinkState = "UNKNOWN" | "DISCONNECTED" | "CONNECTED";
 type MsdkPairingState = "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED";
 
@@ -30,6 +37,8 @@ export interface DesktopRelayTelemetryPayload {
   readonly airLink?: MsdkLinkState;
   /** Raw `CameraKey.KeyConnection(LEFT_OR_MAIN)` value from Android MSDK telemetry. */
   readonly camera?: MsdkLinkState;
+  /** Raw `BatteryKey.KeyConnection(LEFT_OR_MAIN)` value from Android MSDK telemetry. */
+  readonly battery?: MsdkLinkState;
   /** Raw `RemoteControllerKey.KeyPairingStatus` value from Android MSDK telemetry. */
   readonly pairing?: MsdkPairingState;
   /** Compatibility projections for existing control gates. Do not use for device facts. */
@@ -42,7 +51,7 @@ export interface DesktopRelayTelemetryPayload {
   readonly aircraftModel?: string;
   readonly remoteControllerModel?: string;
   readonly flightMode?: string;
-  readonly lowBatteryRthState?: "IDLE" | "COUNTING_DOWN" | "EXECUTED" | "CANCELLED";
+  readonly lowBatteryRthState?: "IDLE" | "COUNTING_DOWN" | "EXECUTED" | "CANCELLED" | "UNKNOWN";
   readonly remainingFlightTimeSeconds?: number;
   /** Compatibility alias for existing callers. Do not use for device facts. */
   readonly pairingState?: MsdkPairingState;
@@ -112,7 +121,7 @@ export interface RelayOperationsAdapterInstance {
   readonly pairingGateway: () => PairingRelayPort;
   readonly flightGateway: () => AdapterFlightRelay;
   readonly settingsGateway: () => RelaySettingsGateway;
-  readonly refreshTelemetry: (deviceId: string) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
+  readonly refreshTelemetry: (deviceId: string) => Promise<TelemetryRefreshResult>;
   readonly dispose: () => void;
 }
 
@@ -203,9 +212,9 @@ const msdkLinkState = (value: unknown): MsdkLinkState | undefined => {
   const current = string(value);
   return current === "UNKNOWN" || current === "DISCONNECTED" || current === "CONNECTED" ? current : undefined;
 };
-const lowBatteryRthState = (value: unknown): "IDLE" | "COUNTING_DOWN" | "EXECUTED" | "CANCELLED" | undefined => {
+const lowBatteryRthState = (value: unknown): "IDLE" | "COUNTING_DOWN" | "EXECUTED" | "CANCELLED" | "UNKNOWN" | undefined => {
   const current = string(value);
-  return current === "IDLE" || current === "COUNTING_DOWN" || current === "EXECUTED" || current === "CANCELLED" ? current : undefined;
+  return current === "IDLE" || current === "COUNTING_DOWN" || current === "EXECUTED" || current === "CANCELLED" || current === "UNKNOWN" ? current : undefined;
 };
 const status = (value: unknown): CommandStatus => {
   const current = read(value, "status");
@@ -252,14 +261,16 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   }
   const airLink = msdkLinkState(payload.airLink); if (airLink !== undefined) outputPayload.airLink = airLink;
   const camera = msdkLinkState(payload.camera); if (camera !== undefined) outputPayload.camera = camera;
+  const battery = msdkLinkState(payload.battery); if (battery !== undefined) outputPayload.battery = battery;
   const isFlying = boolean(payload.isFlying); if (isFlying !== undefined) outputPayload.isFlying = isFlying;
   const motorsOn = boolean(payload.motorsOn); if (motorsOn !== undefined) outputPayload.motorsOn = motorsOn;
-  const batteryPercent = number(payload.batteryPercent); if (batteryPercent !== undefined) outputPayload.batteryPercent = batteryPercent;
+  const batteryPercent = battery === "CONNECTED" ? number(payload.batteryPercent) : undefined;
+  if (batteryPercent !== undefined) outputPayload.batteryPercent = batteryPercent;
   const aircraftModel = safeText(string(payload.aircraftModel)); if (aircraftModel !== undefined) outputPayload.aircraftModel = aircraftModel;
   const remoteControllerModel = safeText(string(payload.remoteControllerModel)); if (remoteControllerModel !== undefined) outputPayload.remoteControllerModel = remoteControllerModel;
   const flightMode = safeText(string(payload.flightMode)); if (flightMode !== undefined) outputPayload.flightMode = flightMode;
   const rthState = lowBatteryRthState(payload.lowBatteryRthState); if (rthState !== undefined) outputPayload.lowBatteryRthState = rthState;
-  const remainingFlightTimeSeconds = rthState === undefined ? undefined : boundedInteger(payload.remainingFlightTimeSeconds, 1, 86_400); if (remainingFlightTimeSeconds !== undefined) outputPayload.remainingFlightTimeSeconds = remainingFlightTimeSeconds;
+  const remainingFlightTimeSeconds = rthState === undefined || rthState === "UNKNOWN" ? undefined : boundedInteger(payload.remainingFlightTimeSeconds, 1, 86_400); if (remainingFlightTimeSeconds !== undefined) outputPayload.remainingFlightTimeSeconds = remainingFlightTimeSeconds;
   const pairing = pairingState(payload.pairing);
   if (pairing !== undefined) {
     outputPayload.pairing = pairing;
@@ -355,8 +366,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     deviceRevisionOf(telemetry) !== null &&
     telemetry.payload.sdkAvailability !== undefined &&
     telemetry.payload.remoteController !== undefined &&
-    telemetry.payload.flightController !== undefined &&
-    telemetry.payload.aircraft !== undefined;
+    telemetry.payload.flightController !== undefined;
   const discardStaleObservations = (): void => {
     for (const [deviceId, observation] of observations) if (activeSession(deviceId) !== observation.sessionId) observations.delete(deviceId);
   };
@@ -370,6 +380,21 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
       if (previous.telemetrySequence === null && telemetrySequence === null && previous.deviceRevision > deviceRevision) return previous.telemetry;
     }
     observations.set(deviceId, freeze({ sessionId, telemetrySequence, deviceRevision, telemetry }));
+    return telemetry;
+  };
+  const admitTelemetryRead = (deviceId: string, sessionId: string, telemetry: DesktopRelayTelemetry, sequenceAtRequest: number | null): DesktopRelayTelemetry | null => {
+    if (telemetrySequenceOf(telemetry) !== null) return admit(deviceId, sessionId, telemetry);
+    const deviceRevision = deviceRevisionOf(telemetry);
+    if (deviceRevision === null || !completeDeviceFact(telemetry)) return null;
+    const previous = observations.get(deviceId);
+    if (previous !== undefined && previous.sessionId === sessionId) {
+      if (previous.deviceRevision > deviceRevision) return previous.telemetry;
+      if (sequenceAtRequest !== null && previous.telemetrySequence !== null && previous.telemetrySequence > sequenceAtRequest) return previous.telemetry;
+      // A command response is causally after its request, unlike an unsolicited telemetry event.
+      observations.set(deviceId, freeze({ sessionId, telemetrySequence: previous.telemetrySequence, deviceRevision, telemetry }));
+      return telemetry;
+    }
+    observations.set(deviceId, freeze({ sessionId, telemetrySequence: null, deviceRevision, telemetry }));
     return telemetry;
   };
   const currentObservation = (deviceId: string): DesktopRelayTelemetry | null => {
@@ -499,15 +524,21 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     for (const [key, value] of Object.entries(fields)) if (key !== "capabilities") payload[key] = value;
     return project(deviceId, freeze({ deviceId, receivedAtMs, payload: freeze({ kind: "object", fields: freeze(payload) }), capabilities }));
   };
-  const refreshTelemetry = async (deviceId: string): Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>> => {
+  const refreshTelemetry = async (deviceId: string): Promise<TelemetryRefreshResult> => {
     const sessionId = validId(deviceId) ? activeSession(deviceId) : null;
+    const observationAtRequest = sessionId === null ? null : currentObservation(deviceId);
+    const sequenceAtRequest = observationAtRequest === null ? null : telemetrySequenceOf(observationAtRequest);
     const outcome = await send(deviceId, "telemetry.read", {});
     const receivedAtMs = now();
-    if (outcome.status !== "succeeded" || outcome.result === undefined || sessionId === null || receivedAtMs === null || activeSession(deviceId) !== sessionId) return outcome;
+    if (outcome.status !== "succeeded") return freeze({ ...outcome, snapshot: "unavailable" as const });
+    if (sessionId === null || activeSession(deviceId) !== sessionId) return freeze({ ...outcome, snapshot: "session-changed" as const });
+    if (outcome.result === undefined || receivedAtMs === null) return freeze({ ...outcome, snapshot: "invalid" as const });
     const projected = projectTelemetryRead(deviceId, receivedAtMs, outcome.result);
-    if (projected !== null) admit(deviceId, sessionId, projected);
+    if (projected === null) return freeze({ ...outcome, snapshot: "invalid" as const });
+    const admitted = admitTelemetryRead(deviceId, sessionId, projected, sequenceAtRequest);
+    if (admitted === null) return freeze({ ...outcome, snapshot: "invalid" as const });
     publish();
-    return outcome;
+    return freeze({ ...outcome, snapshot: admitted === projected ? "accepted" as const : "already-current" as const });
   };
   return freeze({
     telemetry,

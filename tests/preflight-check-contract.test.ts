@@ -7,7 +7,6 @@ const ready = (): PreflightInput => ({
     sdkRegistered: true,
     remoteControllerConnected: true,
     flightControllerConnected: true,
-    connected: true,
     isFlying: false,
     motorsOn: false,
     batteryPercent: 80,
@@ -35,13 +34,24 @@ describe("preflight check contract", () => {
     expect(Object.isFrozen(result.blockers)).toBe(true);
   });
 
+  it("ignores retained ProductKey compatibility telemetry in every flight precheck", () => {
+    const productDisconnected = { ...ready(), payload: { ...ready().payload, connected: false } };
+    expect(PreflightCheck.evaluate(productDisconnected)).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluateUpload({ ...productDisconnected, missionPhase: "staged" })).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluateFlightAction({
+      relayConnected: true,
+      payload: { ...productDisconnected.payload, isFlying: false, motorsOn: false, batteryPercent: 80 },
+      capabilities: {},
+      action: "takeoff",
+    })).toEqual({ ok: true, blockers: [] });
+  });
+
   it("reports every independent blocker with a stable displayable code", () => {
     const cases: readonly [PreflightInput, string][] = [
       [withInput({ relayConnected: false }), "RELAY_DISCONNECTED"],
       [withInput({ payload: { sdkRegistered: false } }), "SDK_NOT_READY"],
       [withInput({ payload: { remoteControllerConnected: false } }), "REMOTE_CONTROLLER_DISCONNECTED"],
       [withInput({ payload: { flightControllerConnected: false } }), "AIRCRAFT_DISCONNECTED"],
-      [withInput({ payload: { connected: false } }), "AIRCRAFT_DISCONNECTED"],
       [withInput({ capabilities: { waypointMission: false } }), "WAYPOINT_UNSUPPORTED"],
       [withInput({ capabilities: { waypointMissionSupport: "unsupported" } }), "WAYPOINT_UNSUPPORTED"],
       [withInput({ missionPhase: "staged" }), "MISSION_NOT_UPLOADED"],
@@ -82,7 +92,7 @@ describe("preflight check contract", () => {
   it("keeps combined blockers ordered and never duplicates a reason", () => {
     const result = PreflightCheck.evaluate(withInput({
       relayConnected: false,
-      payload: { sdkRegistered: false, remoteControllerConnected: false, flightControllerConnected: false, connected: false, batteryPercent: 10, isFlying: true, motorsOn: true },
+      payload: { sdkRegistered: false, remoteControllerConnected: false, flightControllerConnected: false, batteryPercent: 10, isFlying: true, motorsOn: true },
       capabilities: { waypointMission: false, waypointMissionSupport: "unsupported" },
       missionPhase: "staged"
     }));
@@ -141,7 +151,7 @@ describe("preflight check contract", () => {
   it("uses action-specific conditions so only takeoff requires ground, battery and stopped motors", () => {
     const action: FlightActionPreflightInput = {
       relayConnected: true,
-      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: true, motorsOn: true, batteryPercent: 80 },
+      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, isFlying: true, motorsOn: true, batteryPercent: 80 },
       capabilities: {},
       action: "land"
     };
@@ -179,7 +189,6 @@ describe("preflight check contract", () => {
         sdkRegistered: true,
         remoteControllerConnected: true,
         flightControllerConnected: true,
-        connected: true,
         isFlying: true,
         motorsOn: true,
         batteryPercent: 5,
@@ -208,7 +217,6 @@ describe("preflight check contract", () => {
         sdkRegistered: false,
         remoteControllerConnected: false,
         flightControllerConnected: true,
-        connected: false,
       },
       capabilities: { waypointMission: true, waypointMissionSupport: "unsupported" },
     })).toMatchObject({
@@ -217,7 +225,6 @@ describe("preflight check contract", () => {
         expect.objectContaining({ code: "RELAY_DISCONNECTED" }),
         expect.objectContaining({ code: "SDK_NOT_READY" }),
         expect.objectContaining({ code: "REMOTE_CONTROLLER_DISCONNECTED" }),
-        expect.objectContaining({ code: "AIRCRAFT_DISCONNECTED" }),
         expect.objectContaining({ code: "WAYPOINT_UNSUPPORTED" }),
       ]),
     });
@@ -226,7 +233,7 @@ describe("preflight check contract", () => {
   it("fails closed for malformed direct-flight actions and policies", () => {
     const action: FlightActionPreflightInput = {
       relayConnected: true,
-      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 },
+      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, isFlying: false, motorsOn: false, batteryPercent: 80 },
       capabilities: {},
       action: "takeoff",
     };
@@ -241,7 +248,7 @@ describe("preflight check contract", () => {
   it("reports every unavailable control link before direct flight", () => {
     const result = PreflightCheck.evaluateFlightAction({
       relayConnected: false,
-      payload: { sdkRegistered: false, remoteControllerConnected: false, flightControllerConnected: false, connected: false, isFlying: false, motorsOn: false, batteryPercent: 80 },
+      payload: { sdkRegistered: false, remoteControllerConnected: false, flightControllerConnected: false, isFlying: false, motorsOn: false, batteryPercent: 80 },
       capabilities: {},
       action: "takeoff",
     });
@@ -256,7 +263,7 @@ describe("preflight check contract", () => {
   it("refuses takeoff when required telemetry is unknown", () => {
     const action: FlightActionPreflightInput = {
       relayConnected: true,
-      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80 },
+      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, isFlying: false, motorsOn: false, batteryPercent: 80 },
       capabilities: {},
       action: "takeoff",
     };

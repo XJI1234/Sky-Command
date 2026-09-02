@@ -18,7 +18,8 @@ describe("Electron 生产图传渲染", () => {
     expect(source).toContain("flvjs.createPlayer");
     expect(source).toContain("chaseLiveEdge");
     expect(source).toContain("recoverStuckFlv");
-    expect(source).toContain("deviceFactRows(connection)");
+    expect(source).toContain("videoTransportStatusRows(connection)");
+    expect(source).toContain('statusRow("MSDK 图传观测 [手机 MSDK 图传运行观测]"');
     expect(deviceFactSummary()).toContain("飞行状态尚未确认");
     expect(source).not.toContain("等待手机就绪");
     expect(source).toContain("flightActionLabel");
@@ -32,8 +33,9 @@ describe("Electron 生产图传渲染", () => {
     expect(flight).toContain('id="stream-label"');
     expect(flight).toContain('id="stream-ready"');
     expect(page.indexOf('id="stream-label"')).toBeGreaterThan(page.indexOf('id="workspace-flight"'));
-    expect(renderer()).toContain("DJI 硬件产品未连接");
-    expect(renderer()).toContain("DJI 硬件产品状态未知");
+    expect(renderer()).not.toContain("DJI 硬件产品未连接");
+    expect(renderer()).not.toContain("DJI 硬件产品状态未知");
+    expect(renderer()).not.toContain("ProductKey.KeyConnection");
     expect(renderer()).toContain("streamCanStart");
     expect(renderer()).toContain('button[data-action="stream-start"]');
     expect(page).toContain('<video id="video"');

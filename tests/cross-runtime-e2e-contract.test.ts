@@ -377,7 +377,7 @@ describe("跨运行时桌面测试宿主", () => {
       expect((await send("telemetry.read", {})).status).toBe("succeeded");
       expect((await send("pairing.status", {})).status).toBe("succeeded");
       expect((await send("pairing.start", {})).status).toBe("rejected");
-      expect((await send("pairing.stop", {})).status).toBe("rejected");
+      expect((await settle("pairing.stop", {})).status).toBe("succeeded");
       expect((await settle("live-stream.start", { rtmpUrl: text("rtmp://192.168.50.10:19350/live/equivalence") })).status).toBe("succeeded");
       expect((await settle("live-stream.stop", {})).status).toBe("succeeded");
       for (const name of ["flight.takeoff", "flight.land", "flight.return-home"]) {
@@ -434,10 +434,10 @@ describe("跨运行时桌面测试宿主", () => {
     });
     try {
       const device = await host.waitForDevice(30_000);
-      const rejected = await host.relay.sendCommand(device.deviceId, {
+      const rejected = await settleDji(host, host.relay.sendCommand(device.deviceId, {
         name: "device.settings.camera.write",
         fields: { focusMode: text("MANUAL") },
-      });
+      }));
       const readBack = await settleDji(host, host.relay.sendCommand(device.deviceId, {
         name: "device.settings.camera.read",
         fields: {},
@@ -539,7 +539,8 @@ describe("跨运行时桌面测试宿主", () => {
           host.sendControl("ADVANCE 2000", deviceId);
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        expect((await settleDji(host, host.relay.sendCommand(deviceId, { name: "device.settings.camera.read", fields: {} }), deviceId)).status).toBe("succeeded");
+        expect((await settleDji(host, host.relay.sendCommand(deviceId, { name: "device.settings.camera.read", fields: {} }), deviceId)).status)
+          .toBe(profile === "settings-throw" || profile === "settings-timeout" ? "rejected" : "succeeded");
       }
     } finally { await host.close(); }
   }, 90_000);
@@ -662,7 +663,8 @@ describe("跨运行时桌面测试宿主", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       for (const deviceId of ["e2e-flight-throw", "e2e-flight-duplicate", "e2e-flight-late"]) {
-        expect((await settleDji(host, host.relay.sendCommand(deviceId, { name: "flight.land", fields: { confirm: bool(true) } }), deviceId)).status).toBe("succeeded");
+        expect((await settleDji(host, host.relay.sendCommand(deviceId, { name: "flight.land", fields: { confirm: bool(true) } }), deviceId)).status)
+          .toBe(deviceId === "e2e-flight-throw" ? "rejected" : "succeeded");
       }
     } finally {
       await host.close();
@@ -714,7 +716,7 @@ describe("跨运行时桌面测试宿主", () => {
 
       expect((await host.relay.sendCommand(device.deviceId, { name: "pairing.status", fields: {} })).status).toBe("succeeded");
       expect((await host.relay.sendCommand(device.deviceId, { name: "pairing.start", fields: {} })).status).toBe("rejected");
-      expect((await host.relay.sendCommand(device.deviceId, { name: "pairing.stop", fields: {} })).status).toBe("rejected");
+      expect((await settleDji(host, host.relay.sendCommand(device.deviceId, { name: "pairing.stop", fields: {} }))).status).toBe("succeeded");
 
       const camera = await settleDji(host, host.relay.sendCommand(device.deviceId, {
         name: "device.settings.camera.write",

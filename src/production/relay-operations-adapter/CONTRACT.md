@@ -38,7 +38,7 @@ instance.streamGateway() -> StreamRelayGateway
 instance.pairingGateway() -> PairingRelayPort
 instance.flightGateway() -> FlightRelay
 instance.settingsGateway() -> RelaySettingsGateway
-instance.refreshTelemetry(deviceId) -> Promise<{ status, result? }>
+instance.refreshTelemetry(deviceId) -> Promise<{ status, snapshot, result? }>
 instance.dispose() -> void
 ```
 
@@ -57,18 +57,19 @@ instance.dispose() -> void
 | `deviceRevision` | `deviceRevision` | 仅保留正安全整数。它是手机端 `DeviceStateStore` 对当前 MSDK 设备事实的单调版本，供同一 Relay 会话内拒绝较旧的连接观察；不是时间戳，也不代表飞行遥测的独立版本 |
 | `remoteController` | `remoteController`、`remoteControllerConnected` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须原样保留为 `remoteController`；仅 `CONNECTED` 派生兼容值 `true`，仅 `DISCONNECTED` 派生兼容值 `false`，`UNKNOWN` 不得伪造成布尔值 |
 | `flightController` | `flightController`、`flightControllerConnected` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须原样保留为 `flightController`；仅 `CONNECTED` 派生兼容值 `true`，仅 `DISCONNECTED` 派生兼容值 `false`，`UNKNOWN` 不得伪造成布尔值 |
-| `aircraft` | `aircraft`、`connected` | 此既有字段只承载 `ProductKey.KeyConnection` 的原始“硬件产品连接”枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED`，不得将其解释为飞机物理在线；仅 `CONNECTED` 派生兼容值 `true`，仅 `DISCONNECTED` 派生兼容值 `false`，`UNKNOWN` 不得伪造成布尔值 |
+| `aircraft` | `aircraft`、`connected` | 此既有字段只承载 `ProductKey.KeyConnection` 的原始“硬件产品连接”枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED`。它仅为兼容和诊断保留，不得进入工作流快照、设备页、链路摘要或任何操作门禁；不得将其解释为飞机物理在线。仅 `CONNECTED` 派生兼容值 `true`，仅 `DISCONNECTED` 派生兼容值 `false`，`UNKNOWN` 不得伪造成布尔值 |
 | `airLink` | `airLink` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须一对一保留为 `AirLinkKey.KeyConnection`；不得由产品、飞控或相机字段推断，也不派生兼容布尔值 |
 | `camera` | `camera` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须一对一保留为 `CameraKey.KeyConnection(LEFT_OR_MAIN)`；不得由产品、飞控或 AirLink 字段推断，也不派生兼容布尔值 |
+| `battery` | `battery` | 原始封闭枚举 `UNKNOWN`、`DISCONNECTED`、`CONNECTED` 必须一对一保留为 `BatteryKey.KeyConnection(LEFT_OR_MAIN)`；不得由飞控、产品或其他 Key 推断，也不派生兼容布尔值 |
 | `aircraftModel`、`remoteControllerModel` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
 | `isFlying`、`motorsOn` | 同名字段 | 仅保留布尔值 |
-| `flightMode` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
-| `batteryPercent` | 同名字段 | 仅保留 `0..100` 的有限数值 |
-| `lowBatteryRthState` | 同名字段 | 仅保留 `IDLE`、`COUNTING_DOWN`、`EXECUTED`、`CANCELLED`；`UNKNOWN`、缺失或畸形值一律不投影 |
-| `remainingFlightTimeSeconds` | 同名字段 | 仅在 `lowBatteryRthState` 已投影时保留 `1..86,400` 的安全整数；只表示 DJI 低电量返航策略预估，不能作为通用预计飞行时间或安全门禁。`UNKNOWN + 0` 必须视为未知 |
+| `flightMode` | 同名字段 | 仅保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串；MSDK 明确返回 `UNKNOWN` 时必须透传 |
+| `batteryPercent` | 同名字段 | 仅在同一帧的 `battery=CONNECTED` 时保留 `0..100` 的有限数值；其他情况必须省略 |
+| `lowBatteryRthState` | 同名字段 | 仅保留 `IDLE`、`COUNTING_DOWN`、`EXECUTED`、`CANCELLED`、`UNKNOWN`；缺失或畸形值不投影。`UNKNOWN` 是 MSDK 的明确状态，不得伪装成尚未取得 |
+| `remainingFlightTimeSeconds` | 同名字段 | 仅在 `lowBatteryRthState` 为四种非 `UNKNOWN` 状态之一时保留 `1..86,400` 的安全整数；只表示 DJI 低电量返航策略预估，不能作为通用预计飞行时间或安全门禁。`UNKNOWN + 0` 必须保留状态、隐藏时间 |
 | `pairing` | `pairing`、`pairingState` | 原始受限枚举 `UNKNOWN`、`IDLE`、`PAIRING`、`PAIRED`、`STOPPING`、`FAILED` 必须原样保留为 `pairing`；`pairingState` 仅为既有调用方的兼容别名 |
 | `latitude` / `longitude` | 同名字段 | 仅在两者都是有限数值且分别落在 `[-90,90]`、`[-180,180]` 时成对保留；缺一、越界、JSON null 均省略，不得写成 `0` |
-| `altitudeMeters` | 同名字段 | 仅保留有限数值，不受电池 `0..100` 范围限制 |
+| `altitudeMeters` | 同名字段 | `FlightControllerKey.KeyAltitude` 的相对起飞点高度；仅保留有限数值，不受电池 `0..100` 范围限制，不换算为海拔或下视测距高度 |
 | `liveStreaming` | 同名字段 | 仅保留布尔值；它是当前只读观测，不能改变桌面图传状态机 |
 | `liveResolution` | 同名字段 | 仅在 `liveStreaming=true` 时保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
 | `liveFps` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..240` 的有限数值 |
@@ -84,11 +85,11 @@ instance.dispose() -> void
 | `capabilities.waypointMission` | 同名字段 | 仅保留布尔值；字段名不得改写 |
 | `capabilities.waypointMissionSupport` | 同名字段 | 线协议 `SUPPORTED` / `UNSUPPORTED` 归一为桌面门禁词表 `supported` / `unsupported`；其他值为 `undefined`。这不是改字段名。 |
 
-投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability`、`remoteController`、`flightController`、`aircraft`、`airLink`、`camera` 与 `pairing` 是设备页的只读 MSDK 原始状态事实：显示链路必须直接消费这些枚举，不能改读兼容布尔值、别名、合并多个字段或施加显示保持。`aircraft` 是兼容字段名，但其唯一来源是 `ProductKey.KeyConnection`，显示为 DJI 硬件产品连接，绝不显示为飞机物理连接。`sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 与 `pairingState` 只保留给既有调用方的兼容投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
+投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera`、`battery` 与 `pairing` 是设备页的只读 MSDK 原始状态事实：显示链路必须直接消费这些枚举，不能改读兼容布尔值、别名、合并多个字段或施加显示保持。`batteryPercent` 只由同一帧的 `battery=CONNECTED` 授权，不能被飞控连接状态清除或放行。`aircraft` 与兼容布尔值 `connected` 的唯一来源是 `ProductKey.KeyConnection`，只留在适配器诊断遥测中，不能显示或被读取为飞机物理连接。`sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected` 与 `pairingState` 是既有调用方的兼容投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
 
 `liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。
 
-`telemetry(deviceId)` 与 `controlTelemetry(deviceId)` 必须读取同一份“当前会话设备事实”，两者不得维护不同来源、不同值或不同的显示保持期。该事实以 Android MSDK Key 的持续订阅为主，手机组合根为每次实际发布的 `TelemetryFrame` 赋予单调 `telemetrySequence`；设备页显式 `telemetry.read` 只读取并回传当前已订阅的快照，不重建任何 MSDK Key 观察。订阅遥测必须同时携带 `relay-link` 为它绑定的 `sessionId`，且与当前 `{ deviceId, sessionId }` 完全一致；缺失或不一致时整条遥测不得显示、不得写入观察、不得授权控制。`controlTelemetry` 的结构化基线只要求 `sdkAvailability`、遥控器、飞控、`ProductKey.KeyConnection` 与正 `deviceRevision`；AirLink 和主相机是图传能力与设备显示的原始事实，不能因缺失而阻断航线或飞控操作。图传开始则必须由 `capabilities.liveVideo` 单独实行失效关闭的门禁。有 `telemetrySequence` 的同一会话内，只有严格更大的序号才能替换当前事实；未带序号的旧兼容帧不得覆盖已带序号的事实。仅旧兼容帧之间才可回退到 `deviceRevision` 比较。一次有效 `telemetry.read` 结果可在尚未收到订阅帧时成为当前事实，但不能覆盖更高序号的订阅事实；随后抵达的新订阅帧继续替换该事实。
+`telemetry(deviceId)` 与 `controlTelemetry(deviceId)` 必须读取同一份“当前会话设备事实”，两者不得维护不同来源、不同值或不同的显示保持期。该事实以 Android MSDK Key 的持续订阅为主，手机组合根为每次实际发布的 `TelemetryFrame` 赋予单调 `telemetrySequence`；设备页显式 `telemetry.read` 只读取并回传当前已订阅的快照，不重建任何 MSDK Key 观察。订阅遥测必须同时携带 `relay-link` 为它绑定的 `sessionId`，且与当前 `{ deviceId, sessionId }` 完全一致；缺失或不一致时整条遥测不得显示、不得写入观察、不得授权控制。`controlTelemetry` 的结构化基线只要求 `sdkAvailability`、遥控器、飞控与正 `deviceRevision`；`ProductKey.KeyConnection` 可留在原始诊断遥测，但不得影响完整性或控制。AirLink 和主相机是图传能力与设备显示的原始事实，不能因缺失而阻断航线或飞控操作。图传开始则必须由 `capabilities.liveVideo` 单独实行失效关闭的门禁。有 `telemetrySequence` 的同一会话内，只有严格更大的序号才能替换当前事实；未带序号的旧兼容帧不得覆盖已带序号的事实。仅旧兼容帧之间才可回退到 `deviceRevision` 比较。一次有效 `telemetry.read` 结果可在尚未收到订阅帧时成为当前事实，但不能覆盖更高序号的订阅事实；随后抵达的新订阅帧继续替换该事实。
 
 当前会话的已确认 MSDK 事实在状态长期不变时仍然有效，绝不能因为桌面经过若干秒没有收到新事件就自动变成不可信。接收时间只供操作员观察链路，不参与门禁判定。事实必须在设备断开、同 ID 会话替换、MSDK 观察停止/重启、结果畸形，或新事件明确给出 `UNKNOWN`/`DISCONNECTED` 时按字段更新或清空；新的会话或观察代次只有在收到该代完整 MSDK Key 基线后才能再次授权开始型操作。显示链路绝不单独授权命令，控制模块仍必须逐项执行自身门禁。
 
@@ -122,9 +123,9 @@ instance.dispose() -> void
 - 暂停、继续、停止在等待命令结果时必须保留“请求中”状态；命令成功后才进入对应已确认状态。
 - `live-stream.start` 成功只表示手机接受 RTMP 推流；播放成功只能由媒体管线确认本机 HTTP-FLV 已就绪并由播放器附着后产生。
 - `flight.*` 成功只表示 DJI 已完成该调用；飞行状态必须仍由后续遥测显示。
-- `telemetry.read` 成功只表示手机已返回当次当前 MSDK 快照；不得据此推导任何链路一定 ready。手机不重建硬件 Key 观察，也不启动 DJI、航线、图传或飞控操作。适配器仅在请求前后仍为同一 `deviceId + sessionId`、结构化 `result` 可按本契约完整解码且携带正 `deviceRevision` 时，才可在尚无较高 `telemetrySequence` 订阅事实的条件下将它写入该会话的当前设备事实。读取失败、超时、畸形或会话变化不得覆盖现有订阅事实，也不得制造控制授权；调用方仍必须逐项执行各自的门禁。
+- `telemetry.read` 的命令 `status=succeeded` 只表示手机已回复。返回的 `snapshot` 还必须说明本次快照是否可作为当前会话事实：`accepted` 表示完整解码并采用，`already-current` 表示完整解码但桌面已持有更新的同会话订阅事实，`invalid` 表示结果缺失、畸形或不可采纳，`session-changed` 表示请求期间会话替换，`unavailable` 表示命令未成功。只有 `accepted` 或 `already-current` 才能向设备页报告刷新成功。手机不重建硬件 Key 观察，也不启动 DJI、航线、图传或飞控操作。适配器仅在请求前后仍为同一 `deviceId + sessionId`、结构化 `result` 可按本契约完整解码且携带正 `deviceRevision` 时，才可在尚无较高 `telemetrySequence` 订阅事实的条件下将它写入该会话的当前设备事实。读取失败、超时、畸形或会话变化不得覆盖现有订阅事实，也不得制造控制授权；调用方仍必须逐项执行各自的门禁。
 - 设置读写成功必须携带可解码的 `command-result.result` 完整快照；缺失或畸形结果是 `invalid-result`，不得乐观更新。
-- `pairing.status` 仅在命令 `succeeded` 时携带根契约 §7.4 的结构化 `result`（`pairingState`、`aircraftConnected`、`flightControllerConnected`、`aircraftModel`、`motorsOn`、`sdkRegistered`）。失败、超时或 `pairing.start` / `pairing.stop` 不得附带该 `result`。实时配对显示仍以入站遥测的 `pairingState` 为准，命令成功不等于已配对。
+- `pairing.status` 仅在命令 `succeeded` 时携带根契约 §7.4 的结构化 `result`（`pairingState`、`flightControllerConnected`、`aircraftModel`、`motorsOn`、`sdkRegistered`）。失败、超时或 `pairing.start` / `pairing.stop` 不得附带该 `result`。实时配对显示仍以入站遥测的 `pairingState` 为准，命令成功不等于已配对。
 
 所有生产命令结果统一保留为业务模块已有的 `succeeded`、`rejected`、`timed-out`、`disconnected` 或 `transport-failed` 语义。`streamGateway` 可以把手机 `command-result.detail` 原样转成有界字符串（1..256 码点、无控制字符），供图传调度映射封闭原因码；不得泄露连接 ID、会话 ID、字节、路径、令牌、DJI 异常。
 

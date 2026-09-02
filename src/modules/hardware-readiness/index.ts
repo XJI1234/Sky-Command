@@ -10,7 +10,6 @@ export interface HardwareReadinessInput {
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
-    readonly connected?: boolean;
   };
 }
 
@@ -21,8 +20,7 @@ export type HardwareReadinessBlockerCode =
   | "PHONE_DISCONNECTED"
   | "SDK_NOT_READY"
   | "REMOTE_CONTROLLER_DISCONNECTED"
-  | "FLIGHT_CONTROLLER_DISCONNECTED"
-  | "AIRCRAFT_DISCONNECTED";
+  | "FLIGHT_CONTROLLER_DISCONNECTED";
 
 export interface HardwareReadinessBlocker {
   readonly code: HardwareReadinessBlockerCode;
@@ -43,7 +41,6 @@ const messages: Readonly<Record<HardwareReadinessBlockerCode, string>> = freeze(
   SDK_NOT_READY: "手机端 DJI 尚未就绪，请在手机上确认已启动。",
   REMOTE_CONTROLLER_DISCONNECTED: "遥控器尚未连接。",
   FLIGHT_CONTROLLER_DISCONNECTED: "飞机飞控未连接，请确认飞机已开机。",
-  AIRCRAFT_DISCONNECTED: "飞机尚未连接。",
 });
 
 interface NormalizedInput {
@@ -53,7 +50,6 @@ interface NormalizedInput {
   readonly sdkRegistered: unknown;
   readonly remoteControllerConnected: unknown;
   readonly flightControllerConnected: unknown;
-  readonly connected: unknown;
 }
 
 const validTarget = (value: unknown): value is HardwareReadinessTarget => value === "legacy-video" || value === "flight-control";
@@ -67,7 +63,6 @@ const normalize = (value: unknown): NormalizedInput | null => {
       sdkRegistered: value.payload.sdkRegistered,
       remoteControllerConnected: value.payload.remoteControllerConnected,
       flightControllerConnected: value.payload.flightControllerConnected,
-      connected: value.payload.connected,
     });
   } catch {
     return null;
@@ -94,7 +89,6 @@ export const HardwareReadiness = freeze({
     if (target === "flight-control") {
       if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
       if (normalized.flightControllerConnected !== true) codes.push("FLIGHT_CONTROLLER_DISCONNECTED");
-      if (normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
     }
     return result(codes);
   },

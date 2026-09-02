@@ -31,6 +31,7 @@ function relayFixture() {
         remoteController: text("CONNECTED"),
         flightController: text("CONNECTED"),
         aircraft: text("CONNECTED"),
+        battery: text("CONNECTED"),
         airLink: text("CONNECTED"),
         camera: text("CONNECTED"),
         isFlying: bool(false),
@@ -84,6 +85,7 @@ describe("RelayOperationsAdapter", () => {
         remoteController: "CONNECTED",
         flightController: "CONNECTED",
         aircraft: "CONNECTED",
+        battery: "CONNECTED",
         airLink: "CONNECTED",
         camera: "CONNECTED",
         remoteControllerConnected: true,
@@ -168,7 +170,7 @@ describe("RelayOperationsAdapter", () => {
     });
   });
 
-  it("丢弃畸形图传指标，并在未直播时清除可能陈旧的图传细节", () => {
+  it("保留 MSDK 明确的未知低电量返航状态，并在未直播时清除可能陈旧的图传细节", () => {
     const fixture = relayFixture();
     const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
     fixture.replaceTelemetry(
@@ -186,7 +188,7 @@ describe("RelayOperationsAdapter", () => {
       }),
       object({}),
     );
-    expect(adapter.telemetry("relay-1")?.payload).toEqual({ liveStreaming: true });
+    expect(adapter.telemetry("relay-1")?.payload).toEqual({ lowBatteryRthState: "UNKNOWN", liveStreaming: true });
 
     fixture.replaceTelemetry(
       object({
@@ -223,6 +225,7 @@ describe("RelayOperationsAdapter", () => {
       object({
         sdkAvailability: text("READY"),
         pairing: text("PAIRED"),
+        battery: text("CONNECTED"),
         batteryPercent: Object.freeze({ kind: "number" as const, value: "87" }),
         altitudeMeters: Object.freeze({ kind: "number" as const, value: "250.5" }),
         latitude: Object.freeze({ kind: "number" as const, value: "31.2" }),
@@ -379,7 +382,7 @@ describe("RelayOperationsAdapter", () => {
         return Object.freeze({ status: "succeeded" as const, detail: "accepted" });
       }
     } });
-    await expect(adapter.refreshTelemetry("relay-1")).resolves.toEqual({ status: "succeeded" });
+    await expect(adapter.refreshTelemetry("relay-1")).resolves.toEqual({ status: "succeeded", snapshot: "session-changed" });
     expect(sent).toEqual([{ deviceId: "relay-1", request: { name: "telemetry.read", fields: {} } }]);
     expect(adapter.telemetry("relay-1")).toBeNull();
   });
@@ -394,7 +397,7 @@ describe("RelayOperationsAdapter", () => {
       }) }),
     } });
 
-    await expect(adapter.refreshTelemetry("relay-1")).resolves.toMatchObject({ status: "succeeded" });
+    await expect(adapter.refreshTelemetry("relay-1")).resolves.toMatchObject({ status: "succeeded", snapshot: "accepted" });
     expect(adapter.controlTelemetry("relay-1")?.receivedAtMs).toEqual(expect.any(Number));
   });
 
@@ -408,6 +411,7 @@ describe("RelayOperationsAdapter", () => {
       remoteController: text("CONNECTED"),
       flightController: text("CONNECTED"),
       aircraft: text("CONNECTED"),
+      battery: text("CONNECTED"),
       isFlying: bool(false),
       motorsOn: bool(false),
       batteryPercent: numeric("80"),
@@ -453,6 +457,7 @@ describe("RelayOperationsAdapter", () => {
         remoteController: text("CONNECTED"),
         flightController: text("DISCONNECTED"),
         aircraft: text("DISCONNECTED"),
+        battery: text("CONNECTED"),
         isFlying: bool(false),
         motorsOn: bool(false),
         batteryPercent: numeric("80"),
@@ -478,6 +483,7 @@ describe("RelayOperationsAdapter", () => {
         remoteController: text("CONNECTED"),
         flightController: text("CONNECTED"),
         aircraft: text("CONNECTED"),
+        battery: text("CONNECTED"),
         batteryPercent: numeric("80"),
       }),
       capabilities: object({ liveVideo: bool(true) }),
@@ -498,6 +504,7 @@ describe("RelayOperationsAdapter", () => {
         remoteController: text("CONNECTED"),
         flightController: text("CONNECTED"),
         aircraft: text("CONNECTED"),
+        battery: text("CONNECTED"),
         batteryPercent: numeric("81"),
       }),
       capabilities: object({ liveVideo: bool(true) }),
@@ -514,12 +521,74 @@ describe("RelayOperationsAdapter", () => {
         remoteController: text("CONNECTED"),
         flightController: text("CONNECTED"),
         aircraft: text("CONNECTED"),
+        battery: text("CONNECTED"),
         batteryPercent: numeric("1"),
       }),
       capabilities: object({ liveVideo: bool(true) }),
     };
 
     expect(adapter.telemetry("relay-1")).toMatchObject({ payload: { batteryPercent: 81 } });
+  });
+
+  it("接纳当前会话无推送序号的 telemetry.read 快照并保留事件序号水位", async () => {
+    let now = 1_000;
+    let rawTelemetry: unknown = {
+      sessionId: "session-1",
+      receivedAtMs: 900,
+      payload: object({
+        telemetrySequence: numeric("7"),
+        deviceRevision: numeric("1"),
+        sdkAvailability: text("READY"),
+        remoteController: text("CONNECTED"),
+        flightController: text("CONNECTED"),
+        aircraft: text("CONNECTED"),
+        battery: text("CONNECTED"),
+        batteryPercent: numeric("80"),
+      }),
+      capabilities: object({}),
+    };
+    const adapter = RelayOperationsAdapter.create({
+      relay: {
+        devices: () => [{ deviceId: "relay-1", sessionId: "session-1" }],
+        latestTelemetry: () => rawTelemetry,
+        sendCommand: async () => ({
+          status: "succeeded" as const,
+          result: object({
+            deviceRevision: numeric("1"),
+            sdkAvailability: text("READY"),
+            remoteController: text("CONNECTED"),
+            flightController: text("CONNECTED"),
+            aircraft: text("CONNECTED"),
+            battery: text("CONNECTED"),
+            batteryPercent: numeric("81"),
+            capabilities: object({}),
+          }),
+        }),
+      },
+      now: () => now,
+    } as never);
+
+    expect(adapter.telemetry("relay-1")).toMatchObject({ receivedAtMs: 900, payload: { telemetrySequence: 7, batteryPercent: 80 } });
+    now = 2_000;
+    await expect(adapter.refreshTelemetry("relay-1")).resolves.toMatchObject({ status: "succeeded", snapshot: "accepted" });
+    expect(adapter.telemetry("relay-1")).toMatchObject({ receivedAtMs: 2_000, payload: { batteryPercent: 81 } });
+
+    rawTelemetry = {
+      sessionId: "session-1",
+      receivedAtMs: 2_001,
+      payload: object({
+        telemetrySequence: numeric("7"),
+        deviceRevision: numeric("1"),
+        sdkAvailability: text("READY"),
+        remoteController: text("CONNECTED"),
+        flightController: text("CONNECTED"),
+        aircraft: text("CONNECTED"),
+        battery: text("CONNECTED"),
+        batteryPercent: numeric("1"),
+      }),
+      capabilities: object({}),
+    };
+    expect(adapter.telemetry("relay-1")).toMatchObject({ receivedAtMs: 2_000, payload: { batteryPercent: 81 } });
   });
 
   it("本次 telemetry.read 结果畸形时不覆盖当前会话的已确认观察", async () => {
@@ -567,6 +636,7 @@ describe("RelayOperationsAdapter", () => {
           remoteController: text("CONNECTED"),
           flightController: text("CONNECTED"),
           aircraft: text("CONNECTED"),
+          battery: text("CONNECTED"),
           batteryPercent: numeric(String(revision === 2 ? 80 : 1)),
         }),
         capabilities: object({ liveVideo: bool(true) }),

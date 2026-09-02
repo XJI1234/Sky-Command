@@ -166,7 +166,7 @@ interface WorkflowDevice {
     readonly msdk: "stopped" | "starting" | "ready" | "failed" | "unknown";
     readonly remoteController: "connected" | "disconnected" | "unknown";
     readonly flightController: "connected" | "disconnected" | "unknown";
-    readonly aircraft: "connected" | "disconnected" | "unknown";
+    readonly battery: "connected" | "disconnected" | "unknown";
     readonly batteryPercent: number | null;
     readonly aircraftModel: string | null;
     readonly remoteControllerModel: string | null;
@@ -257,9 +257,9 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 ## 8. 图传与媒体规则
 
-1. `refreshDeviceState(deviceId)` 是设备页的显式只读刷新入口。它仅发送一次 `telemetry.read` 并返回稳定结果；成功只表示桌面取得了当次手机状态，绝不表示飞机或图传就绪，也不发送 DJI、任务、图传或飞控命令。
+1. `refreshDeviceState(deviceId)` 是设备页的显式只读刷新入口。它仅发送一次 `telemetry.read` 并返回稳定结果；只有手机回复的快照被适配器验证为当前会话的 `accepted` 或 `already-current` 时才成功。成功只表示桌面取得了当次手机状态，绝不表示飞机或图传就绪，也不发送 DJI、任务、图传或飞控命令。
 2. `checkHardwareReadiness(deviceId)` 只评估当前中继上报的显示事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
-3. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须取得当前同会话的控制遥测，再通过基于该控制事实的 `legacy-video` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，不发送启动命令。该预检只检查电脑媒体服务、在线中继和 MSDK 已就绪；它不以遥控器或飞控作为图传门槛。预检未通过返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。预检通过后，`live-stream-control` 必须以同会话手机实时 `capabilities.liveVideo === true` 作为最终启动门禁；该值由手机端的 `ProductKey.KeyConnection`、`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 三态共同推导。值缺失或为 false 只能表示当前图传链路未就绪，绝不表示机型永久不支持。由 DJI 完成回调与 RTMP 入流确认真实结果。
+3. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须取得当前同会话的控制遥测，再通过基于该控制事实的 `legacy-video` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，不发送启动命令。该预检只检查电脑媒体服务、在线中继和 MSDK 已就绪；它不以遥控器或飞控作为图传门槛。预检未通过返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。预检通过后，`live-stream-control` 必须以同会话手机实时 `capabilities.liveVideo === true` 作为最终启动门禁；该值由手机端的 MSDK 就绪状态、`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 当前三态共同推导。值缺失或为 false 只能表示当前图传链路未就绪，绝不表示机型永久不支持。由 DJI 完成回调与 RTMP 入流确认真实结果。
 4. `stopStream(deviceId)` 不经过实机预检或控制遥测读取，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
 4. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
 5. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。生产渲染器在成功附着当前图传机的 HTTP-FLV 播放器时必须调用该入口，使主进程选择状态与实际播放器目标一致；该选择本身不等同于首帧已经绘制。
@@ -299,7 +299,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道；不得让旧确认对话框在新会话上继续可点。
 
-设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`aircraft`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示与禁用明显不满足前置条件的操作；它不是后端授权。图传启动、直接飞控、设备设置、航线上传或航线启动分别只接受当前同会话的完整控制遥测；事实缺失、会话变化、明确 `false` 或 `unknown` 都必须拒绝新操作。
+设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示与禁用明显不满足前置条件的操作；它不是后端授权。图传启动、直接飞控、设备设置、航线上传或航线启动分别只接受当前同会话的完整控制遥测；事实缺失、会话变化、明确 `false` 或 `unknown` 都必须拒绝新操作。
 
 同 ID 的新手机会话后续重新出现时被视为新在线设备：旧任务和旧图传都不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。
 

@@ -27,7 +27,6 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
   sdkRegistered: boolean | undefined;
   remoteControllerConnected: boolean | undefined;
   flightControllerConnected: boolean | undefined;
-  aircraftConnected: boolean | undefined;
   capabilities: null | {
     liveVideo?: boolean;
     waypointMission?: boolean;
@@ -37,17 +36,19 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
 }
 ```
 
-输出为冻结对象 `{ operation, enabled, reason }`。`enabled: true` 时 `reason` 固定为 `null`；否则为以下之一：`RELAY_OFFLINE`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_OFFLINE`、`AIRCRAFT_NOT_CONNECTED`、`AIRCRAFT_CONNECTION_UNKNOWN`、`PAIRING_NOT_NEEDED`、`CAPABILITY_UNKNOWN`、`LIVE_VIDEO_UNAVAILABLE`、`LIVE_VIDEO_UNSUPPORTED`、`WAYPOINT_UNSUPPORTED`。`LIVE_VIDEO_UNAVAILABLE` 表示手机端当前未确认满足图传启动门禁，绝不表示机型不支持。
+输出为冻结对象 `{ operation, enabled, reason }`。`enabled: true` 时 `reason` 固定为 `null`；否则为以下之一：`RELAY_OFFLINE`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_OFFLINE`、`FLIGHT_CONTROLLER_OFFLINE`、`FLIGHT_CONTROLLER_CONNECTION_UNKNOWN`、`PAIRING_NOT_NEEDED`、`CAPABILITY_UNKNOWN`、`LIVE_VIDEO_UNAVAILABLE`、`LIVE_VIDEO_UNSUPPORTED`、`WAYPOINT_UNSUPPORTED`。`LIVE_VIDEO_UNAVAILABLE` 表示手机端当前未确认满足图传启动门禁，绝不表示机型不支持。
 
 ## 判定规则
 
 - 中继离线时全部拒绝 `RELAY_OFFLINE`。
 - SDK 不是 `true` 时全部拒绝 `SDK_NOT_READY`。
-- `pairing` 是连接新飞机或更换遥控器时的低频维护操作，不是常规连接、图传、航线或直接控制前置条件。它要求遥控器明确已连接且飞行器明确未连接；飞行器已连接时拒绝 `PAIRING_NOT_NEEDED`，飞行器状态未知时拒绝 `AIRCRAFT_CONNECTION_UNKNOWN`。飞控已连接但飞行器未连接属于不一致事实，必须拒绝。
+- `pairing` 是连接新飞机或更换遥控器时的低频维护操作，不是常规连接、图传、航线或直接控制前置条件。它要求遥控器明确已连接且飞控明确未连接；飞控已连接时拒绝 `PAIRING_NOT_NEEDED`，飞控状态未知时拒绝 `FLIGHT_CONTROLLER_CONNECTION_UNKNOWN`。
 - `live-stream` 的开始要求手机中继在线、MSDK 已就绪且 `capabilities.liveVideo === true`。该能力由手机端按产品 Key、AirLink Key 与主相机 Key 的当前三态推导；它不依赖飞控连接。`liveVideo` 缺失时拒绝 `CAPABILITY_UNKNOWN`，为 false 时拒绝 `LIVE_VIDEO_UNAVAILABLE`，不得写成“当前机不支持图传”。能力为 true 只表示允许提交；DJI `startStream` 回调、`LiveStreamStatus.isStreaming` 和桌面播放器仍分别确认后续阶段。
-- 其余操作要求遥控器、飞控和飞行器均为 true，否则拒绝 `REMOTE_CONTROLLER_OFFLINE` 或 `AIRCRAFT_NOT_CONNECTED`。
+- 除图传与对频外，其余操作要求遥控器和飞控均为 true，否则拒绝 `REMOTE_CONTROLLER_OFFLINE` 或 `FLIGHT_CONTROLLER_OFFLINE`。
 - `waypoint-mission` 还要求 `waypointMission === true` 且 `waypointMissionSupport === "supported"`。字段缺失为 `CAPABILITY_UNKNOWN`，其他情况为 `WAYPOINT_UNSUPPORTED`。
-- `transmission-settings` 与 `camera-settings` 不拥有额外能力字段；在飞机链路就绪时允许。
+- `transmission-settings` 与 `camera-settings` 不拥有额外能力字段；在遥控器与飞控链路就绪时允许。
+
+`ProductKey.KeyConnection` 不属于本模块输入，也不得由调用方以兼容布尔值代替飞控事实。该 Key 的原始遥测仅保留在生产适配层作兼容和诊断用途，不能授权任何操作。
 
 ## 错误、不变性与验证
 

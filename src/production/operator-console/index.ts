@@ -114,7 +114,6 @@ const telemetryBits = (connection: unknown) => freeze({
   ...(read(connection, "sdk") === "ready" ? { sdkRegistered: true } : read(connection, "sdk") === "not-ready" ? { sdkRegistered: false } : {}),
   ...(read(connection, "remoteController") === "connected" ? { remoteControllerConnected: true } : read(connection, "remoteController") === "disconnected" ? { remoteControllerConnected: false } : {}),
   ...(read(connection, "flightController") === "connected" ? { flightControllerConnected: true } : read(connection, "flightController") === "disconnected" ? { flightControllerConnected: false } : {}),
-  ...(read(connection, "aircraft") === "connected" ? { connected: true } : read(connection, "aircraft") === "disconnected" ? { connected: false } : {}),
 });
 const controlConnection = (device: Record<string, unknown> | undefined): unknown => {
   if (device === undefined) return null;
@@ -258,7 +257,6 @@ const controlLinkIssue = (device: Record<string, unknown>): string | null => {
   if (read(connection, "sdk") !== "ready") return "手机尚未就绪";
   if (read(connection, "remoteController") !== "connected") return "遥控器未连接";
   if (read(connection, "flightController") !== "connected") return "飞机飞控未连接，请确认飞机已开机";
-  if (read(connection, "aircraft") !== "connected") return "飞机尚未连接";
   return null;
 };
 const deviceById = (view: OperatorView, deviceId: string | null): Record<string, unknown> | undefined =>

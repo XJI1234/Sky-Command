@@ -15,6 +15,7 @@ const device = (overrides: Record<string, unknown> = {}) => ({
     aircraft: "connected",
     airLink: "connected",
     camera: "connected",
+    battery: "connected",
     batteryPercent: 90,
     flightState: "grounded",
     motorsOn: false,
@@ -51,38 +52,51 @@ describe("操作台投影", () => {
     expect(source).toContain('MSDK 状态未知');
   });
 
-  it("设备页分别呈现飞控和 DJI 硬件产品的连接事实", () => {
+  it("设备页只呈现可操作的飞控连接，不呈现保留诊断字段", () => {
     const source = renderer();
     expect(source).toContain('connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")');
-    expect(source).toContain('connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知")');
-    expect(source).not.toContain('connectionLabel(connection, "aircraft", "飞机已连接", "飞机未连接", "飞机状态未知")');
+    expect(source).not.toContain('connectionLabel(connection, "aircraft"');
+    expect(source).not.toContain("ProductKey.KeyConnection");
   });
 
-  it("设备详情以八个具名独立行呈现连接与图传源事实", () => {
+  it("设备详情把基础连接、飞控、图传和电池按 MSDK 组件分区呈现", () => {
     const source = renderer();
     expect(source).toContain('class="connection-status-list"');
     expect(source).toContain('statusRow("电脑到手机中继 [桌面 Relay Session]", "中继在线", true)');
     expect(source).toContain('statusRow("MSDK 生命周期 [SDKManager]", msdk.label, msdk.ok)');
     expect(source).toContain('statusRow("遥控器连接 [RemoteControllerKey.KeyConnection]", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))');
     expect(source).toContain('statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)');
-    expect(source).toContain('statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))');
-    expect(source).toContain('statusRow("DJI 硬件产品连接 [ProductKey.KeyConnection]", connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知"), connected(connection, "aircraft"))');
-    expect(source).toContain('statusRow("AirLink 连接 [AirLinkKey.KeyConnection]", connectionLabel(connection, "airLink", "AirLink 已连接", "AirLink 未连接", "AirLink 状态未知"), connected(connection, "airLink"))');
-    expect(source).toContain('statusRow("主相机连接 [CameraKey.KeyConnection, LEFT_OR_MAIN]", connectionLabel(connection, "camera", "主相机已连接", "主相机未连接", "主相机状态未知"), connected(connection, "camera"))');
+    expect(source).not.toContain("ProductKey.KeyConnection");
+    expect(source).toContain("const flightControllerStatusRows = (connection: unknown): string => {");
+    expect(source).toContain("const videoTransportStatusRows = (connection: unknown): string => {");
+    expect(source).toContain("const batteryStatusRows = (connection: unknown): string => {");
+    expect(source).toContain("const deviceInformationRows = (connection: unknown): string => {");
+    expect(source).toContain('<h3 class="device-status-heading">飞控状态 [FlightControllerKey]</h3>');
+    expect(source).toContain('<h3 class="device-status-heading">图传状态 [AirLinkKey / CameraKey]</h3>');
+    expect(source).toContain('<h3 class="device-status-heading">电池状态 [BatteryKey]</h3>');
+    expect(source).toContain('<h3 class="device-status-heading">设备信息</h3>');
+    expect(source).toContain("flightControllerStatusRows(connection)");
+    expect(source).toContain("videoTransportStatusRows(connection)");
+    expect(source).toContain("batteryStatusRows(connection)");
+    expect(source).toContain("deviceInformationRows(connection)");
   });
 
-  it("设备详情将动态事实、任务、手机推流和当前图传机的桌面播放逐行分开呈现", () => {
+  it("每个 MSDK Key 只在自己的组件分区呈现，运行状态仍单独呈现", () => {
     const source = renderer();
-    expect(source).toContain("deviceFactRows(connection)");
+    expect(source).not.toContain("deviceFactRows(connection)");
     expect(source).toContain('statusRow("机型 [ProductKey.KeyProductType]"');
     expect(source).toContain('statusRow("遥控器型号 [RemoteControllerKey.KeyRemoteControllerType]"');
+    expect(source).toContain('statusRow("飞控连接 [FlightControllerKey.KeyConnection]"');
     expect(source).toContain('statusRow("飞行状态 [FlightControllerKey.KeyIsFlying]"');
     expect(source).toContain('statusRow("电机 [FlightControllerKey.KeyAreMotorsOn]"');
+    expect(source).toContain('statusRow("AirLink 连接 [AirLinkKey.KeyConnection]"');
+    expect(source).toContain('statusRow("主相机连接 [CameraKey.KeyConnection, LEFT_OR_MAIN]"');
+    expect(source).toContain('statusRow("主电池连接 [BatteryKey.KeyConnection, LEFT_OR_MAIN]"');
     expect(source).toContain('statusRow("电量 [BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]"');
     expect(source).toContain('statusRow("低电量返航状态 [FlightControllerKey.KeyLowBatteryRTHInfo]"');
     expect(source).toContain('statusRow("低电量返航预估 [FlightControllerKey.KeyLowBatteryRTHInfo]"');
     expect(source).toContain('statusRow("飞行模式 [FlightControllerKey.KeyFCFlightMode]"');
-    expect(source).toContain('statusRow("高度 [FlightControllerKey.KeyAltitude]"');
+    expect(source).toContain('statusRow("相对起飞点高度 [FlightControllerKey.KeyAltitude]"');
     expect(source).toContain('statusRow("位置 [FlightControllerKey.KeyAircraftLocation]"');
     expect(source).toContain('statusRow("MSDK 图传观测 [手机 MSDK 图传运行观测]"');
     expect(source).toContain('statusRow("图传丢包 [LiveStreamStatus.packetLoss]"');
@@ -93,6 +107,7 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("任务 [手机任务运行状态]", missionRuntimeLabel(read(device, "mission")), false)');
     expect(source).toContain('statusRow("手机推流 [手机图传运行状态]", streamRuntimeLabel(device), false)');
     expect(source).toContain('statusRow("桌面播放 [桌面播放器运行状态]", playbackRuntimeLabel(device, streamDeviceId), false)');
+    expect(source).toContain('if (value === "UNKNOWN") return "未知（MSDK 返回 UNKNOWN）";');
     expect(source).toContain('await bridge().invoke("stream-select", { deviceId: view.streamDeviceId })');
   });
 
@@ -342,6 +357,20 @@ describe("操作台工作区", () => {
     });
   });
 
+  it("上传航线不依赖保留的 ProductKey 诊断状态", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        control: { ...device().connection, aircraft: "unknown" },
+        mission: { phase: "staged", routeId: "route-1" },
+      })], { routes: [kmz], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(view.missionActions.upload).toEqual({ enabled: true, reason: null });
+    expect(OperatorConsole.evaluate("mission-upload", view)).toEqual({ ok: true });
+  });
+
   it("飞行页始终投影已准备任务的航线，并给出阶段允许的下一步", () => {
     const second = { routeId: "route-2", displayName: "canal.kmz", format: "kmz", classification: "upload-candidate" };
     const staged = OperatorConsole.project({
@@ -443,10 +472,7 @@ describe("操作台工作区", () => {
       reason: "飞机飞控未连接，请确认飞机已开机",
     });
     const aircraftOnlyGone = flight({ connection: { ...device().connection, aircraft: "disconnected", flightController: "connected" } });
-    expect(OperatorConsole.evaluate("mission-start", aircraftOnlyGone)).toEqual({
-      ok: false,
-      reason: "飞机尚未连接",
-    });
+    expect(OperatorConsole.evaluate("mission-start", aircraftOnlyGone)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("stream-start", aircraftOnlyGone)).toEqual({ ok: true });
   });
 

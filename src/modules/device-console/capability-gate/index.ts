@@ -1,9 +1,9 @@
 export type DeviceOperation = "pairing" | "live-stream" | "waypoint-mission" | "transmission-settings" | "camera-settings" | "direct-flight";
-export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "AIRCRAFT_NOT_CONNECTED" | "AIRCRAFT_CONNECTION_UNKNOWN" | "PAIRING_NOT_NEEDED" | "CAPABILITY_UNKNOWN" | "LIVE_VIDEO_UNAVAILABLE" | "LIVE_VIDEO_UNSUPPORTED" | "WAYPOINT_UNSUPPORTED";
+export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "FLIGHT_CONTROLLER_OFFLINE" | "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN" | "PAIRING_NOT_NEEDED" | "CAPABILITY_UNKNOWN" | "LIVE_VIDEO_UNAVAILABLE" | "LIVE_VIDEO_UNSUPPORTED" | "WAYPOINT_UNSUPPORTED";
 export interface CapabilityDecision { readonly operation: DeviceOperation; readonly enabled: boolean; readonly reason: CapabilityReason | null; }
 export type CapabilityDecisionResult<T> = Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false; readonly error: Readonly<{ readonly code: "INVALID_INPUT"; readonly details: Readonly<{ readonly field: string; readonly reason: "invalid-value" | "unreadable" }> }> }>;
 
-interface CapabilityInput { readonly operation: unknown; readonly relayConnected: unknown; readonly sdkRegistered: unknown; readonly remoteControllerConnected: unknown; readonly flightControllerConnected: unknown; readonly aircraftConnected: unknown; readonly capabilities: unknown; }
+interface CapabilityInput { readonly operation: unknown; readonly relayConnected: unknown; readonly sdkRegistered: unknown; readonly remoteControllerConnected: unknown; readonly flightControllerConnected: unknown; readonly capabilities: unknown; }
 interface Capabilities { readonly liveVideo?: boolean; readonly waypointMission?: boolean; readonly waypointMissionSupport?: "supported" | "unsupported"; readonly virtualStick?: boolean; }
 
 // Stryker disable next-line ArrowFunction: static helper replacement is not re-observable after ESM transform caching; public result immutability is covered.
@@ -17,7 +17,7 @@ const operations: readonly DeviceOperation[] = ["pairing", "live-stream", "waypo
 
 function readInput(value: unknown): Readonly<CapabilityInput> | "invalid-container" | "unreadable" {
   if (value === null || typeof value !== "object") return "invalid-container";
-  try { const input = value as CapabilityInput; return freeze({ operation: input.operation, relayConnected: input.relayConnected, sdkRegistered: input.sdkRegistered, remoteControllerConnected: input.remoteControllerConnected, flightControllerConnected: input.flightControllerConnected, aircraftConnected: input.aircraftConnected, capabilities: input.capabilities }); } catch { return "unreadable"; }
+  try { const input = value as CapabilityInput; return freeze({ operation: input.operation, relayConnected: input.relayConnected, sdkRegistered: input.sdkRegistered, remoteControllerConnected: input.remoteControllerConnected, flightControllerConnected: input.flightControllerConnected, capabilities: input.capabilities }); } catch { return "unreadable"; }
 }
 
 function optionalBoolean(value: unknown): boolean | undefined | null { return value === undefined || typeof value === "boolean" ? value : null; }
@@ -52,16 +52,16 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
     if (capabilities === null || capabilities.liveVideo === undefined) return decision(operation, false, "CAPABILITY_UNKNOWN");
     return capabilities.liveVideo ? decision(operation, true, null) : decision(operation, false, "LIVE_VIDEO_UNAVAILABLE");
   }
-  const fields = ["remoteControllerConnected", "flightControllerConnected", "aircraftConnected"] as const;
+  const fields = ["remoteControllerConnected", "flightControllerConnected"] as const;
   for (const field of fields) if (optionalBoolean(input[field]) === null) return failure(field, "invalid-value");
   if (operation === "pairing") {
     if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
-    if (input.aircraftConnected === true) return decision(operation, false, "PAIRING_NOT_NEEDED");
-    if (input.aircraftConnected !== false || input.flightControllerConnected !== false) return decision(operation, false, "AIRCRAFT_CONNECTION_UNKNOWN");
+    if (input.flightControllerConnected === true) return decision(operation, false, "PAIRING_NOT_NEEDED");
+    if (input.flightControllerConnected !== false) return decision(operation, false, "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN");
     return decision(operation, true, null);
   }
   if (input.remoteControllerConnected !== true) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
-  if (input.flightControllerConnected !== true || input.aircraftConnected !== true) return decision(operation, false, "AIRCRAFT_NOT_CONNECTED");
+  if (input.flightControllerConnected !== true) return decision(operation, false, "FLIGHT_CONTROLLER_OFFLINE");
   if (operation === "waypoint-mission") {
     if (capabilities === null || capabilities.waypointMission === undefined || capabilities.waypointMissionSupport === undefined) return decision(operation, false, "CAPABILITY_UNKNOWN");
     return capabilities.waypointMission === true && capabilities.waypointMissionSupport === "supported" ? decision(operation, true, null) : decision(operation, false, "WAYPOINT_UNSUPPORTED");

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CapabilityGate } from "../src/modules/device-console/capability-gate/index.js";
 
-const base = { relayConnected: true, sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, aircraftConnected: true, capabilities: { liveVideo: true, waypointMission: true, waypointMissionSupport: "supported" as const, virtualStick: false } };
+const base = { relayConnected: true, sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, capabilities: { liveVideo: true, waypointMission: true, waypointMissionSupport: "supported" as const, virtualStick: false } };
 
 describe("设备操作能力门禁契约", () => {
   it("在完整链路上允许直接飞行安全指令", () => {
@@ -12,14 +12,14 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate({ operation, ...base })).toEqual({ ok: true, value: { operation, enabled: true, reason: null } });
   });
 
-  it("仅在遥控器已连接但飞机两段均未连接时允许配对", () => {
-    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: false, aircraftConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: true, reason: null } });
+  it("仅在遥控器已连接且飞控明确断开时允许配对", () => {
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
   });
 
-  it("配对只在遥控器已明确连接且飞机已明确断开时允许", () => {
-    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, aircraftConnected: undefined })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "AIRCRAFT_CONNECTION_UNKNOWN" } });
-    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteControllerConnected: false, flightControllerConnected: false, aircraftConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
+  it("配对只在遥控器已明确连接且飞控已明确断开时允许", () => {
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: undefined })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN" } });
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteControllerConnected: false, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
   });
 
   it("不把飞机操作的遥控器断开误判为飞机断开", () => {
@@ -89,11 +89,11 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate({ operation: ["live-stream"], ...base })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "operation", reason: "invalid-value" } } });
     expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMission: "yes" } })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "capabilities.liveVideo", reason: "invalid-value" } } });
     expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { virtualStick: "yes" } })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "capabilities.liveVideo", reason: "invalid-value" } } });
-    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: true, aircraftConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "AIRCRAFT_CONNECTION_UNKNOWN" } });
-    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: false, aircraftConnected: true })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: true, aircraftConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: false, aircraftConnected: true })).toEqual({ ok: true, value: { operation: "pairing", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, aircraftConnected: false })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
-    expect(CapabilityGate.evaluate({ operation: "transmission-settings", ...base, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "transmission-settings", enabled: false, reason: "AIRCRAFT_NOT_CONNECTED" } });
+    expect(CapabilityGate.evaluate({ operation: "transmission-settings", ...base, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "transmission-settings", enabled: false, reason: "FLIGHT_CONTROLLER_OFFLINE" } });
     expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: null })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: false, reason: "CAPABILITY_UNKNOWN" } });
     expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMissionSupport: "supported" } })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: false, reason: "CAPABILITY_UNKNOWN" } });
     expect(CapabilityGate.evaluate({ operation: "transmission-settings", ...base, capabilities: null })).toEqual({ ok: true, value: { operation: "transmission-settings", enabled: true, reason: null } });
@@ -103,7 +103,6 @@ describe("设备操作能力门禁契约", () => {
   it.each([
     ["remoteControllerConnected", "remoteControllerConnected"],
     ["flightControllerConnected", "flightControllerConnected"],
-    ["aircraftConnected", "aircraftConnected"],
   ] as const)("拒绝非布尔的 %s 飞行链路事实", (field, expectedField) => {
     expect(CapabilityGate.evaluate({
       operation: "direct-flight",
@@ -112,6 +111,18 @@ describe("设备操作能力门禁契约", () => {
     })).toEqual({
       ok: false,
       error: { code: "INVALID_INPUT", details: { field: expectedField, reason: "invalid-value" } },
+    });
+  });
+
+  it("忽略保留的 ProductKey 兼容字段，不以其阻断控制或图传", () => {
+    const rawProduct = { aircraftConnected: false, connected: false };
+    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, ...rawProduct })).toEqual({
+      ok: true,
+      value: { operation: "direct-flight", enabled: true, reason: null },
+    });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, ...rawProduct })).toEqual({
+      ok: true,
+      value: { operation: "live-stream", enabled: true, reason: null },
     });
   });
 });

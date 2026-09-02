@@ -8,7 +8,6 @@ const ready = (): HardwareReadinessInput => ({
     sdkRegistered: true,
     remoteControllerConnected: true,
     flightControllerConnected: true,
-    connected: true,
   },
 });
 
@@ -37,7 +36,6 @@ describe("hardware readiness contract", () => {
         sdkRegistered: false,
         remoteControllerConnected: false,
         flightControllerConnected: false,
-        connected: false,
       },
     }, "legacy-video");
 
@@ -51,14 +49,13 @@ describe("hardware readiness contract", () => {
     expect(result.blockers.every((blocker) => blocker.message.length > 0 && Object.isFrozen(blocker))).toBe(true);
   });
 
-  it("still requires aircraft facts for flight-control readiness", () => {
+  it("requires the fly-controller fact for flight-control readiness", () => {
     const result = HardwareReadiness.evaluate({
       ...ready(),
-      payload: { ...ready().payload, flightControllerConnected: false, connected: false },
+      payload: { ...ready().payload, flightControllerConnected: false },
     }, "flight-control");
     expect(result.blockers.map((blocker) => blocker.code)).toEqual([
       "FLIGHT_CONTROLLER_DISCONNECTED",
-      "AIRCRAFT_DISCONNECTED",
     ]);
   });
 
@@ -69,5 +66,12 @@ describe("hardware readiness contract", () => {
     }, "flight-control");
 
     expect(result).toEqual({ ok: true, blockers: [] });
+  });
+
+  it("ignores the retained ProductKey compatibility field for flight-control readiness", () => {
+    expect(HardwareReadiness.evaluate({
+      ...ready(),
+      payload: { ...ready().payload, connected: false },
+    }, "flight-control")).toEqual({ ok: true, blockers: [] });
   });
 });

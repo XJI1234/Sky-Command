@@ -144,7 +144,8 @@ describe("FlightCommandDispatcher", () => {
     });
     await expect(value.dispatcher.dispatch("phone-1", "return-home")).resolves.toMatchObject({ ok: true, action: "return-home" });
     expect(inputs[0]).toMatchObject({ relayConnected: true, action: "return-home", payload: { sdkRegistered: true }, capabilities: { directFlight: true } });
-    expect(inputs[1]).toMatchObject({ operation: "direct-flight", relayConnected: true, sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, aircraftConnected: true });
+    expect(inputs[1]).toMatchObject({ operation: "direct-flight", relayConnected: true, sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true });
+    expect(inputs[1]).not.toHaveProperty("aircraftConnected");
     expect(value.dispatcher.isBusy("phone-1")).toBe(false);
   });
 });

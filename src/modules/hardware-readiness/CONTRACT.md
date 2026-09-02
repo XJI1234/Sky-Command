@@ -29,12 +29,11 @@ interface HardwareReadinessInput {
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
-    readonly connected?: boolean;
   };
 }
 ```
 
-旧图传检查桌面局域网与媒体服务事实；飞控检查不要求这两项。两种检查都要求手机当前在线和 MSDK 已就绪。飞控动作额外要求遥控器、飞控和产品连接事实均明确为已连接；旧图传不把遥控器、飞控或航线遥测当作桌面端推流门闩。中继在线经过的时间不能替代任何 MSDK Key 事实。
+旧图传检查桌面局域网与媒体服务事实；飞控检查不要求这两项。两种检查都要求手机当前在线和 MSDK 已就绪。飞控动作额外要求遥控器和飞控连接事实均明确为已连接；旧图传不把遥控器、飞控或航线遥测当作桌面端推流门闩。中继在线经过的时间不能替代任何 MSDK Key 事实。`ProductKey.KeyConnection` 的原始值保留在 Relay 诊断遥测中，但不属于本模块输入，也不参与任何就绪结论。
 
 这是 DJI MSDK `ILiveStreamManager.startStream` 的调用边界：桌面只能先确认手机能调用已经配置好的直播管理器，真实的遥控器/飞机链路、产品支持性、网络服务及推流创建结果必须由 DJI 的异步完成回调和后续 RTMP 入流确认。桌面不得把瞬时遥测或缺失的型号能力字段写成“当前机不支持图传”。缺失、非布尔或畸形的必要安全事实仍一律阻塞，不得推定为安全。
 
@@ -49,7 +48,6 @@ interface HardwareReadinessInput {
 5. `SDK_NOT_READY`
 6. `REMOTE_CONTROLLER_DISCONNECTED`（仅飞控）
 7. `FLIGHT_CONTROLLER_DISCONNECTED`（仅飞控）
-8. `AIRCRAFT_DISCONNECTED`（仅飞控）
 
 畸形输入仅返回 `INVALID_INPUT`。其余合法输入必须收集全部独立阻塞项，不得因为前一项失败而短路。
 

@@ -72,6 +72,7 @@ const operatorNotice = (value: unknown): string => {
   }
   if (code === "OPERATION_IN_PROGRESS") return "上一条命令还在处理，请稍候";
   if (code === "VIDEO_NOT_READY") return "画面还没出来，请稍候或重新启动图传";
+  if (code === "STATUS_REFRESH_FAILED") return "本次状态快照未通过验证，请确认手机仍在线后重试";
   if (code === "DISCONNECTED") return "手机已离线，请先在设备页连上手机";
   if (code === "DEPENDENCY_FAILURE") return "暂时无法完成，请稍后重试";
   if (read(inner, "ok") === true) return "已发送到手机";
@@ -351,6 +352,7 @@ const lowBatteryRthLabel = (value: unknown): string | null => {
   if (value === "COUNTING_DOWN") return "正在倒计时";
   if (value === "EXECUTED") return "已执行";
   if (value === "CANCELLED") return "已取消";
+  if (value === "UNKNOWN") return "未知（MSDK 返回 UNKNOWN）";
   return null;
 };
 const flightFactsUnconfirmed = (connection: unknown): boolean => read(connection, "flightController") === "unknown";
@@ -364,38 +366,42 @@ const telemetryTimeLabel = (connection: unknown): string => {
   return ageSeconds <= 2 ? `刚刚（${clock}）` : `${ageSeconds} 秒前（${clock}）`;
 };
 
-const deviceFactRows = (connection: unknown): string => {
+const flightControllerStatusRows = (connection: unknown): string => {
   const pose = read(connection, "pose");
-  const live = read(connection, "live");
-  const aircraftModel = optionalText(read(connection, "aircraftModel"));
-  const remoteControllerModel = optionalText(read(connection, "remoteControllerModel"));
-  const battery = finiteNumber(read(connection, "batteryPercent"));
-  const rthState = lowBatteryRthLabel(read(connection, "lowBatteryRthState"));
-  const remaining = rthState === null ? null : durationLabel(read(connection, "remainingFlightTimeSeconds"));
-  const flightMode = optionalText(read(connection, "flightMode"));
+  const rthStateValue = read(connection, "lowBatteryRthState");
+  const rthState = lowBatteryRthLabel(rthStateValue);
+  const remaining = rthStateValue === "UNKNOWN" || rthState === null ? null : durationLabel(read(connection, "remainingFlightTimeSeconds"));
+  const flightModeValue = optionalText(read(connection, "flightMode"));
+  const flightMode = flightModeValue === "UNKNOWN" ? "未知（MSDK 返回 UNKNOWN）" : flightModeValue;
   const altitude = finiteNumber(read(pose, "altitudeMeters"));
   const latitude = finiteNumber(read(pose, "latitude"));
   const longitude = finiteNumber(read(pose, "longitude"));
+  const flightState = read(connection, "flightState") === "grounded" ? "地面" : read(connection, "flightState") === "flying" ? "飞行中" : "尚未确认";
+  const motors = read(connection, "motorsOn") === true ? "已启动" : read(connection, "motorsOn") === false ? "已关闭" : "尚未确认";
+  return [
+    statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController")),
+    statusRow("飞行状态 [FlightControllerKey.KeyIsFlying]", flightState, false),
+    statusRow("电机 [FlightControllerKey.KeyAreMotorsOn]", motors, false),
+    statusRow("低电量返航状态 [FlightControllerKey.KeyLowBatteryRTHInfo]", rthState ?? "尚未取得", rthState !== null),
+    statusRow("低电量返航预估 [FlightControllerKey.KeyLowBatteryRTHInfo]", rthStateValue === "UNKNOWN" ? "不适用（无有效返航预估）" : remaining ?? "尚未取得", remaining !== null),
+    statusRow("飞行模式 [FlightControllerKey.KeyFCFlightMode]", flightMode ?? "尚未取得", flightMode !== null),
+    statusRow("相对起飞点高度 [FlightControllerKey.KeyAltitude]", altitude === null ? "尚未取得" : `${altitude.toFixed(1)} 米`, altitude !== null),
+    statusRow("位置 [FlightControllerKey.KeyAircraftLocation]", latitude === null || longitude === null ? "尚未取得" : `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`, latitude !== null && longitude !== null),
+  ].join("");
+};
+
+const videoTransportStatusRows = (connection: unknown): string => {
+  const live = read(connection, "live");
   const resolution = optionalText(read(live, "resolution"));
   const fps = finiteNumber(read(live, "fps"));
   const bitrate = finiteNumber(read(live, "videoBitrateKbps"));
   const rtt = finiteNumber(read(live, "rttMillis"));
   const packetLoss = finiteNumber(read(live, "packetLoss"));
   const packetCacheLength = finiteNumber(read(live, "packetCacheLength"));
-  const flightState = read(connection, "flightState") === "grounded" ? "地面" : read(connection, "flightState") === "flying" ? "飞行中" : "尚未确认";
-  const motors = read(connection, "motorsOn") === true ? "已启动" : read(connection, "motorsOn") === false ? "已关闭" : "尚未确认";
   const streaming = read(live, "streaming") === true ? "MSDK 报告正在推流" : read(live, "streaming") === false ? "MSDK 报告未推流" : "尚未取得";
   return [
-    statusRow("机型 [ProductKey.KeyProductType]", aircraftModel ?? "尚未取得", aircraftModel !== null),
-    statusRow("遥控器型号 [RemoteControllerKey.KeyRemoteControllerType]", remoteControllerModel ?? "尚未取得", remoteControllerModel !== null),
-    statusRow("飞行状态 [FlightControllerKey.KeyIsFlying]", flightState, false),
-    statusRow("电机 [FlightControllerKey.KeyAreMotorsOn]", motors, false),
-    statusRow("电量 [BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]", battery === null ? "尚未取得" : `${battery}%`, battery !== null),
-    statusRow("低电量返航状态 [FlightControllerKey.KeyLowBatteryRTHInfo]", rthState ?? "尚未取得", rthState !== null),
-    statusRow("低电量返航预估 [FlightControllerKey.KeyLowBatteryRTHInfo]", remaining ?? "尚未取得", remaining !== null),
-    statusRow("飞行模式 [FlightControllerKey.KeyFCFlightMode]", flightMode ?? "尚未取得", flightMode !== null),
-    statusRow("高度 [FlightControllerKey.KeyAltitude]", altitude === null ? "尚未取得" : `${altitude.toFixed(1)} 米`, altitude !== null),
-    statusRow("位置 [FlightControllerKey.KeyAircraftLocation]", latitude === null || longitude === null ? "尚未取得" : `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`, latitude !== null && longitude !== null),
+    statusRow("AirLink 连接 [AirLinkKey.KeyConnection]", connectionLabel(connection, "airLink", "AirLink 已连接", "AirLink 未连接", "AirLink 状态未知"), connected(connection, "airLink")),
+    statusRow("主相机连接 [CameraKey.KeyConnection, LEFT_OR_MAIN]", connectionLabel(connection, "camera", "主相机已连接", "主相机未连接", "主相机状态未知"), connected(connection, "camera")),
     statusRow("MSDK 图传观测 [手机 MSDK 图传运行观测]", streaming, read(live, "streaming") === true),
     statusRow("图传分辨率 [手机 MSDK 图传运行观测]", resolution ?? "尚未取得", resolution !== null),
     statusRow("图传帧率 [手机 MSDK 图传运行观测]", fps === null ? "尚未取得" : `${fps} fps`, fps !== null),
@@ -403,6 +409,24 @@ const deviceFactRows = (connection: unknown): string => {
     statusRow("图传丢包 [LiveStreamStatus.packetLoss]", packetLoss === null ? "尚未取得" : String(packetLoss), packetLoss !== null),
     statusRow("图传缓存长度 [LiveStreamStatus.packetCacheLen]", packetCacheLength === null ? "尚未取得" : String(packetCacheLength), packetCacheLength !== null),
     statusRow("图传往返时间 [手机 MSDK 图传运行观测]", rtt === null ? "尚未取得" : `${rtt} ms`, rtt !== null),
+  ].join("");
+};
+
+const batteryStatusRows = (connection: unknown): string => {
+  const battery = finiteNumber(read(connection, "batteryPercent"));
+  const batteryConnection = connectionLabel(connection, "battery", "已连接", "已断开", "状态未知");
+  return [
+    statusRow("主电池连接 [BatteryKey.KeyConnection, LEFT_OR_MAIN]", batteryConnection, connected(connection, "battery")),
+    statusRow("电量 [BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]", battery === null ? "尚未取得" : `${battery}%`, battery !== null),
+  ].join("");
+};
+
+const deviceInformationRows = (connection: unknown): string => {
+  const aircraftModel = optionalText(read(connection, "aircraftModel"));
+  const remoteControllerModel = optionalText(read(connection, "remoteControllerModel"));
+  return [
+    statusRow("机型 [ProductKey.KeyProductType]", aircraftModel ?? "尚未取得", aircraftModel !== null),
+    statusRow("遥控器型号 [RemoteControllerKey.KeyRemoteControllerType]", remoteControllerModel ?? "尚未取得", remoteControllerModel !== null),
     statusRow("状态更新时间 [桌面接收时间]", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection)),
   ].join("");
 };
@@ -542,7 +566,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     if (device.deviceId === view.missionDeviceId) node.classList.add("inspected");
     const connection = device.connection ?? {};
     const msdk = msdkFact(connection);
-    node.innerHTML = `<strong>${escapeHtml(String(device.deviceId))}</strong><div class="muted">${msdk.label} · ${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")} · ${connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知")}</div>`;
+    node.innerHTML = `<strong>${escapeHtml(String(device.deviceId))}</strong><div class="muted">${msdk.label} · ${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")}</div>`;
     node.addEventListener("click", () => { state.missionDeviceId = String(device.deviceId); void render(); });
     return node;
   }));
@@ -562,13 +586,15 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
         ${statusRow("MSDK 生命周期 [SDKManager]", msdk.label, msdk.ok)}
         ${statusRow("遥控器连接 [RemoteControllerKey.KeyConnection]", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))}
         ${statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)}
-        ${statusRow("飞控连接 [FlightControllerKey.KeyConnection]", connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知"), connected(connection, "flightController"))}
-        ${statusRow("DJI 硬件产品连接 [ProductKey.KeyConnection]", connectionLabel(connection, "aircraft", "DJI 硬件产品已连接", "DJI 硬件产品未连接", "DJI 硬件产品状态未知"), connected(connection, "aircraft"))}
-        ${statusRow("AirLink 连接 [AirLinkKey.KeyConnection]", connectionLabel(connection, "airLink", "AirLink 已连接", "AirLink 未连接", "AirLink 状态未知"), connected(connection, "airLink"))}
-        ${statusRow("主相机连接 [CameraKey.KeyConnection, LEFT_OR_MAIN]", connectionLabel(connection, "camera", "主相机已连接", "主相机未连接", "主相机状态未知"), connected(connection, "camera"))}
       </div>
-      <h3 class="device-status-heading">动态飞行事实</h3>
-      <div class="connection-status-list" aria-label="动态飞行事实">${deviceFactRows(connection)}</div>
+      <h3 class="device-status-heading">飞控状态 [FlightControllerKey]</h3>
+      <div class="connection-status-list" aria-label="飞控状态">${flightControllerStatusRows(connection)}</div>
+      <h3 class="device-status-heading">图传状态 [AirLinkKey / CameraKey]</h3>
+      <div class="connection-status-list" aria-label="图传状态">${videoTransportStatusRows(connection)}</div>
+      <h3 class="device-status-heading">电池状态 [BatteryKey]</h3>
+      <div class="connection-status-list" aria-label="电池状态">${batteryStatusRows(connection)}</div>
+      <h3 class="device-status-heading">设备信息</h3>
+      <div class="connection-status-list" aria-label="设备信息">${deviceInformationRows(connection)}</div>
       <h3 class="device-status-heading">运行状态</h3>
       <div class="connection-status-list" aria-label="运行状态">${runtimeStatusRows(inspected, view.streamDeviceId)}</div>
       <p class="muted">对频仅用于新增飞机或更换遥控器。这里只显示手机回报的结果。</p>`;

@@ -20,7 +20,6 @@ export interface PreflightInput {
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
-    readonly connected?: boolean;
     readonly isFlying?: boolean;
     readonly motorsOn?: boolean;
     readonly batteryPercent?: number;
@@ -43,7 +42,6 @@ export interface FlightActionPreflightInput {
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
-    readonly connected?: boolean;
     readonly isFlying?: boolean;
     readonly motorsOn?: boolean;
     readonly batteryPercent?: number;
@@ -111,7 +109,6 @@ interface NormalizedInput {
   readonly sdkRegistered: unknown;
   readonly remoteControllerConnected: unknown;
   readonly flightControllerConnected: unknown;
-  readonly connected: unknown;
   readonly waypointMission: unknown;
   readonly waypointMissionSupport: unknown;
   readonly missionPhase: unknown;
@@ -128,7 +125,6 @@ function normalize(input: unknown): NormalizedInput | null {
       sdkRegistered: input.payload.sdkRegistered,
       remoteControllerConnected: input.payload.remoteControllerConnected,
       flightControllerConnected: input.payload.flightControllerConnected,
-      connected: input.payload.connected,
       waypointMission: input.capabilities.waypointMission,
       waypointMissionSupport: input.capabilities.waypointMissionSupport,
       missionPhase: input.missionPhase,
@@ -165,7 +161,7 @@ function evaluate(input: PreflightInput, policy: PreflightPolicy = DEFAULT_POLIC
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
   if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
   if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-  if (normalized.flightControllerConnected !== true || normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+  if (normalized.flightControllerConnected !== true) codes.push("AIRCRAFT_DISCONNECTED");
   if (normalized.waypointMission !== true || normalized.waypointMissionSupport !== "supported") codes.push("WAYPOINT_UNSUPPORTED");
   if (normalized.missionPhase !== "uploaded") codes.push("MISSION_NOT_UPLOADED");
   const battery = normalized.batteryPercent;
@@ -186,7 +182,7 @@ function evaluateUpload(input: PreflightInput): PreflightResult {
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
   if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
   if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-  if (normalized.flightControllerConnected !== true || normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+  if (normalized.flightControllerConnected !== true) codes.push("AIRCRAFT_DISCONNECTED");
   if (normalized.waypointMission !== true || normalized.waypointMissionSupport !== "supported") codes.push("WAYPOINT_UNSUPPORTED");
   return result(codes);
 }
@@ -201,7 +197,7 @@ function evaluateFlightAction(input: FlightActionPreflightInput, policy: Preflig
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
   if (normalized.sdkRegistered !== true) codes.push("SDK_NOT_READY");
   if (normalized.remoteControllerConnected !== true) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-  if (normalized.flightControllerConnected !== true || normalized.connected !== true) codes.push("AIRCRAFT_DISCONNECTED");
+  if (normalized.flightControllerConnected !== true) codes.push("AIRCRAFT_DISCONNECTED");
 
   if (action === "takeoff") {
     const battery = normalized.batteryPercent;

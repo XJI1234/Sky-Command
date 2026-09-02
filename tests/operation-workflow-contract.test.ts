@@ -63,7 +63,6 @@ describe("飞行作业工作流模块契约", () => {
         msdk: "ready",
         remoteController: "connected",
         flightController: "connected",
-        aircraft: "connected",
         airLink: "connected",
         camera: "disconnected",
       },
@@ -71,9 +70,10 @@ describe("飞行作业工作流模块契约", () => {
         sdk: "not-ready",
         remoteController: "disconnected",
         flightController: "disconnected",
-        aircraft: "disconnected",
       },
     });
+    expect(workflow.snapshot().devices[0]?.connection).not.toHaveProperty("aircraft");
+    expect(workflow.snapshot().devices[0]?.control).not.toHaveProperty("aircraft");
   });
 
   it("航线上传只使用当前订阅控制快照，不重建 MSDK 状态观察", async () => {
@@ -140,7 +140,7 @@ describe("飞行作业工作流模块契约", () => {
         refreshTelemetry: async () => {
           refreshes += 1;
           control = { payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: {} };
-          return { status: "succeeded" };
+          return { status: "succeeded", snapshot: "accepted" };
         },
         subscribe: () => () => undefined,
       },
@@ -148,6 +148,30 @@ describe("飞行作业工作流模块契约", () => {
 
     await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: true });
     expect(refreshes).toBe(1);
+  });
+
+  it("状态刷新仅在本次手机快照通过当前会话验证时报告成功", async () => {
+    let refreshes = 0;
+    const current = {
+      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true },
+      capabilities: {},
+    };
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
+        telemetry: () => current,
+        controlTelemetry: () => current,
+        refreshTelemetry: async () => {
+          refreshes += 1;
+          return { status: "succeeded", snapshot: "invalid" };
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+
+    await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "STATUS_REFRESH_FAILED" });
+    expect(refreshes).toBe(1);
+    expect(workflow.snapshot().devices[0]).toMatchObject({ control: { sdk: "ready" } });
   });
 
   it("将当前订阅状态缺失、手动刷新失败和离线操作分别收敛为明确结果", async () => {
@@ -174,9 +198,9 @@ describe("飞行作业工作流模块契约", () => {
       },
     });
     expect(workflow.checkHardwareReadiness(" ")).toMatchObject({ ok: false, code: "INVALID_INPUT" });
-    await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
+    await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "STATUS_REFRESH_FAILED" });
     rejectRefresh = true;
-    await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
+    await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "STATUS_REFRESH_FAILED" });
 
     online = false;
     await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "DEVICE_OFFLINE" });
@@ -336,8 +360,10 @@ describe("飞行作业工作流模块契约", () => {
 
     expect(workflow.snapshot().devices[0]).toMatchObject({
       connection: { telemetryReceivedAtMs: 1_725_000_000_000 },
-      control: { sdk: "ready", remoteController: "connected", flightController: "connected", aircraft: "connected" },
+      control: { sdk: "ready", remoteController: "connected", flightController: "connected" },
     });
+    expect(workflow.snapshot().devices[0]?.connection).not.toHaveProperty("aircraft");
+    expect(workflow.snapshot().devices[0]?.control).not.toHaveProperty("aircraft");
   });
 
   it("设备页立即显示本次 MSDK 连接事实，飞控类新控制仍按断开事实拒绝", async () => {
@@ -404,14 +430,14 @@ describe("飞行作业工作流模块契约", () => {
     expect(workflow.snapshot().devices[0]?.connection).toMatchObject({
       remoteController: "disconnected",
       flightController: "disconnected",
-      aircraft: "disconnected",
     });
     expect(workflow.snapshot().devices[0]?.control).toEqual({
       sdk: "ready",
       remoteController: "disconnected",
       flightController: "disconnected",
-      aircraft: "disconnected",
     });
+    expect(workflow.snapshot().devices[0]?.connection).not.toHaveProperty("aircraft");
+    expect(workflow.snapshot().devices[0]?.control).not.toHaveProperty("aircraft");
     await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: true });
     await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
     await expect(workflow.writeTransmissionSettings("relay-a", { bandwidth: "20" })).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED" });
@@ -502,7 +528,7 @@ describe("飞行作业工作流模块契约", () => {
 
     expect(workflow.assignRoute("relay-a", "route-ok")).toMatchObject({ ok: true });
     await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: true });
-    expect(workflow.snapshot()).toMatchObject({ devices: [{ deviceId: "relay-a", assignment: { routeId: "route-ok" }, connection: { sdk: "ready", aircraft: "connected" } }] });
+    expect(workflow.snapshot()).toMatchObject({ devices: [{ deviceId: "relay-a", assignment: { routeId: "route-ok" }, connection: { sdk: "ready" } }] });
     online = false;
     relayListener();
     expect(cancelled).toEqual([{ deviceId: "relay-a", confirmationId: "confirm-1" }]);
@@ -682,7 +708,7 @@ describe("飞行作业工作流模块契约", () => {
     await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({
       ok: false,
       code: "HARDWARE_NOT_READY",
-      value: { blockers: [{ code: "FLIGHT_CONTROLLER_DISCONNECTED" }, { code: "AIRCRAFT_DISCONNECTED" }] },
+      value: { blockers: [{ code: "FLIGHT_CONTROLLER_DISCONNECTED" }] },
     });
     expect(requests).toBe(0);
   });

@@ -26,7 +26,6 @@ interface PreflightInput {
     readonly sdkRegistered?: boolean;
     readonly remoteControllerConnected?: boolean;
     readonly flightControllerConnected?: boolean;
-    readonly connected?: boolean;
     readonly isFlying?: boolean;
     readonly motorsOn?: boolean;
     readonly batteryPercent?: number;
@@ -41,7 +40,7 @@ interface PreflightInput {
 
 缺失或畸形的安全字段一律视为阻塞，不得采用“默认安全”。`missionPhase` 必须为 `uploaded`；本模块绝不推进状态机。
 
-`evaluateUpload(input)` 复用同一输入结构，但只评估中继、MSDK、遥控器、飞控、飞机与航线能力；它不读取任务阶段、电量、飞行状态或电机状态。它是航线从手机上传到飞机前的唯一纯门禁，避免把启动航线的地面条件错误施加到上传阶段。
+`evaluateUpload(input)` 复用同一输入结构，但只评估中继、MSDK、遥控器、飞控与航线能力；它不读取任务阶段、电量、飞行状态或电机状态。它是航线从手机上传到飞机前的唯一纯门禁，避免把启动航线的地面条件错误施加到上传阶段。
 
 ## 4. 直接飞行动作接口
 
@@ -65,7 +64,7 @@ PreflightCheck.evaluateFlightAction(input, policy?) -> PreflightResult
 3. `RELAY_DISCONNECTED`
 4. `SDK_NOT_READY`
 5. `REMOTE_CONTROLLER_DISCONNECTED`
-6. `AIRCRAFT_DISCONNECTED`
+6. `AIRCRAFT_DISCONNECTED`（兼容原因码；唯一物理来源是 `FlightControllerKey.KeyConnection`，不读取 `ProductKey.KeyConnection`）
 7. `WAYPOINT_UNSUPPORTED`
 8. `MISSION_NOT_UPLOADED`
 9. `BATTERY_UNKNOWN`
@@ -77,6 +76,8 @@ PreflightCheck.evaluateFlightAction(input, policy?) -> PreflightResult
 15. `AIRCRAFT_ON_GROUND`（仅 `land` 与 `return-home`）
 
 `evaluateUpload` 仅可返回前七项中的 `RELAY_DISCONNECTED`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_DISCONNECTED`、`AIRCRAFT_DISCONNECTED`、`WAYPOINT_UNSUPPORTED`；它不产生 `MISSION_NOT_UPLOADED` 或任何动态飞行事实阻塞项。
+
+`ProductKey.KeyConnection` 的原始值保留在 Relay 诊断遥测中，但不属于任一预检输入，也不得作为飞行器、飞控、航线、直接飞行或设置操作的门禁。
 
 每项为 `{ code, message }`；消息短小、可显示，且不得泄露 payload、路径、设备 ID 或第三方错误。对频是连接新飞机或更换遥控器时的独立维护操作，不属于已上传航线的启动前置条件。电量缺失、非数值或不在 `0..100` 时为 `BATTERY_UNKNOWN`；仅有效电量低于策略下限时为 `BATTERY_LOW`。`isFlying` 与 `motorsOn` 都必须严格为布尔值 `false`；缺失、字符串、数值、null 或其他畸形值分别为未知状态，不能用任何默认值放行。
 

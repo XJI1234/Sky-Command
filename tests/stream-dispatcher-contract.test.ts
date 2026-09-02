@@ -171,7 +171,7 @@ describe("StreamDispatcher", () => {
     await expect(value.dispatcher.stop("phone\n1")).resolves.toMatchObject({ ok: false, code: "INVALID_INPUT" });
   });
 
-  it("passes telemetry capabilities and connection state to the capability gate exactly", () => {
+  it("passes telemetry capabilities and control-link state to the capability gate, excluding retained ProductKey telemetry", () => {
     const onlineInputs: unknown[] = [];
     const capabilities = { liveVideo: true, custom: "retained" };
     const online = fixture({
@@ -185,14 +185,15 @@ describe("StreamDispatcher", () => {
       sdkRegistered: false,
       remoteControllerConnected: false,
       flightControllerConnected: false,
-      aircraftConnected: false,
       capabilities
     }]);
 
     const offlineInputs: unknown[] = [];
     const offline = fixture({ telemetry: () => null, gate: (input) => { offlineInputs.push(input); return { ok: true, value: { enabled: true } }; } });
     expect(offline.dispatcher.check("phone-1")).toEqual({ ok: true });
-    expect(offlineInputs).toEqual([expect.objectContaining({ relayConnected: false, capabilities: {}, sdkRegistered: undefined, remoteControllerConnected: undefined, flightControllerConnected: undefined, aircraftConnected: undefined })]);
+    expect(offlineInputs).toEqual([expect.objectContaining({ relayConnected: false, capabilities: {}, sdkRegistered: undefined, remoteControllerConnected: undefined, flightControllerConnected: undefined })]);
+    expect(onlineInputs[0]).not.toHaveProperty("aircraftConnected");
+    expect(offlineInputs[0]).not.toHaveProperty("aircraftConnected");
   });
 
   it("treats malformed telemetry and gate contracts as start dependency failures without blocking stop", async () => {

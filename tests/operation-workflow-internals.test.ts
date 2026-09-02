@@ -8,6 +8,20 @@ import { WorkflowSubscriptions } from "../src/production/operation-workflow/work
 const source = (path: string): string => readFileSync(resolve(process.cwd(), path), "utf8");
 
 describe("飞行作业工作流内部模块", () => {
+  it("飞控断开时仍按 BatteryKey.KeyConnection 投影电池事实", () => {
+    const snapshot = WorkflowSnapshot.create({
+      devices: [{
+        deviceId: "relay-1",
+        telemetry: { payload: { flightController: "DISCONNECTED", battery: "CONNECTED", batteryPercent: 86 }, capabilities: {} },
+        assignment: { routeId: null, routeName: null },
+        mission: { phase: "idle" }, stream: { phase: "idle" }, settings: {}, pendingFlightAction: null,
+      }],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 1, media: { streams: [] }, disposed: false,
+    });
+
+    expect(snapshot.devices[0]?.connection).toMatchObject({ battery: "connected", batteryPercent: 86, flightState: "unknown" });
+  });
+
   it("为已知生产依赖声明最小 Port 契约", () => {
     const ports = resolve(process.cwd(), "src/production/operation-workflow/ports.ts");
 
@@ -53,7 +67,8 @@ describe("飞行作业工作流内部模块", () => {
 
   it("将未知设备事实投影为安全快照，并只保留本机播放地址", () => {
     const snapshot = WorkflowSnapshot.create({ devices: [{ deviceId: "b", telemetry: { payload: {}, capabilities: {} }, assignment: { routeId: null, routeName: null }, mission: { phase: "idle" }, stream: { phase: "idle" }, settings: {}, pendingFlightAction: null }, { deviceId: "a", telemetry: { payload: { sdkRegistered: true, remoteController: "DISCONNECTED", flightController: "CONNECTED", aircraft: "CONNECTED", remoteControllerConnected: false, flightControllerConnected: true, connected: true, batteryPercent: 12, isFlying: false }, capabilities: { waypointMission: true, waypointMissionSupport: "supported", liveVideo: true } }, assignment: { routeId: "r", routeName: "r.kmz" }, mission: { phase: "uploaded" }, stream: { phase: "streaming" }, settings: {}, pendingFlightAction: null }], routes: [], selectedRouteId: "r", selectedVideoDeviceId: "a", revision: 2, media: { streams: [{ deviceId: "a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/live/stream-1.flv", diagnostic: "secret" }] }, disposed: false });
-    expect(snapshot).toMatchObject({ phase: "ready", devices: [{ deviceId: "a", connection: { sdk: "ready", remoteController: "disconnected", flightState: "grounded", pairingState: "unknown", pose: null } }, { deviceId: "b", connection: { sdk: "unknown", aircraft: "unknown", pairingState: "unknown", pose: null } }] });
+    expect(snapshot).toMatchObject({ phase: "ready", devices: [{ deviceId: "a", connection: { sdk: "ready", remoteController: "disconnected", flightState: "grounded", pairingState: "unknown", pose: null } }, { deviceId: "b", connection: { sdk: "unknown", pairingState: "unknown", pose: null } }] });
+    expect(snapshot.devices.every((device) => !("aircraft" in device.connection))).toBe(true);
     expect(snapshot.media).toEqual({ streams: [{ deviceId: "a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/live/stream-1.flv" }] });
     expect(JSON.stringify(snapshot)).not.toContain("secret");
     expect(Object.isFrozen(snapshot)).toBe(true);
@@ -86,9 +101,9 @@ describe("飞行作业工作流内部模块", () => {
       msdk: "ready",
       remoteController: "connected",
       flightController: "disconnected",
-      aircraft: "connected",
       pairingState: "PAIRED",
     });
+    expect(snapshot.devices[0]?.connection).not.toHaveProperty("aircraft");
   });
 
   it("投影 MSDK 的已停止与注册失败状态，而不把它们归并为未知", () => {
@@ -217,6 +232,7 @@ describe("飞行作业工作流内部模块", () => {
             flightControllerConnected: true,
             aircraftModel: "Matrice 4T",
             remoteControllerModel: "DJI RC Plus",
+            battery: "CONNECTED",
             batteryPercent: 87,
             isFlying: false,
             motorsOn: false,
@@ -300,7 +316,7 @@ describe("飞行作业工作流内部模块", () => {
     });
   });
 
-  it("丢弃畸形动态事实，并区分未运行与未知的图传观测", () => {
+  it("丢弃畸形动态事实、保留 MSDK 明确未知返航状态，并区分未运行与未知的图传观测", () => {
     const device = (payload: Record<string, unknown>) => ({
       deviceId: "relay-a",
       telemetry: { payload, capabilities: {} },
@@ -328,7 +344,7 @@ describe("飞行作业工作流内部模块", () => {
       batteryPercent: null,
       motorsOn: null,
       flightMode: null,
-      lowBatteryRthState: "unknown",
+      lowBatteryRthState: "UNKNOWN",
       remainingFlightTimeSeconds: null,
       live: { streaming: false, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null },
     });
@@ -351,7 +367,7 @@ describe("飞行作业工作流内部模块", () => {
     expect(snapshot.media.streams).toEqual([{ deviceId: "relay-a", phase: "ready", playbackUrl: null }]);
   });
 
-  it("不把 DJI 默认的未知低电量返航零值显示为预估时间", () => {
+  it("保留 DJI 明确未知低电量返航状态但不把默认零值显示为预估时间", () => {
     const snapshot = WorkflowSnapshot.create({
       devices: [{
         deviceId: "relay-a",
@@ -365,7 +381,7 @@ describe("飞行作业工作流内部模块", () => {
     });
 
     expect(snapshot.devices[0]?.connection).toMatchObject({
-      lowBatteryRthState: "unknown",
+      lowBatteryRthState: "UNKNOWN",
       remainingFlightTimeSeconds: null,
     });
   });

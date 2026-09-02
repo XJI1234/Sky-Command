@@ -24,7 +24,6 @@ LinkChain.evaluate(input: unknown) -> LinkChainResult<LinkChainSnapshot>
     sdkRegistered?: boolean;
     remoteControllerConnected?: boolean;
     flightControllerConnected?: boolean;
-    connected?: boolean;
   };
 }
 ```
@@ -49,8 +48,8 @@ LinkChain.evaluate(input: unknown) -> LinkChainResult<LinkChainSnapshot>
 - 中继在线而没有遥测时，电脑到手机为 `connected`，后两段为 `unknown`，`overall` 为 `degraded`。
 - 有遥测但 `sdkRegistered !== true` 时，后两段为 `unknown`，`overall` 为 `degraded`。
 - SDK 已注册后，`phoneToRemoteController` 由明确的连接事实判定：true 为 `connected`，false 为 `disconnected`，缺失为 `unknown`。
-- 只有遥控器为 `connected` 时，才读取 `flightControllerConnected` 与 `connected`。两者均为 true 才得到 `remoteControllerToAircraft: connected`，否则为 `disconnected`。遥控器断开时飞机段为 `unknown`，不能显示为断开，因为手机无法确认该段事实。
-- 只有三段均为 `connected` 时 `overall` 才为 `ready`。对频是独立的低频维护状态，绝不参与三段链路判定或降低已连接链路的就绪状态。
+- 只有遥控器为 `connected` 时，才读取 `flightControllerConnected`。它为 true 才得到 `remoteControllerToAircraft: connected`，为 false 时为 `disconnected`，缺失时为 `unknown`。遥控器断开时飞机段为 `unknown`，不能显示为断开，因为手机无法确认该段事实。
+- 只有三段均为 `connected` 时 `overall` 才为 `ready`。对频是独立的低频维护状态，绝不参与三段链路判定或降低已连接链路的就绪状态。`ProductKey.KeyConnection` 不属于此链路输入。`remoteControllerToAircraft` 是面向操作员的飞控可用链路摘要，唯一 DJI 连接来源为 `FlightControllerKey.KeyConnection`。
 
 ## 错误与不可变性
 
