@@ -116,6 +116,13 @@ describe("StreamDispatcher", () => {
     expect(snapshots.length).toBeGreaterThan(0);
   });
 
+  it("ignores a source-unavailable signal when the device has no active stream", async () => {
+    const value = fixture();
+    expect(value.dispatcher.recordSourceUnavailable("missing")).toBeNull();
+    await value.dispatcher.stop("phone-1");
+    expect(value.dispatcher.recordSourceUnavailable("phone-1")).toBeNull();
+  });
+
   it("maps command rejection, dependency faults and invalid input without throwing", async () => {
     const rejected = fixture({ send: async () => ({ status: "rejected" }) });
     await expect(rejected.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "RELAY_REJECTED", state: { phase: "failed" } });
@@ -344,6 +351,29 @@ describe("StreamDispatcher", () => {
     expect(Object.isFrozen(listed[0]!)).toBe(true);
     expect(value.dispatcher.get("missing")).toEqual({ deviceId: "missing", phase: "idle", lastOperation: null, failureCode: null, reason: null });
     expect(value.dispatcher.get(1 as never)).toEqual({ deviceId: "", phase: "idle", lastOperation: null, failureCode: null, reason: null });
+  });
+
+  it("图传源失效时终止活动车道并取消等待中的重启", async () => {
+    let resolveStop: ((value: unknown) => void) | undefined;
+    const value = fixture({
+      send: (_deviceId, request) => (request as { name: string }).name === "live-stream.stop"
+        ? new Promise((resolve) => { resolveStop = resolve; })
+        : Promise.resolve({ status: "succeeded" }),
+    });
+
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, state: { phase: "streaming" } });
+    const stopping = value.dispatcher.stop("phone-1");
+    const queuedRestart = value.dispatcher.start("phone-1");
+
+    expect(value.dispatcher.recordSourceUnavailable("phone-1")).toMatchObject({
+      phase: "failed",
+      failureCode: "SOURCE_UNAVAILABLE",
+    });
+    resolveStop!({ status: "succeeded" });
+
+    await expect(stopping).resolves.toMatchObject({ ok: false, code: "SOURCE_UNAVAILABLE", state: { phase: "failed" } });
+    await expect(queuedRestart).resolves.toMatchObject({ ok: false, code: "SOURCE_UNAVAILABLE", state: { phase: "failed" } });
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, state: { phase: "streaming" } });
   });
 
   it("returns disconnected after a late completion and releases the lane for a later request", async () => {

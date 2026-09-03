@@ -19,6 +19,7 @@ instance.stop(deviceId) -> Promise<StreamDispatchResult>
 instance.get(deviceId) -> StreamDispatchSnapshot
 instance.list() -> readonly StreamDispatchSnapshot[]
 instance.recordDisconnected(deviceId) -> StreamDispatchSnapshot | null
+instance.recordSourceUnavailable(deviceId) -> StreamDispatchSnapshot | null
 instance.forget(deviceId) -> boolean
 instance.subscribe(listener) -> unsubscribe
 ```
@@ -35,17 +36,17 @@ instance.subscribe(listener) -> unsubscribe
 4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。开始要求中继、MSDK 以及手机端实时推导的 `capabilities.liveVideo === true`；飞控不参与。能力未知或当前未就绪时不发送命令；
 5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。
 
-当同一设备正处于 `stopping` 时，`start(deviceId)` 不是并发命令：它登记一次“停止后重启”意图，并等待现有停止命令的终态。停止成功后，调度器必须重新执行上述全部启动检查，再发送唯一一条 `live-stream.start`；停止失败或设备断线时，不得发送启动命令，所有已登记调用必须得到该终态失败。处于 `starting` 的同设备 `start`、以及所有其他忙碌冲突，仍返回 `OPERATION_IN_PROGRESS`。多个停止期间的启动请求可以合并为一次实际启动，但每个调用都必须收到该次启动的最终结果。
+当同一设备正处于 `stopping` 时，`start(deviceId)` 不是并发命令：它登记一次“停止后重启”意图，并等待现有停止命令的终态。停止成功后，调度器必须重新执行上述全部启动检查，再发送唯一一条 `live-stream.start`；停止失败、设备断线或图传源失效时，不得发送启动命令，所有已登记调用必须得到该终态失败。处于 `starting` 的同设备 `start`、以及所有其他忙碌冲突，仍返回 `OPERATION_IN_PROGRESS`。多个停止期间的启动请求可以合并为一次实际启动，但每个调用都必须收到该次启动的最终结果。
 
 `stop(deviceId)` 不读取媒体端点、不构造地址、也不走启动用的 `CapabilityGate(live-stream)`。它只校验设备标识与同设备互斥，进入 `stopping` 后发送冻结空字段对象。中继成功时进入 `idle`，失败时进入 `failed`。手机端命令成功只表示 DJI 操作结果，播放器可用性仍由 `media-pipeline` 决定。
 
-错误码只能是：`INVALID_INPUT`、`MEDIA_PIPELINE_UNAVAILABLE`、`CONFIGURATION_INVALID`、`CAPABILITY_BLOCKED`、`OPERATION_IN_PROGRESS`、`RELAY_REJECTED`、`DEPENDENCY_FAILURE`、`DISCONNECTED` 或 `ILLEGAL_STATE`。能力拒绝必须复制 `CapabilityGate` 的原因码。`RELAY_REJECTED` 可以把手机端已知拒绝详情映射为封闭原因码 `ANOTHER_VIDEO_TRANSPORT_ACTIVE`，但不能把遥测、RTMP URL 或原始异常带入结果。
+错误码只能是：`INVALID_INPUT`、`MEDIA_PIPELINE_UNAVAILABLE`、`CONFIGURATION_INVALID`、`CAPABILITY_BLOCKED`、`OPERATION_IN_PROGRESS`、`RELAY_REJECTED`、`DEPENDENCY_FAILURE`、`DISCONNECTED`、`SOURCE_UNAVAILABLE` 或 `ILLEGAL_STATE`。能力拒绝必须复制 `CapabilityGate` 的原因码。`RELAY_REJECTED` 可以把手机端已知拒绝详情映射为封闭原因码 `ANOTHER_VIDEO_TRANSPORT_ACTIVE`，但不能把遥测、RTMP URL 或原始异常带入结果。
 
 ## 状态、并发与订阅
 
 一个 `deviceId` 一个记录，阶段为 `idle`、`starting`、`streaming`、`stopping`、`failed` 或 `disconnected`。快照只含设备标识、阶段、最后操作、失败码和能力拒绝原因，绝不含 RTMP URL、令牌、媒体地址或异常。
 
-同设备的进行中操作互斥，不同设备可并行；唯一例外是 `stopping` 期间登记的“停止后重启”意图，它绝不与停止命令并发执行。断线立即将已存在的设备记录标记为 `disconnected`，并终止尚未执行的重启意图；断线前开始的异步结果是迟到结果，必须忽略。`forget` 只能删除 `idle`、`failed` 或 `disconnected` 记录。快照按 `deviceId` 排序、逐层冻结并与内部状态隔离；订阅者异常不会影响状态或其他订阅者，注销幂等。
+同设备的进行中操作互斥，不同设备可并行；唯一例外是 `stopping` 期间登记的“停止后重启”意图，它绝不与停止命令并发执行。断线立即将已存在的设备记录标记为 `disconnected`，并终止尚未执行的重启意图；断线前开始的异步结果是迟到结果，必须忽略。图传源失效仅将活动/停止中的车道标记为 `failed/SOURCE_UNAVAILABLE`，并同样终止尚未执行的重启意图；它不发送第二条命令，也不影响任何其他设备。`forget` 只能删除 `idle`、`failed` 或 `disconnected` 记录。快照按 `deviceId` 排序、逐层冻结并与内部状态隔离；订阅者异常不会影响状态或其他订阅者，注销幂等。
 
 ## 验收
 

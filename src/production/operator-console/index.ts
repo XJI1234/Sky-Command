@@ -69,6 +69,8 @@ export interface OperatorView {
   readonly selectedRoute: OperatorRouteFact | null;
   readonly missionLabel: string;
   readonly streamLabel: string;
+  /** The phone has already requested recovery stop after the MSDK video source disappeared. */
+  readonly streamSourceUnavailable: boolean;
   readonly playbackReady: boolean;
   readonly streamCanStart: boolean;
   readonly streamCanStop: boolean;
@@ -204,11 +206,14 @@ const missionLabelOf = (mission: unknown): string => {
     default: return "未开始";
   }
 };
+const streamSourceUnavailableOf = (device: Record<string, unknown> | undefined): boolean =>
+  text(read(read(device, "stream"), "phase")) === "failed" && text(read(read(device, "stream"), "failureCode")) === "SOURCE_UNAVAILABLE";
 const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (device === undefined) return "图传未就绪：未选择图传机";
   const streamPhase = text(read(read(device, "stream"), "phase"));
   // 停止命令尚未确认时，播放器的最后一帧不能覆盖控制车道的事实。
   if (streamPhase === "stopping") return "正在停止图传";
+  if (streamSourceUnavailableOf(device)) return "图传源已断开，请恢复后手动启动图传";
   const videoPhase = text(read(read(device, "video"), "phase"));
   if (videoPhase === "ready") return "图传播放中";
   if (videoPhase === "awaiting-playback") return "正在准备画面";
@@ -242,6 +247,8 @@ const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean 
 };
 const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean => {
   if (device === undefined) return false;
+  // This terminal state already has one recovery stop queued on the phone.
+  if (streamSourceUnavailableOf(device)) return false;
   const streamPhase = text(read(read(device, "stream"), "phase"));
   // failed 也允许停：启动半成功或遥测抖动后控制态可能已 failed，手机仍可能在推。
   if (streamPhase === "starting" || streamPhase === "streaming" || streamPhase === "stopping" || streamPhase === "failed") return true;
@@ -296,6 +303,7 @@ function project(input: unknown): OperatorView {
   const selectedRouteId = text(read(read(snapshot, "workflow"), "selectedRouteId"));
   const selectedRoute = routes.find((item) => item.routeId === selectedRouteId) ?? routes[0] ?? null;
   const videoPhase = text(read(read(streamDevice, "video"), "phase"));
+  const streamSourceUnavailable = streamSourceUnavailableOf(streamDevice);
   const mission = missionDevice === undefined ? null : read(missionDevice, "mission");
   const view = {
     workspace: workspaceOf(source === null ? null : read(source, "workspace")),
@@ -316,7 +324,8 @@ function project(input: unknown): OperatorView {
     selectedRoute,
     missionLabel: missionLabelOf(missionDevice === undefined ? null : read(missionDevice, "mission")),
     streamLabel: streamLabelOf(streamDevice),
-    playbackReady: videoPhase === "ready",
+    streamSourceUnavailable,
+    playbackReady: videoPhase === "ready" && !streamSourceUnavailable,
     streamCanStart: streamCanStartOf(streamDevice),
     streamCanStop: streamCanStopOf(streamDevice),
   };
@@ -340,6 +349,7 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
       const issue = streamStartIssueOf(device);
       if (issue !== null) return reject(issue.reason);
     }
+    if (name === "stream-stop" && streamSourceUnavailableOf(device)) return reject("图传源已断开，手机已自动停止图传");
     return accept();
   }
   if (name === "flight-confirm" || name === "flight-cancel") return accept();

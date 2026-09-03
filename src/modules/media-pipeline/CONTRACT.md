@@ -13,6 +13,8 @@ instance.evaluate(now) -> PipelineResult<MediaSnapshot>
 instance.notifyPlaybackReady(deviceId) -> PipelineResult<MediaSnapshot>
 instance.selectPlayer(deviceId) -> PipelineResult<MediaSnapshot>
 instance.clearPlayer() -> PipelineResult<MediaSnapshot>
+instance.invalidateStreamSource(deviceId) -> PipelineResult<MediaSnapshot>
+instance.allowStreamSource(deviceId) -> PipelineResult<MediaSnapshot>
 instance.snapshot() -> MediaSnapshot
 ```
 
@@ -21,6 +23,8 @@ instance.snapshot() -> MediaSnapshot
 组合根状态为 `idle`、`starting`、`running`、`stopping`、`failed`、`disposed`。`snapshot` 只公开接收端点的 host/port/source、每台设备的 deviceId/streamId/健康阶段/播放地址/安全诊断，以及播放器快照。
 
 启动顺序固定为：解析局域网端点、启动 HTTP-FLV 分发、启动 RTMP。任一步失败都停止已经启动的服务并清空流状态。RTMP 发布后立即标记该设备 `ready`，播放地址为 `http://127.0.0.1:{httpFlvPort}/live/{deviceId}.flv`。`notifyPlaybackReady` 保留为幂等补标入口（例如测试或迟到回调），不得再假装依赖 HLS 播放列表写出。
+
+`invalidateStreamSource(deviceId)` 是工作流在手机 MSDK 明确报告 AirLink 或主相机不再 `CONNECTED` 时调用的本地失效入口：它只移除该设备媒体记录；若当前播放器选中了该设备，立即清空播放器。它绝不停止共享 RTMP/HTTP-FLV 服务，也不影响其他设备。失效设备即使还有旧 RTMP publish 也不得被 `evaluate()` 自动重新加入。只有桌面已收到一次新的、操作者手动请求且手机已确认成功的 `live-stream.start` 后，工作流才能调用 `allowStreamSource(deviceId)` 解除屏蔽；该方法不选择播放器、不发送命令、不自动启动图传。
 
 ## 唯一职责
 

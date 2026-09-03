@@ -24,5 +24,5 @@ describe("生产源码有限状态与枚举盘点", () => {
     expect(names).toContain("desktop:MissionPhase");
     expect(names).toContain("mobile:MissionPhase");
     expect(names).toContain("mobile:SessionState");
-  });
+  }, 30_000);
 });

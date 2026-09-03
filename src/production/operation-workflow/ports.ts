@@ -16,10 +16,10 @@ export type RouteLibraryPort = Pick<RouteLibraryInstance, "importFile" | "list" 
 export type MissionControlPort = Pick<MissionControlInstance, "stage" | "upload" | "start" | "pause" | "resume" | "stop" | "get" | "forget" | "subscribe">;
 
 /** Owns the production RTMP start/stop lane and its observable state. */
-export type LiveStreamControlPort = Pick<LiveStreamControlInstance, "start" | "stop" | "get" | "recordDisconnected" | "subscribe">;
+export type LiveStreamControlPort = Pick<LiveStreamControlInstance, "start" | "stop" | "get" | "recordDisconnected" | "recordSourceUnavailable" | "subscribe">;
 
 /** Owns desktop RTMP ingest, HTTP-FLV playback state, and player selection. */
-export type MediaPipelinePort = Pick<MediaPipelineInstance, "snapshot" | "evaluate" | "notifyPlaybackReady" | "selectPlayer" | "clearPlayer">;
+export type MediaPipelinePort = Pick<MediaPipelineInstance, "snapshot" | "evaluate" | "notifyPlaybackReady" | "selectPlayer" | "clearPlayer" | "invalidateStreamSource" | "allowStreamSource">;
 
 /** Owns local confirmation state and dispatch of dangerous flight commands. */
 export type FlightControlPort = Pick<FlightControlInstance, "request" | "confirm" | "cancel" | "get" | "clear" | "subscribe">;

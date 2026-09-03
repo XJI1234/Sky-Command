@@ -111,6 +111,37 @@ describe("media-pipeline 一级组合根契约", () => {
     expect(calls).toEqual(["player", "rtmp", "http-flv"]);
   });
 
+  it("图传源失效时立即清空当前播放器，并禁止旧的 RTMP 发布自行恢复", () => {
+    const calls: string[] = [];
+    const { pipeline, events } = fixture({ player: { clear: () => calls.push("clear") } });
+    pipeline.start(input);
+    events().onPublished("/live/phone-a");
+    expect(pipeline.selectPlayer("phone-a")).toMatchObject({ ok: true, value: { player: { phase: "playing", deviceId: "phone-a" } } });
+
+    expect(pipeline.invalidateStreamSource("phone-a")).toMatchObject({ ok: true, value: {
+      streams: [], player: { phase: "idle", deviceId: null },
+    } });
+    expect(calls).toEqual(["clear"]);
+    expect(pipeline.evaluate(200)).toMatchObject({ ok: true, value: { streams: [] } });
+
+    expect(pipeline.allowStreamSource("phone-a")).toMatchObject({ ok: true, value: {
+      streams: [expect.objectContaining({ deviceId: "phone-a", phase: "ready" })],
+    } });
+  });
+
+  it("图传源失效入口对无效输入、播放器失败和已处置媒体安全失败", () => {
+    const { pipeline, events } = fixture({ player: { clear: () => { throw new Error("player clear"); } } });
+    pipeline.start(input);
+    expect(pipeline.invalidateStreamSource(" ")).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(pipeline.allowStreamSource(" ")).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    events().onPublished("/live/phone-a");
+    expect(pipeline.selectPlayer("phone-a")).toMatchObject({ ok: true });
+    expect(pipeline.invalidateStreamSource("phone-a")).toMatchObject({ ok: false, code: "PLAYER_FAILED" });
+    pipeline.dispose();
+    expect(pipeline.invalidateStreamSource("phone-a")).toMatchObject({ ok: false, code: "DISPOSED" });
+    expect(pipeline.allowStreamSource("phone-a")).toMatchObject({ ok: false, code: "DISPOSED" });
+  });
+
   it("任一步启动失败都返回稳定错误并清理已启动服务", () => {
     let hlsClosed = 0;
     const { pipeline } = fixture({

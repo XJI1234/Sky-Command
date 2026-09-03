@@ -131,6 +131,40 @@ describe("操作台投影", () => {
     expect(source).toContain("上次更新于");
   });
 
+  it("图传源失效优先于旧播放器的 ready 记录显示，并且不允许重复停止", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        stream: { phase: "failed", failureCode: "SOURCE_UNAVAILABLE" },
+        video: { phase: "ready", selected: true },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(view.streamLabel).toBe("图传源已断开，请恢复后手动启动图传");
+    expect(view.playbackReady).toBe(false);
+    expect(view.streamSourceUnavailable).toBe(true);
+    expect(view.streamCanStop).toBe(false);
+    expect(OperatorConsole.evaluate("stream-stop", view)).toEqual({
+      ok: false,
+      reason: "图传源已断开，手机已自动停止图传",
+    });
+  });
+
+  it("普通图传失败仍保留一次人工停止机会", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        stream: { phase: "failed", failureCode: "RELAY_REJECTED" },
+        video: { phase: "unavailable", selected: false },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(view.streamSourceUnavailable).toBe(false);
+    expect(view.streamCanStop).toBe(true);
+    expect(OperatorConsole.evaluate("stream-stop", view)).toEqual({ ok: true });
+  });
+
   it("设备页将对频限定为新增设备的维护操作", () => {
     const source = renderer();
     expect(source).toContain("对频仅用于新增飞机或更换遥控器");
@@ -740,6 +774,12 @@ describe("操作台工作区", () => {
 });
 
 describe("航线操作台渲染契约", () => {
+  it("图传源已断开时，渲染器清理旧播放器且不允许其绕过停止门禁", () => {
+    const source = renderer();
+    expect(source).toContain("if (view.streamSourceUnavailable) detachVideo();");
+    expect(source).toContain("const canStop = !view.streamSourceUnavailable && !streamStopping && (view.streamCanStop || attachedUrl !== null);");
+  });
+
   it("设备页提供只读状态刷新，不把读取成功写成飞机或图传已就绪", () => {
     const source = renderer();
     expect(page()).toContain('id="device-refresh"');

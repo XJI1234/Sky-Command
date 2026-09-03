@@ -19,6 +19,7 @@ instance.stop(deviceId) -> Promise<StreamControlResult>
 instance.get(deviceId) -> StreamControlSnapshot
 instance.list() -> readonly StreamControlSnapshot[]
 instance.recordDisconnected(deviceId) -> StreamControlSnapshot | null
+instance.recordSourceUnavailable(deviceId) -> StreamControlSnapshot | null
 instance.forget(deviceId) -> boolean
 instance.subscribe(listener) -> unsubscribe
 ```
@@ -50,7 +51,7 @@ rtmp://{电脑局域网接收主机}:{RTMP端口}/live/{encodeURIComponent(devic
 
 每台设备的控制快照仅为 `idle`、`starting`、`streaming`、`stopping`、`failed` 或 `disconnected`，并包含最后操作、稳定失败码和安全诊断。状态不保存 RTMP URL、查询参数、令牌、原始异常、FFmpeg 路径或视频数据。
 
-同一设备在等待命令结果时，第二个开始或停止请求返回 `OPERATION_IN_PROGRESS`，且不触发任何依赖；不同设备互不阻塞。命令传输异常、超时、拒绝和畸形结果统一收敛为稳定失败码，不抛出原始异常。设备断开时，进行中的结果不能覆盖 `disconnected`；重新连接后必须由调用方重新发起一次完整 `start`，不能复用旧 RTMP 地址或自动重试。
+同一设备在等待命令结果时，第二个开始或停止请求返回 `OPERATION_IN_PROGRESS`，且不触发任何依赖；不同设备互不阻塞。命令传输异常、超时、拒绝和畸形结果统一收敛为稳定失败码，不抛出原始异常。设备断开时，进行中的结果不能覆盖 `disconnected`；重新连接后必须由调用方重新发起一次完整 `start`，不能复用旧 RTMP 地址或自动重试。若手机端遥测明确表明 `AirLinkKey.KeyConnection` 或主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 不为 `CONNECTED`，编排层调用 `recordSourceUnavailable`：仅活动或停止中的 RTMP 车道进入 `failed/SOURCE_UNAVAILABLE`，等待中的“停止后重启”全部以同一失败结算，恢复 Key 不得自动重启。
 
 `subscribe` 提供冻结、排序、与内部状态隔离的快照；监听器异常不得阻断其他监听器。`forget` 只可删除稳定终态 `idle`、`failed` 或 `disconnected` 的设备记录，不能删除正在提交的操作。
 

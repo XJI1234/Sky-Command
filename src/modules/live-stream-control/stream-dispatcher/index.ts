@@ -1,5 +1,5 @@
 export type StreamOperation = "start" | "stop";
-export type StreamDispatchCode = "INVALID_INPUT" | "MEDIA_PIPELINE_UNAVAILABLE" | "CONFIGURATION_INVALID" | "CAPABILITY_BLOCKED" | "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "DEPENDENCY_FAILURE" | "DISCONNECTED" | "ILLEGAL_STATE";
+export type StreamDispatchCode = "INVALID_INPUT" | "MEDIA_PIPELINE_UNAVAILABLE" | "CONFIGURATION_INVALID" | "CAPABILITY_BLOCKED" | "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "DEPENDENCY_FAILURE" | "DISCONNECTED" | "SOURCE_UNAVAILABLE" | "ILLEGAL_STATE";
 export interface StreamDispatchSnapshot { readonly deviceId: string; readonly phase: "idle" | "starting" | "streaming" | "stopping" | "failed" | "disconnected"; readonly lastOperation: StreamOperation | null; readonly failureCode: StreamDispatchCode | null; readonly reason: string | null; }
 export type StreamDispatchCheck = Readonly<{ readonly ok: true }> | Readonly<{ readonly ok: false; readonly code: Exclude<StreamDispatchCode, "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "DISCONNECTED" | "ILLEGAL_STATE">; readonly reason?: string }>;
 export type StreamDispatchResult = Readonly<{ readonly ok: true; readonly operation: StreamOperation; readonly state: StreamDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: StreamOperation; readonly code: StreamDispatchCode; readonly state: StreamDispatchSnapshot | null; readonly reason?: string }>;
@@ -9,7 +9,7 @@ export interface StreamDispatcherDependencies {
   readonly capabilityGate: { readonly evaluate: (input: unknown) => unknown };
   readonly targetConfig: { readonly createRtmpTarget: (input: unknown) => unknown };
 }
-export interface StreamDispatcherInstance { readonly check: (deviceId: string) => StreamDispatchCheck; readonly start: (deviceId: string) => Promise<StreamDispatchResult>; readonly stop: (deviceId: string) => Promise<StreamDispatchResult>; readonly get: (deviceId: string) => StreamDispatchSnapshot; readonly list: () => readonly StreamDispatchSnapshot[]; readonly recordDisconnected: (deviceId: string) => StreamDispatchSnapshot | null; readonly forget: (deviceId: string) => boolean; readonly subscribe: (listener: (snapshots: readonly StreamDispatchSnapshot[]) => void) => () => void; }
+export interface StreamDispatcherInstance { readonly check: (deviceId: string) => StreamDispatchCheck; readonly start: (deviceId: string) => Promise<StreamDispatchResult>; readonly stop: (deviceId: string) => Promise<StreamDispatchResult>; readonly get: (deviceId: string) => StreamDispatchSnapshot; readonly list: () => readonly StreamDispatchSnapshot[]; readonly recordDisconnected: (deviceId: string) => StreamDispatchSnapshot | null; readonly recordSourceUnavailable: (deviceId: string) => StreamDispatchSnapshot | null; readonly forget: (deviceId: string) => boolean; readonly subscribe: (listener: (snapshots: readonly StreamDispatchSnapshot[]) => void) => () => void; }
 
 type Lane = { phase: StreamDispatchSnapshot["phase"]; busy: boolean; lastOperation: StreamOperation | null; failureCode: StreamDispatchCode | null; reason: string | null; restartResolvers: Array<(result: StreamDispatchResult) => void>; };
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；所有公开结果均有契约测试。
@@ -46,6 +46,7 @@ const empty = (deviceId: string): StreamDispatchSnapshot => freeze({ deviceId, p
 const relayRejectionReason = (value: unknown): string | null => value === "Another video transport is active" ? "ANOTHER_VIDEO_TRANSPORT_ACTIVE" : null;
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；断线迟到结果由公开契约覆盖。
 const isDisconnected = (lane: Lane): boolean => lane.phase === "disconnected";
+const isSourceUnavailable = (lane: Lane): boolean => lane.phase === "failed" && lane.failureCode === "SOURCE_UNAVAILABLE";
 
 function create(dependencies: StreamDispatcherDependencies): StreamDispatcherInstance {
   const lanes = new Map<string, Lane>();
@@ -94,6 +95,7 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     lane.busy = true; lane.phase = operation === "start" ? "starting" : "stopping"; publish();
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, request));
     if (isDisconnected(lane)) return freeze({ ok: false as const, operation, code: "DISCONNECTED" as const, state: snapshot(deviceId, lane) });
+    if (isSourceUnavailable(lane)) return freeze({ ok: false as const, operation, code: "SOURCE_UNAVAILABLE" as const, state: snapshot(deviceId, lane) });
     if (!sent.ok) return result(deviceId, lane, operation, false, "DEPENDENCY_FAILURE");
     const payload = attempt(() => {
       if (!record(sent.value)) return null;
@@ -163,6 +165,19 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     get: (deviceId) => validId(deviceId) && lanes.has(deviceId) ? snapshot(deviceId, lanes.get(deviceId)!) : empty(typeof deviceId === "string" ? deviceId : ""),
     list,
     recordDisconnected: (deviceId) => { const lane = lanes.get(deviceId); if (!lane) return null; lane.phase = "disconnected"; lane.busy = false; lane.failureCode = "DISCONNECTED"; lane.reason = null; const state = snapshot(deviceId, lane); const resolvers = lane.restartResolvers.splice(0); publish(); settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "DISCONNECTED")); return state; },
+    recordSourceUnavailable: (deviceId) => {
+      const lane = lanes.get(deviceId);
+      if (!lane || !["starting", "streaming", "stopping"].includes(lane.phase)) return null;
+      lane.phase = "failed";
+      lane.busy = false;
+      lane.failureCode = "SOURCE_UNAVAILABLE";
+      lane.reason = null;
+      const state = snapshot(deviceId, lane);
+      const resolvers = lane.restartResolvers.splice(0);
+      publish();
+      settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "SOURCE_UNAVAILABLE"));
+      return state;
+    },
     forget: (deviceId) => { const lane = lanes.get(deviceId); if (!lane || !["idle", "failed", "disconnected"].includes(lane.phase)) return false; lanes.delete(deviceId); publish(); return true; },
     subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; }
   });

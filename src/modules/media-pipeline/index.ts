@@ -50,6 +50,10 @@ export interface MediaPipelineInstance {
   readonly notifyPlaybackReady: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
   readonly selectPlayer: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
   readonly clearPlayer: () => PipelineResult<MediaSnapshot>;
+  /** Discards a source whose MSDK AirLink or primary camera is no longer connected. */
+  readonly invalidateStreamSource: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
+  /** Allows a source only after a new, manually requested RTMP start has been confirmed. */
+  readonly allowStreamSource: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
   readonly snapshot: () => MediaSnapshot;
   readonly dispose: () => void;
 }
@@ -87,6 +91,9 @@ function validInput(value: unknown): value is StartInput {
   if (typeof raw.httpFlvRootDirectory !== "string") return false;
   return raw.httpFlvRootDirectory.trim().length > 0;
 }
+function validDeviceId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
+}
 function create(dependencies: MediaPipelineDependencies, options: MediaPipelineOptions): MediaPipelineInstance {
   const endpointApi = NetworkEndpoint.create(options.rtmpPort);
   const httpFlv = HttpFlvServer.create(dependencies.httpFlv);
@@ -99,6 +106,7 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
   let httpFlvListening = false;
   let rtmpListening = false;
   const streams = new Map<string, StreamRecord>();
+  const invalidatedSources = new Set<string>();
   const clock = dependencies.clock ?? (() => Date.now());
   const flvUrl = (deviceId: string): string => `http://127.0.0.1:${options.httpFlvPort}/live/${encodeURIComponent(deviceId)}.flv`;
   const markReady = (record: StreamRecord, deviceId: string): void => {
@@ -121,6 +129,7 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
   const syncStreams = (): void => {
     const ingest = rtmpIngest.snapshot();
     for (const stream of ingest.streams) {
+      if (invalidatedSources.has(stream.deviceId)) continue;
       if (stream.phase === "active" && !streams.has(stream.deviceId)) {
         const streamId = `stream-${nextStreamNumber}`;
         nextStreamNumber += 1;
@@ -213,6 +222,28 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
       if (phase === "disposed") return failure("DISPOSED", current());
       const cleared = player.clear();
       return cleared.ok ? success(current()) : failure("PLAYER_FAILED", current());
+    },
+    invalidateStreamSource: (deviceId) => {
+      if (phase === "disposed") return failure("DISPOSED", current());
+      if (!validDeviceId(deviceId)) return failure("INVALID_INPUT", current());
+      invalidatedSources.add(deviceId);
+      const record = streams.get(deviceId);
+      if (record !== undefined) {
+        record.health.stop(record.streamId);
+        streams.delete(deviceId);
+      }
+      const selected = player.snapshot().deviceId === deviceId;
+      const cleared = selected ? player.clear() : null;
+      revision += 1;
+      return cleared?.ok === false ? failure("PLAYER_FAILED", current()) : success(current());
+    },
+    allowStreamSource: (deviceId) => {
+      if (phase === "disposed") return failure("DISPOSED", current());
+      if (!validDeviceId(deviceId)) return failure("INVALID_INPUT", current());
+      invalidatedSources.delete(deviceId);
+      syncStreams();
+      revision += 1;
+      return success(current());
     },
     dispose: () => {
       if (phase === "disposed") return;

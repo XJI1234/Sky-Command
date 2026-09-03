@@ -672,6 +672,8 @@ function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
 }
 
 function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
+  // Cancel any renderer-local FLV retry after the phone has queued recovery stop.
+  if (view.streamSourceUnavailable) detachVideo();
   const devices = view.devices as readonly Record<string, unknown>[];
   const fill = (id: string, selected: string | null, onChange: (value: string) => void): void => {
     const select = el(id) as HTMLSelectElement;
@@ -740,9 +742,9 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   }
   const stopButton = document.querySelector('button[data-action="stream-stop"]');
   if (stopButton instanceof HTMLButtonElement) {
-    const canStop = !streamStopping && (view.streamCanStop || attachedUrl !== null);
+    const canStop = !view.streamSourceUnavailable && !streamStopping && (view.streamCanStop || attachedUrl !== null);
     stopButton.disabled = !canStop;
-    stopButton.title = canStop ? "停止图传" : streamStopping ? "正在等待手机确认停止" : "当前没有进行中的图传";
+    stopButton.title = canStop ? "停止图传" : view.streamSourceUnavailable ? "图传源已断开，手机已自动停止图传" : streamStopping ? "正在等待手机确认停止" : "当前没有进行中的图传";
   }
   const guidance = view.guidance as { message?: string } | null;
   el("guidance").textContent = guidance?.message ?? "";

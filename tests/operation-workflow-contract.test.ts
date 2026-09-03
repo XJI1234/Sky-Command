@@ -1306,4 +1306,50 @@ describe("飞行作业工作流模块契约", () => {
     signal();
     expect(disconnected).toEqual(["relay-a"]);
   });
+
+  it("AirLink 或主相机失效时作废生产图传源并清空本地旧画面，不自动重启", async () => {
+    let airLink = "CONNECTED";
+    let camera = "CONNECTED";
+    let signal!: () => void;
+    const sourceUnavailable: string[] = [];
+    const invalidated: string[] = [];
+    const allowed: string[] = [];
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
+        telemetry: () => ({ payload: { airLink, camera }, capabilities: { liveVideo: airLink === "CONNECTED" && camera === "CONNECTED" } }),
+        controlTelemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        subscribe: (listener: () => void) => { signal = listener; return () => undefined; },
+      },
+      liveStreamControl: {
+        start: async () => ({ ok: true }), stop: async () => ({ ok: true }),
+        get: () => ({ deviceId: "relay-a", phase: "streaming" }), list: () => [],
+        recordDisconnected: () => null,
+        recordSourceUnavailable: (deviceId: string) => { sourceUnavailable.push(deviceId); return { deviceId, phase: "failed", failureCode: "SOURCE_UNAVAILABLE" }; },
+        forget: () => false, subscribe: () => () => undefined,
+      },
+      mediaPipeline: {
+        snapshot: () => ({ streams: [{ deviceId: "relay-a", phase: "ready" }] }), evaluate: () => ({ ok: true }), selectPlayer: () => ({ ok: true }), clearPlayer: () => ({ ok: true }),
+        invalidateStreamSource: (deviceId: string) => { invalidated.push(deviceId); return { ok: true }; },
+        allowStreamSource: (deviceId: string) => { allowed.push(deviceId); return { ok: true }; },
+      },
+    });
+
+    expect(workflow.selectVideo("relay-a")).toMatchObject({ ok: true });
+    camera = "DISCONNECTED";
+    signal();
+    signal();
+    expect(sourceUnavailable).toEqual(["relay-a"]);
+    expect(invalidated).toEqual(["relay-a"]);
+
+    camera = "CONNECTED";
+    signal();
+    expect(sourceUnavailable).toEqual(["relay-a"]);
+    expect(invalidated).toEqual(["relay-a"]);
+    expect(allowed).toEqual([]);
+
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: true });
+    expect(allowed).toEqual(["relay-a"]);
+  });
 });

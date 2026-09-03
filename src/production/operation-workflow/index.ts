@@ -19,6 +19,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   const assignments = AssignmentRegistry.create();
   const pending = new Map<string, string>();
   const landingIntents = new Map<string, "requested" | "stopped">();
+  const unavailableVideoSources = new Set<string>();
   const listeners = new Set<(snapshot: unknown) => void>();
   let selectedRouteId: string | null = null;
   let selectedVideoDeviceId: string | null = null;
@@ -81,7 +82,28 @@ function create(dependencies: OperationWorkflowDependencies) {
   };
   const forgetVideo = (deviceId: string): void => {
     try { dependencies.liveStreamControl.recordDisconnected(deviceId); } catch { /* downstream retains its own failure state */ }
+    try { dependencies.mediaPipeline.invalidateStreamSource(deviceId); } catch { /* stale media must never retain an old player selection */ }
     if (selectedVideoDeviceId === deviceId) selectedVideoDeviceId = null;
+  };
+  const videoSourceAvailable = (deviceId: string): boolean => {
+    const payload = record(read(telemetryRaw(deviceId), "payload"));
+    return read(payload, "airLink") === "CONNECTED" && read(payload, "camera") === "CONNECTED";
+  };
+  const synchronizeVideoSources = (current: ReadonlySet<string>): void => {
+    for (const deviceId of current) {
+      if (videoSourceAvailable(deviceId)) {
+        unavailableVideoSources.delete(deviceId);
+        continue;
+      }
+      if (unavailableVideoSources.has(deviceId)) continue;
+      const phase = read(stream(deviceId), "phase");
+      const hasActiveMedia = Array.isArray(read(media(), "streams")) && (read(media(), "streams") as readonly unknown[]).some((entry) => read(entry, "deviceId") === deviceId);
+      if (phase !== "starting" && phase !== "streaming" && phase !== "stopping" && !hasActiveMedia && selectedVideoDeviceId !== deviceId) continue;
+      unavailableVideoSources.add(deviceId);
+      try { dependencies.liveStreamControl.recordSourceUnavailable(deviceId); } catch { /* independently fail closed at the player boundary */ }
+      try { dependencies.mediaPipeline.invalidateStreamSource(deviceId); } catch { /* source invalidation must not re-enter the control lane */ }
+      if (selectedVideoDeviceId === deviceId) selectedVideoDeviceId = null;
+    }
   };
   const onDisconnects = (): void => {
     const current = new Set(onlineIds());
@@ -100,6 +122,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       }
       forgetVideo(deviceId);
     }
+    synchronizeVideoSources(current);
     previousOnline = current;
     previousSessions = sessions;
     publish();
@@ -221,7 +244,11 @@ function create(dependencies: OperationWorkflowDependencies) {
       const control = currentControl(deviceId);
       if (control === null) return failure("CONTROL_STATE_UNAVAILABLE");
       const decision = readiness(deviceId, "legacy-video", control);
-      return decision.ok ? actions.startStream(deviceId) : failure("HARDWARE_NOT_READY", decision);
+      const outcome = decision.ok ? await actions.startStream(deviceId) : failure("HARDWARE_NOT_READY", decision);
+      if (outcome.ok && read(read(outcome, "value"), "ok") === true) {
+        try { dependencies.mediaPipeline.allowStreamSource(deviceId); } catch { /* confirmed source state remains authoritative even if local media has failed */ }
+      }
+      return outcome;
     }),
     stopStream: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.stopStream(deviceId)),
     checkHardwareReadiness: (deviceId: string): WorkflowResult => {
@@ -293,7 +320,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); landingIntents.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); landingIntents.clear(); unavailableVideoSources.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
   });
 }
 
