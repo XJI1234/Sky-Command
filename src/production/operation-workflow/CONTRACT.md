@@ -83,6 +83,7 @@ instance.readCameraSettings(deviceId) -> Promise<WorkflowResult>
 instance.writeCameraSettings(deviceId, patch) -> Promise<WorkflowResult>
 
 instance.refreshDeviceState(deviceId) -> Promise<WorkflowResult>
+instance.measurePhoneLink(deviceId) -> Promise<WorkflowResult>
 instance.requestFlightAction(deviceId, action) -> Promise<WorkflowResult>
 instance.confirmFlightAction(deviceId, confirmationId) -> Promise<WorkflowResult>
 instance.cancelFlightAction(deviceId, confirmationId) -> WorkflowResult
@@ -265,7 +266,8 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 ## 8. 图传与媒体规则
 
 1. `refreshDeviceState(deviceId)` 是设备页的显式只读刷新入口。它仅发送一次 `telemetry.read` 并返回稳定结果；只有手机回复的快照被适配器验证为当前会话的 `accepted` 或 `already-current` 时才成功。成功只表示桌面取得了当次手机状态，绝不表示飞机或图传就绪，也不发送 DJI、任务、图传或飞控命令。
-2. `checkHardwareReadiness(deviceId)` 只评估当前中继上报的显示事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
+2. `measurePhoneLink(deviceId)` 是设备页独立的网络自检入口。它仅在指定手机当前在线时转交 `relayOperations.measurePhoneLink` 的固定 10 样本 WebSocket RTT 报告，不发布或修改工作流快照，不读取/写入 MSDK 遥测，也不调用 DJI、任务、图传、媒体或飞控模块。成功只表示该次协议往返已完成；不可测结果同样是诊断事实，绝不改变任何控制门禁。
+3. `checkHardwareReadiness(deviceId)` 只评估当前中继上报的显示事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
 3. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须取得当前同会话的控制遥测，再通过基于该控制事实的 `legacy-video` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，不发送启动命令。该预检只检查电脑媒体服务、在线中继和 MSDK 已就绪；它不以遥控器或飞控作为图传门槛。预检未通过返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。预检通过后，`live-stream-control` 必须以同会话手机实时 `capabilities.liveVideo === true` 作为最终启动门禁；该值由手机端的 MSDK 就绪状态、`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 当前三态共同推导。值缺失或为 false 只能表示当前图传链路未就绪，绝不表示机型永久不支持。由 DJI 完成回调与 RTMP 入流确认真实结果。
 4. `stopStream(deviceId)` 不经过实机预检或控制遥测读取，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
 4. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。

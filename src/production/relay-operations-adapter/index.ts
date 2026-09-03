@@ -9,6 +9,9 @@ type JsonValue = Readonly<{ readonly kind: "null" }>
   | Readonly<{ readonly kind: "object"; readonly fields: Readonly<Record<string, JsonValue>> }>;
 
 type CommandStatus = "succeeded" | "rejected" | "timed-out" | "disconnected" | "transport-failed";
+export type PhoneLinkProbeReport =
+  | Readonly<{ readonly status: "measured"; readonly sampleCount: 10; readonly currentRttMs: number; readonly medianRttMs: number; readonly maximumRttMs: number; readonly jitterMs: number }>
+  | Readonly<{ readonly status: "unavailable" | "timed-out" | "disconnected"; readonly sampleCount: number }>;
 export type TelemetryRefreshSnapshot = "accepted" | "already-current" | "invalid" | "session-changed" | "unavailable";
 export interface TelemetryRefreshResult {
   readonly status: CommandStatus;
@@ -140,6 +143,7 @@ export interface RelayOperationsAdapterInstance {
   readonly flightGateway: () => AdapterFlightRelay;
   readonly settingsGateway: () => RelaySettingsGateway;
   readonly refreshTelemetry: (deviceId: string) => Promise<TelemetryRefreshResult>;
+  readonly measurePhoneLink: (deviceId: string) => Promise<PhoneLinkProbeReport>;
   readonly dispose: () => void;
 }
 
@@ -149,6 +153,7 @@ interface RelaySource {
   readonly ingressAddress?: (deviceId: string) => unknown;
   readonly sendMission?: (deviceId: string, payload: RelayMissionPayload) => Promise<unknown>;
   readonly sendCommand?: (deviceId: string, request: Readonly<{ readonly name: string; readonly fields: Readonly<Record<string, JsonValue>> }>) => Promise<unknown>;
+  readonly measurePhoneLink?: (deviceId: string) => Promise<unknown>;
   readonly subscribe?: (listener: (snapshot: unknown) => void) => () => void;
 }
 
@@ -173,6 +178,7 @@ const privateIpv4 = (value: unknown): value is string => {
 const validMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && value.toLowerCase().endsWith(".kmz") && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value);
 const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const nonNegativeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const nonNegativeFinite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const record = (value: unknown): UnknownRecord | null => value !== null && typeof value === "object" ? value as UnknownRecord : null;
 const read = (value: unknown, key: string): unknown => {
   const source = record(value);
@@ -188,6 +194,22 @@ const finiteNumber = (value: unknown): number | undefined => {
   if (typeof raw !== "string" || !/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u.test(raw)) return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+const probeFailure = (status: "unavailable" | "timed-out" | "disconnected", sampleCount = 0): PhoneLinkProbeReport => freeze({ status, sampleCount });
+const projectPhoneLinkProbe = (value: unknown): PhoneLinkProbeReport => {
+  const reportStatus = read(value, "status");
+  const sampleCount = read(value, "sampleCount");
+  if (reportStatus === "measured" && sampleCount === 10) {
+    const currentRttMs = read(value, "currentRttMs");
+    const medianRttMs = read(value, "medianRttMs");
+    const maximumRttMs = read(value, "maximumRttMs");
+    const jitterMs = read(value, "jitterMs");
+    if (nonNegativeFinite(currentRttMs) && nonNegativeFinite(medianRttMs) && nonNegativeFinite(maximumRttMs) && nonNegativeFinite(jitterMs) && maximumRttMs >= currentRttMs && maximumRttMs >= medianRttMs) {
+      return freeze({ status: "measured", sampleCount: 10, currentRttMs, medianRttMs, maximumRttMs, jitterMs });
+    }
+  }
+  if ((reportStatus === "unavailable" || reportStatus === "timed-out" || reportStatus === "disconnected") && nonNegativeInteger(sampleCount) && sampleCount <= 10) return probeFailure(reportStatus, sampleCount);
+  return probeFailure("unavailable");
 };
 const number = (value: unknown): number | undefined => {
   const parsed = finiteNumber(value);
@@ -567,6 +589,15 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     publish();
     return freeze({ ...outcome, snapshot: admitted === projected ? "accepted" as const : "already-current" as const });
   };
+  const measurePhoneLink = async (deviceId: string): Promise<PhoneLinkProbeReport> => {
+    if (disposed || !validId(deviceId)) return probeFailure("unavailable");
+    if (activeSession(deviceId) === null) return probeFailure("disconnected");
+    let measure: RelaySource["measurePhoneLink"];
+    try { measure = relay.measurePhoneLink; } catch { return probeFailure("unavailable"); }
+    if (typeof measure !== "function") return probeFailure("unavailable");
+    try { return projectPhoneLinkProbe(await measure.call(relay, deviceId)); }
+    catch { return probeFailure("unavailable"); }
+  };
   return freeze({
     telemetry,
     controlTelemetry,
@@ -580,6 +611,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     flightGateway: () => flightGateway,
     settingsGateway: () => settingsGateway,
     refreshTelemetry,
+    measurePhoneLink,
     dispose: () => { if (disposed) return; disposed = true; listeners.clear(); observations.clear(); try { unsubscribeRelay(); } catch { /* adapter teardown is best effort */ } }
   });
 }

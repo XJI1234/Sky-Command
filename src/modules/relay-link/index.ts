@@ -1,12 +1,12 @@
 import { RelayFrameCodec, validate, type DiagnosticEventFrame, type JsonObject, type RelayFrame } from "./protocol-core/index.js";
-import { RelayServer, type ListenAddress, type RelayConnection, type RelayServerEvent, type RelayTransport, type TimerScheduler as ServerTimerScheduler } from "./relay-server/index.js";
+import { RelayServer, type LinkProbeReport, type ListenAddress, type RelayConnection, type RelayServerEvent, type RelayTransport, type TimerScheduler as ServerTimerScheduler } from "./relay-server/index.js";
 import { DeviceRegistry, type DeviceSnapshot } from "./device-registry/index.js";
 import { CommandTracker, type CommandOutcome as TrackedCommandOutcome, type TimerScheduler as CommandTimerScheduler } from "./command-tracker/index.js";
 import { TelemetryIntake } from "./telemetry-intake/index.js";
 import { MissionSender, type MissionOutcome as SentMissionOutcome, type MissionPayload, type TimerScheduler as MissionTimerScheduler } from "./mission-sender/index.js";
 import { MissionPhaseIntake, type MissionPhase } from "./mission-phase-intake/index.js";
 
-export type { ListenAddress, RelayConnection, RelayTransport };
+export type { LinkProbeReport, ListenAddress, RelayConnection, RelayTransport };
 export type { MissionPayload } from "./mission-sender/index.js";
 export type TimerScheduler = ServerTimerScheduler & CommandTimerScheduler & MissionTimerScheduler;
 
@@ -61,6 +61,7 @@ export interface RelayLinkInstance {
   devices(): readonly RelayDeviceSnapshot[];
   sendCommand(deviceId: string, request: CommandRequest): Promise<CommandOutcome>;
   sendMission(deviceId: string, payload: MissionPayload): Promise<MissionOutcome>;
+  measurePhoneLink(deviceId: string): Promise<LinkProbeReport>;
   latestTelemetry(deviceId: string): RelayTelemetrySnapshot | null;
   /** 仅供同进程控制面选择该设备回传媒体地址，不进入公开设备快照。 */
   ingressAddress(deviceId: string): string | null;
@@ -72,6 +73,9 @@ const key = (connectionId: string, operationId: string): string => `${connection
 const frozen = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const commandFailure = (deviceId: string, commandId: string, detail: string): CommandOutcome => frozen({ deviceId, commandId, status: "rejected", detail });
 const missionFailure = (deviceId: string, missionId: string, detail: string): MissionOutcome => frozen({ deviceId, missionId, status: "rejected", detail });
+const copyProbeReport = (report: LinkProbeReport): LinkProbeReport => report.status === "measured"
+  ? frozen({ status: report.status, sampleCount: report.sampleCount, currentRttMs: report.currentRttMs, medianRttMs: report.medianRttMs, maximumRttMs: report.maximumRttMs, jitterMs: report.jitterMs })
+  : frozen({ status: report.status, sampleCount: report.sampleCount });
 
 function create(options: RelayLinkOptions): RelayLinkInstance {
   const server = RelayServer.create({
@@ -201,6 +205,13 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     const outcome = await missions.send(device.connectionId, payload, sink);
     return frozen({ deviceId, missionId: outcome.missionId, status: outcome.status, detail: outcome.detail });
   };
+  const measurePhoneLink = async (deviceId: string): Promise<LinkProbeReport> => {
+    if (!validId(deviceId)) return frozen({ status: "disconnected", sampleCount: 0 });
+    const device = registry.getByDevice(deviceId);
+    if (device === null) return frozen({ status: "disconnected", sampleCount: 0 });
+    try { return copyProbeReport(await server.measureLink(device.connectionId)); }
+    catch { return frozen({ status: "unavailable", sampleCount: 0 }); }
+  };
   return frozen({
     start: async (): Promise<StartResult> => {
       const result = await server.start();
@@ -211,6 +222,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     devices: () => snapshot().devices,
     sendCommand,
     sendMission,
+    measurePhoneLink,
     latestTelemetry: (deviceId: string): RelayTelemetrySnapshot | null => {
       if (!validId(deviceId)) return null;
       const device = registry.getByDevice(deviceId); if (!device) return null;

@@ -14,7 +14,7 @@ npm run desktop
 
 打包时 `appRoot` 可以是只读的 `resources/app.asar`，因此它只用于定位主进程、预加载脚本和渲染器资源。所有宿主运行时写入都必须在 `app.whenReady()` 后基于 `app.getPath("userData")` 解析：本机 HTTP-FLV 临时根目录是 `userData/tmp-http-flv`，启动日志是 `userData/tmp/desktop-launch.log`。不得在 `appRoot`、`projectRoot` 或 ASAR 内创建目录、写日志或写缓存。
 
-Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡，展示当前可填写的 `ws://<IPv4>:8080/relay`；手机已连接后，图传 RTMP 主机以该连接的实际本端 IPv4 为准。网卡切换只影响后续命令，不重启 `19500`、`18080` 或已发布流。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。
+Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡，展示当前可填写的 `ws://<IPv4>:8080/relay`；手机已连接后，图传 RTMP 主机以该连接的实际本端 IPv4 为准。网卡切换只影响后续命令，不重启 `19500`、`18080` 或已发布流。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。其中 `device-link-measure` 只映射既有 WebSocket 的协议层 PING/PONG 往返测量，不发送 Relay 业务帧，不调用 DJI、图传、任务或飞行控制，也不写入工作流状态或控制门禁。
 
 宿主在构造 `DesktopApplication` 时必须注入 `hardwareReadiness`：已选首选私网 IPv4 表示 `lanAddressAvailable: true`；生产装配将 `legacyMediaAvailable` 固定为 `true`（经典图传走 node-media-server + HTTP-FLV，不再依赖本机 FFmpeg 可执行文件）。这些桌面事实只供工作流在旧图传开始和直接飞控请求前做纯预检；不得作为退出条件，不得停止既有图传，不得阻止已存在飞控确认的停止/取消动作。手机中继连接经过的时间不能替代 MSDK Key 观察。
 

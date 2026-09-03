@@ -279,6 +279,12 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!validId(deviceId) || !online(deviceId)) return failure("DEVICE_OFFLINE");
       return await refreshControl(deviceId) === null ? failure("STATUS_REFRESH_FAILED") : success();
     }),
+    measurePhoneLink: async (deviceId: string): Promise<WorkflowResult> => {
+      if (disposed) return failure("DISPOSED");
+      if (!validId(deviceId) || !online(deviceId)) return failure("DEVICE_OFFLINE");
+      try { return success(await dependencies.relayOperations.measurePhoneLink(deviceId)); }
+      catch { return failure("DEPENDENCY_FAILURE"); }
+    },
     readTransmissionSettings: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => withCurrentControl(deviceId, () => actions.readTransmission(deviceId))),
     writeTransmissionSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => withCurrentControl(deviceId, () => actions.writeTransmission(deviceId, patch))),
     readCameraSettings: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => withCurrentControl(deviceId, () => actions.readCamera(deviceId))),

@@ -787,6 +787,17 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain("已读取当前手机状态，请查看各项状态");
   });
 
+  it("设备页单独测量手机连接质量，不把结果混入 MSDK 状态刷新或控制操作", () => {
+    const source = renderer();
+    expect(page()).toContain('id="device-link-measure"');
+    expect(source).toContain('bridge().invoke("device-link-measure", { deviceId })');
+    expect(source).toContain("手机连接质量 [WebSocket PING/PONG]");
+    expect(source).toContain("当前 ");
+    expect(source).toContain("中位 ");
+    expect(source).toContain("最大 ");
+    expect(source).toContain("抖动 ");
+  });
+
   it("由任务投影禁用不合法按钮，并在执行前重新确认已上传任务身份", () => {
     const source = renderer();
     expect(source).toContain("view.missionActions[action]");

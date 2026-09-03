@@ -2,6 +2,11 @@ import { ProtocolLimits, RelayFrameCodec, type DecodeResult, type ProtocolError,
 
 export interface ListenAddress { readonly host: string; readonly port: number; }
 
+export type RelayConnectionProbeResult =
+  | Readonly<{ readonly status: "measured"; readonly rttMs: number }>
+  | Readonly<{ readonly status: "timed-out" }>
+  | Readonly<{ readonly status: "unavailable" }>;
+
 export interface RelayConnection {
   /** 本端接收该连接时使用的 IPv4；只供内部下游选择返回链路。 */
   readonly localAddress?: string;
@@ -10,6 +15,8 @@ export interface RelayConnection {
   onMessage(listener: (bytes: Uint8Array) => void): () => void;
   onClose(listener: (reason?: string) => void): () => void;
   onError(listener: () => void): () => void;
+  /** 可选传输级单次往返测量；不发送中继协议帧。 */
+  probeLink?(): Promise<RelayConnectionProbeResult>;
 }
 
 export interface RelayTransport {
@@ -50,6 +57,9 @@ export type RelayServerErrorCode = "SERVER_ALREADY_STARTED" | "LISTEN_FAILED" | 
 export interface RelayServerError { readonly code: RelayServerErrorCode; readonly message: string; }
 export type StartResult = Readonly<{ readonly ok: true; readonly value: RelayServerSnapshot }> | Readonly<{ readonly ok: false; readonly error: RelayServerError }>;
 export type SendResult = Readonly<{ readonly ok: true }> | Readonly<{ readonly ok: false; readonly error: RelayServerError }>;
+export type LinkProbeReport =
+  | Readonly<{ readonly status: "measured"; readonly sampleCount: number; readonly currentRttMs: number; readonly medianRttMs: number; readonly maximumRttMs: number; readonly jitterMs: number }>
+  | Readonly<{ readonly status: "unavailable" | "timed-out" | "disconnected"; readonly sampleCount: number }>;
 
 export type RelayServerEvent =
   | Readonly<{ readonly kind: "state-changed"; readonly snapshot: RelayServerSnapshot }>
@@ -65,12 +75,21 @@ export interface RelayServerInstance {
   snapshot(): RelayServerSnapshot;
   subscribe(listener: (event: RelayServerEvent) => void): () => void;
   send(connectionId: string, bytes: Uint8Array): Promise<SendResult>;
+  measureLink(connectionId: string): Promise<LinkProbeReport>;
 }
 
 const protocolError = (code: ProtocolError["code"], message: string): ProtocolError => Object.freeze({ code, message });
 const serverError = (code: RelayServerErrorCode, message: string): RelayServerError => Object.freeze({ code, message });
 const success = <T extends object>(value: T): Readonly<{ readonly ok: true } & T> => Object.freeze({ ok: true as const, ...value });
 const failure = <T = never>(code: RelayServerErrorCode, message: string): Readonly<{ readonly ok: false; readonly error: RelayServerError }> => Object.freeze({ ok: false as const, error: serverError(code, message) });
+const probeFailure = (status: "unavailable" | "timed-out" | "disconnected", sampleCount: number): LinkProbeReport => Object.freeze({ status, sampleCount });
+const probeSuccess = (samples: readonly number[]): LinkProbeReport => {
+  const ordered = [...samples].sort((left, right) => left - right);
+  const middle = ordered.length / 2;
+  const medianRttMs = (ordered[middle - 1]! + ordered[middle]!) / 2;
+  const jitterMs = samples.slice(1).reduce((total, value, index) => total + Math.abs(value - samples[index]!), 0) / (samples.length - 1);
+  return Object.freeze({ status: "measured", sampleCount: samples.length, currentRttMs: samples[samples.length - 1]!, medianRttMs, maximumRttMs: ordered[ordered.length - 1]!, jitterMs });
+};
 
 function create(options: RelayServerOptions): RelayServerInstance {
   let state: RelayServerState = "stopped";
@@ -90,6 +109,7 @@ function create(options: RelayServerOptions): RelayServerInstance {
     closed: boolean;
     inbound: Promise<void> | null;
     outbound: Promise<void>;
+    measurement: Promise<LinkProbeReport> | null;
     unsubscribe: readonly (() => void)[];
   }
 
@@ -168,7 +188,7 @@ function create(options: RelayServerOptions): RelayServerInstance {
     }
     const entry: InternalConnection = {
       id: options.createConnectionId(), transport: transportConnection, phase: "awaiting-hello", deviceId: null, sessionId: null,
-      timeout: null, closed: false, inbound: null, outbound: Promise.resolve(), unsubscribe: []
+      timeout: null, closed: false, inbound: null, outbound: Promise.resolve(), measurement: null, unsubscribe: []
     };
     connections.set(entry.id, entry);
     entry.timeout = options.scheduler.setTimeout(() => { if (entry.phase === "awaiting-hello") finish(entry, "handshake-timeout"); }, options.handshakeTimeoutMs);
@@ -233,13 +253,38 @@ function create(options: RelayServerOptions): RelayServerInstance {
     );
     return result;
   };
+  const measureLink = (connectionId: string): Promise<LinkProbeReport> => {
+    const entry = connections.get(connectionId);
+    if (!entry || entry.closed || entry.phase !== "paired") return Promise.resolve(probeFailure("disconnected", 0));
+    if (entry.measurement !== null) return entry.measurement;
+    const operation = (async (): Promise<LinkProbeReport> => {
+      const samples: number[] = [];
+      for (let index = 0; index < 10; index += 1) {
+        if (entry.closed || entry.phase !== "paired") return probeFailure("disconnected", samples.length);
+        let probe: RelayConnection["probeLink"];
+        try { probe = entry.transport.probeLink; } catch { return probeFailure("unavailable", samples.length); }
+        if (typeof probe !== "function") return probeFailure("unavailable", samples.length);
+        let result: RelayConnectionProbeResult;
+        try { result = await probe.call(entry.transport); } catch { return probeFailure("unavailable", samples.length); }
+        if (entry.closed || entry.phase !== "paired") return probeFailure("disconnected", samples.length);
+        if (result.status !== "measured") return probeFailure(result.status, samples.length);
+        if (!Number.isFinite(result.rttMs) || result.rttMs < 0) return probeFailure("unavailable", samples.length);
+        samples.push(result.rttMs);
+      }
+      return probeSuccess(samples);
+    })();
+    entry.measurement = operation;
+    void operation.finally(() => { if (entry.measurement === operation) entry.measurement = null; });
+    return operation;
+  };
 
   return Object.freeze({
     start,
     stop,
     snapshot,
     subscribe(listenerToAdd: (event: RelayServerEvent) => void): () => void { subscribers.add(listenerToAdd); let active = true; return () => { if (active) { active = false; subscribers.delete(listenerToAdd); } }; },
-    send
+    send,
+    measureLink
   });
 }
 

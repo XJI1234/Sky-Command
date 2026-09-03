@@ -1,12 +1,12 @@
 import { WebSocket, WebSocketServer } from "ws";
-import type { ListenAddress, RelayConnection, RelayTransport } from "../../modules/relay-link/relay-server/index.js";
+import type { ListenAddress, RelayConnection, RelayConnectionProbeResult, RelayTransport } from "../../modules/relay-link/relay-server/index.js";
 
 export interface WebSocketLike {
   readonly readyState: number;
   readonly OPEN: number;
   send(data: Uint8Array, callback?: (error?: Error) => void): void;
   close(): void;
-  ping?(): void;
+  ping?(payload?: Uint8Array): void;
   on(event: string, listener: (...args: any[]) => void): this;
   off?(event: string, listener: (...args: any[]) => void): this;
 }
@@ -29,12 +29,16 @@ export interface WebSocketServerFactory {
 export interface RelayPingScheduler {
   setInterval(callback: () => void, milliseconds: number): unknown;
   clearInterval(handle: unknown): void;
+  setTimeout?(callback: () => void, milliseconds: number): unknown;
+  clearTimeout?(handle: unknown): void;
 }
 
 export interface NodeWebSocketRelayOptions {
   readonly factory?: WebSocketServerFactory;
   readonly pingIntervalMs?: number;
+  readonly probeTimeoutMs?: number;
   readonly scheduler?: RelayPingScheduler;
+  readonly now?: () => number;
 }
 
 const productionFactory: WebSocketServerFactory = Object.freeze({
@@ -48,6 +52,8 @@ const copyBytes = (data: unknown): Uint8Array | null => {
   if (data instanceof ArrayBuffer) return new Uint8Array(data.slice(0));
   return null;
 };
+const bytesEqual = (left: Uint8Array, right: Uint8Array): boolean =>
+  left.byteLength === right.byteLength && left.every((value, index) => value === right[index]);
 
 const ipv4Address = (value: unknown): value is string => {
   if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/u.test(value)) return false;
@@ -64,16 +70,30 @@ const ingressAddress = (request: UpgradeRequestLike | undefined): string | undef
   }
 };
 
-function adapt(socket: WebSocketLike, openState: number, localAddress: string | undefined, onClosed: (connection: RelayConnection) => void, ping: Readonly<{ readonly intervalMs: number; readonly scheduler: RelayPingScheduler }>): RelayConnection & { shutdown(reason: string): void } {
+function adapt(socket: WebSocketLike, openState: number, localAddress: string | undefined, onClosed: (connection: RelayConnection) => void, ping: Readonly<{ readonly intervalMs: number; readonly probeTimeoutMs: number; readonly scheduler: RelayPingScheduler; readonly timeout: Readonly<{ readonly set: (callback: () => void, milliseconds: number) => unknown; readonly clear: (handle: unknown) => void }> }>, now: () => number): RelayConnection & { shutdown(reason: string): void } {
   const messageListeners = new Set<(bytes: Uint8Array) => void>();
   const closeListeners = new Set<(reason?: string) => void>();
   const errorListeners = new Set<() => void>();
   let closed = false;
-  let awaitingPong = false;
+  let awaitingPong: Uint8Array | null = null;
   let pingTimer: unknown = null;
+  let pingSequence = 0;
+  let activeProbe: Readonly<{ readonly startedAtMs: number; readonly payload: Uint8Array; readonly timeout: unknown | null; readonly resolve: (result: RelayConnectionProbeResult) => void; readonly operation: Promise<RelayConnectionProbeResult> }> | null = null;
+  const nextPingPayload = (purpose: number): Uint8Array => {
+    pingSequence = (pingSequence + 1) >>> 0;
+    return Uint8Array.of(0x53, purpose, pingSequence >>> 24, (pingSequence >>> 16) & 0xff, (pingSequence >>> 8) & 0xff, pingSequence & 0xff);
+  };
+  const finishProbe = (result: RelayConnectionProbeResult): void => {
+    const probe = activeProbe;
+    if (probe === null) return;
+    activeProbe = null;
+    if (probe.timeout !== null) ping.timeout.clear(probe.timeout);
+    probe.resolve(result);
+  };
   const notifyClose = (reason: string): void => {
     if (closed) return;
     closed = true;
+    finishProbe(Object.freeze({ status: "unavailable" }));
     if (pingTimer !== null) ping.scheduler.clearInterval(pingTimer);
     pingTimer = null;
     onClosed(connection);
@@ -94,6 +114,21 @@ function adapt(socket: WebSocketLike, openState: number, localAddress: string | 
     onMessage: (listener) => { if (closed) return () => undefined; messageListeners.add(listener); let active = true; return () => { if (active) { active = false; messageListeners.delete(listener); } }; },
     onClose: (listener) => { closeListeners.add(listener); let active = true; return () => { if (active) { active = false; closeListeners.delete(listener); } }; },
     onError: (listener) => { errorListeners.add(listener); let active = true; return () => { if (active) { active = false; errorListeners.delete(listener); } }; },
+    probeLink: (): Promise<RelayConnectionProbeResult> => {
+      if (activeProbe !== null) return activeProbe.operation;
+      if (closed || socket.readyState !== openState || typeof socket.ping !== "function") return Promise.resolve(Object.freeze({ status: "unavailable" }));
+      let resolveProbe!: (result: RelayConnectionProbeResult) => void;
+      const operation = new Promise<RelayConnectionProbeResult>((resolve) => { resolveProbe = resolve; });
+      const payload = nextPingPayload(0x44);
+      activeProbe = Object.freeze({ startedAtMs: now(), payload, timeout: null, resolve: resolveProbe, operation });
+      const timeout = ping.timeout.set(() => {
+        if (activeProbe?.operation === operation) finishProbe(Object.freeze({ status: "timed-out" }));
+      }, ping.probeTimeoutMs);
+      if (activeProbe?.operation === operation) activeProbe = Object.freeze({ ...activeProbe, timeout });
+      try { socket.ping(payload.slice()); }
+      catch { finishProbe(Object.freeze({ status: "unavailable" })); }
+      return operation;
+    },
     shutdown: (reason) => { if (closed) return; notifyClose(reason); try { socket.close(); } catch { /* cleanup remains committed */ } }
   };
   socket.on("message", (data: unknown, isBinary?: boolean) => {
@@ -108,13 +143,25 @@ function adapt(socket: WebSocketLike, openState: number, localAddress: string | 
     connection.shutdown("transport-error");
   });
   socket.on("close", () => notifyClose("peer-closed"));
-  socket.on("pong", () => { awaitingPong = false; });
+  socket.on("pong", (data: unknown) => {
+    if (closed) return;
+    const payload = copyBytes(data);
+    if (payload === null) return;
+    const probe = activeProbe;
+    if (probe !== null && bytesEqual(payload, probe.payload)) {
+      const elapsedMs = now() - probe.startedAtMs;
+      finishProbe(Object.freeze({ status: "measured", rttMs: Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0 }));
+      return;
+    }
+    if (awaitingPong !== null && bytesEqual(payload, awaitingPong)) awaitingPong = null;
+  });
   if (ping.intervalMs > 0 && typeof socket.ping === "function") {
     pingTimer = ping.scheduler.setInterval(() => {
       if (closed) return;
-      if (awaitingPong) { connection.shutdown("peer-closed"); return; }
-      awaitingPong = true;
-      try { socket.ping!(); } catch { connection.shutdown("transport-error"); }
+      if (awaitingPong !== null) { connection.shutdown("peer-closed"); return; }
+      const payload = nextPingPayload(0x4b);
+      awaitingPong = payload;
+      try { socket.ping!(payload.slice()); } catch { connection.shutdown("transport-error"); }
     }, ping.intervalMs);
   }
   return connection;
@@ -122,13 +169,23 @@ function adapt(socket: WebSocketLike, openState: number, localAddress: string | 
 
 function create(options: NodeWebSocketRelayOptions = {}): RelayTransport {
   const factory = options.factory ?? productionFactory;
+  const defaultScheduler = Object.freeze({
+    setInterval: (callback: () => void, milliseconds: number) => setInterval(callback, milliseconds),
+    clearInterval: (handle: unknown) => { clearInterval(handle as NodeJS.Timeout); },
+    setTimeout: (callback: () => void, milliseconds: number) => setTimeout(callback, milliseconds),
+    clearTimeout: (handle: unknown) => { clearTimeout(handle as NodeJS.Timeout); },
+  });
+  const scheduler = options.scheduler ?? defaultScheduler;
   const ping = Object.freeze({
     intervalMs: options.pingIntervalMs ?? 15_000,
-    scheduler: options.scheduler ?? Object.freeze({
-      setInterval: (callback: () => void, milliseconds: number) => setInterval(callback, milliseconds),
-      clearInterval: (handle: unknown) => { clearInterval(handle as NodeJS.Timeout); },
+    probeTimeoutMs: typeof options.probeTimeoutMs === "number" && Number.isFinite(options.probeTimeoutMs) && options.probeTimeoutMs > 0 ? Math.min(options.probeTimeoutMs, 5_000) : 1_000,
+    scheduler,
+    timeout: Object.freeze({
+      set: scheduler.setTimeout ?? defaultScheduler.setTimeout,
+      clear: scheduler.clearTimeout ?? defaultScheduler.clearTimeout,
     }),
   });
+  const now = options.now ?? (() => performance.now());
   return Object.freeze({
     listen(address: ListenAddress, onConnection: (connection: RelayConnection) => void): Promise<{ close(): Promise<void> }> {
       return new Promise((resolve, reject) => {
@@ -139,7 +196,7 @@ function create(options: NodeWebSocketRelayOptions = {}): RelayTransport {
         catch { reject(new Error("relay listener could not start")); return; }
         const handleError = (): void => { if (!listening) reject(new Error("relay listener could not start")); };
         const handleConnection = (socket: WebSocketLike, request?: UpgradeRequestLike): void => {
-          const connection = adapt(socket, factory.openState, ingressAddress(request), (closed) => connections.delete(closed as RelayConnection & { shutdown(reason: string): void }), ping);
+          const connection = adapt(socket, factory.openState, ingressAddress(request), (closed) => connections.delete(closed as RelayConnection & { shutdown(reason: string): void }), ping, now);
           connections.add(connection);
           try { onConnection(connection); } catch { connection.shutdown("transport-error"); }
         };

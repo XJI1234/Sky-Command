@@ -4,6 +4,9 @@ import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, re
 
 type WorkspaceName = "devices" | "routes" | "flight";
 type MissionStartIntent = Readonly<{ deviceId: string; missionId: string; routeId: string; routeName: string }>;
+type PhoneLinkProbeReport =
+  | Readonly<{ readonly status: "measured"; readonly sampleCount: 10; readonly currentRttMs: number; readonly medianRttMs: number; readonly maximumRttMs: number; readonly jitterMs: number }>
+  | Readonly<{ readonly status: "unavailable" | "timed-out" | "disconnected"; readonly sampleCount: number }>;
 type RendererBridge = {
   readonly invoke: (name: string, input?: unknown) => Promise<unknown>;
   readonly relayHint?: string;
@@ -95,6 +98,8 @@ let lastPaintAtMs = 0;
 let lastSeenCurrentTime = 0;
 let selectedPlaybackDeviceId: string | null = null;
 let pendingMissionStart: MissionStartIntent | null = null;
+const phoneLinkProbes = new Map<string, PhoneLinkProbeReport>();
+let phoneLinkProbeInFlightDeviceId: string | null = null;
 
 const NO_FRAME_MS = 8_000;
 const STALL_MS = 12_000;
@@ -346,6 +351,36 @@ const statusRow = (name: string, label: string, ok: boolean): string =>
   `<div class="connection-status-row"><span class="connection-status-name">${escapeHtml(name)}</span><span class="connection-status-value${ok ? " ok" : ""}">${escapeHtml(label)}</span></div>`;
 
 const finiteNumber = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
+const nonNegativeFinite = (value: unknown): value is number => {
+  const number = finiteNumber(value);
+  return number !== null && number >= 0;
+};
+const phoneLinkProbeReport = (value: unknown): PhoneLinkProbeReport => {
+  const status = read(value, "status");
+  const sampleCount = finiteNumber(read(value, "sampleCount"));
+  if (status === "measured" && sampleCount === 10) {
+    const currentRttMs = read(value, "currentRttMs");
+    const medianRttMs = read(value, "medianRttMs");
+    const maximumRttMs = read(value, "maximumRttMs");
+    const jitterMs = read(value, "jitterMs");
+    if (nonNegativeFinite(currentRttMs) && nonNegativeFinite(medianRttMs) && nonNegativeFinite(maximumRttMs) && nonNegativeFinite(jitterMs) && maximumRttMs >= currentRttMs && maximumRttMs >= medianRttMs) {
+      return Object.freeze({ status, sampleCount, currentRttMs, medianRttMs, maximumRttMs, jitterMs });
+    }
+  }
+  if ((status === "unavailable" || status === "timed-out" || status === "disconnected") && sampleCount !== null && Number.isInteger(sampleCount) && sampleCount >= 0 && sampleCount <= 10) {
+    return Object.freeze({ status, sampleCount });
+  }
+  return Object.freeze({ status: "unavailable", sampleCount: 0 });
+};
+const milliseconds = (value: number): string => `${Math.round(value * 10) / 10}`;
+const phoneLinkProbeLabel = (report: PhoneLinkProbeReport | undefined, measuring: boolean): string => {
+  if (measuring) return "测量中：正在发送 10 次 WebSocket PING";
+  if (report === undefined) return "尚未测量";
+  if (report.status === "measured") return `当前 ${milliseconds(report.currentRttMs)} ms · 中位 ${milliseconds(report.medianRttMs)} ms · 最大 ${milliseconds(report.maximumRttMs)} ms · 抖动 ${milliseconds(report.jitterMs)} ms`;
+  if (report.status === "timed-out") return `不可测：第 ${report.sampleCount + 1} 次 WebSocket PING 在 1 秒内未收到 PONG`;
+  if (report.status === "disconnected") return "不可测：手机连接已断开";
+  return "不可测：未获得有效 WebSocket PING/PONG 回应";
+};
 const optionalText = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 ? value : null;
 const durationLabel = (value: unknown): string | null => {
   const seconds = finiteNumber(value);
@@ -611,6 +646,11 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const refresh = el("device-refresh") as HTMLButtonElement;
   refresh.disabled = inspected === undefined;
   refresh.title = inspected === undefined ? "请先选择已连接的手机" : "读取当前手机状态";
+  const measure = el("device-link-measure") as HTMLButtonElement;
+  const inspectedDeviceId = inspected === undefined ? null : String(inspected.deviceId);
+  const measuring = inspectedDeviceId !== null && phoneLinkProbeInFlightDeviceId === inspectedDeviceId;
+  measure.disabled = inspectedDeviceId === null || measuring;
+  measure.title = inspectedDeviceId === null ? "请先选择已连接的手机" : measuring ? "正在测量手机连接" : "仅测量电脑与手机的 WebSocket 往返时间";
   const connection = inspected === undefined ? {} : inspected.connection as Record<string, unknown> ?? {};
   const msdk = msdkFact(connection);
   const pairing = pairingFact(connection);
@@ -620,6 +660,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
       <h3 class="device-status-heading">连接状态</h3>
       <div class="connection-status-list" aria-label="连接状态">
         ${statusRow("电脑到手机中继 [桌面 Relay Session]", "中继在线", true)}
+        ${statusRow("手机连接质量 [WebSocket PING/PONG]", phoneLinkProbeLabel(inspectedDeviceId === null ? undefined : phoneLinkProbes.get(inspectedDeviceId), measuring), !measuring && phoneLinkProbes.get(inspectedDeviceId ?? "")?.status === "measured")}
         ${statusRow("MSDK 生命周期 [SDKManager]", msdk.label, msdk.ok)}
         ${statusRow("遥控器连接 [RemoteControllerKey.KeyConnection]", connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知"), connected(connection, "remoteController"))}
         ${statusRow("对频状态 [RemoteControllerKey.KeyPairingStatus]", pairing.label, pairing.ok)}
@@ -886,6 +927,27 @@ el("device-refresh").addEventListener("click", async () => {
   } catch {
     show("状态刷新失败，请检查手机连接后重试");
   } finally {
+    await render();
+  }
+});
+
+el("device-link-measure").addEventListener("click", async () => {
+  const view = await projectView();
+  const deviceId = view.missionDeviceId;
+  if (deviceId === null) { show("请先选择已连接的手机"); return; }
+  if (phoneLinkProbeInFlightDeviceId !== null) { show("正在测量手机连接，请等待本次结果"); return; }
+  phoneLinkProbeInFlightDeviceId = deviceId;
+  await render();
+  try {
+    const report = phoneLinkProbeReport(deepUnwrap(await bridge().invoke("device-link-measure", { deviceId }), "status"));
+    phoneLinkProbes.set(deviceId, report);
+    show(report.status === "measured" ? "已完成手机连接测量，请查看连接状态" : phoneLinkProbeLabel(report, false));
+  } catch {
+    const report = Object.freeze({ status: "unavailable" as const, sampleCount: 0 });
+    phoneLinkProbes.set(deviceId, report);
+    show("手机连接测量失败，请检查中继连接后重试");
+  } finally {
+    phoneLinkProbeInFlightDeviceId = null;
     await render();
   }
 });

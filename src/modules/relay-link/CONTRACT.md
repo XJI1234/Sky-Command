@@ -26,6 +26,7 @@ instance.stop() -> Promise<void>
 instance.devices() -> readonly RelayDeviceSnapshot[]
 instance.sendCommand(deviceId, request) -> Promise<CommandOutcome>
 instance.sendMission(deviceId, payload) -> Promise<MissionOutcome>
+instance.measurePhoneLink(deviceId) -> Promise<LinkProbeReport>
 instance.latestTelemetry(deviceId) -> TelemetrySnapshot | null
 instance.ingressAddress(deviceId) -> string | null
 instance.subscribe(listener) -> unsubscribe
@@ -40,6 +41,8 @@ instance.subscribe(listener) -> unsubscribe
 配对时原子登记设备；连接关闭时删除设备和遥测，取消该连接全部待处理命令/任务。`send-failed` 与对端关闭、替换会话、传输错误相同：等待中的命令标为 `disconnected`，等待中的任务立即结束，不得保持 pending 或伪装成功。桌面结束等待只表示本端不再等待结果，不表示飞机上的 DJI 操作已经停下。手机新连接必须重新 hello/paired。入站遥测、命令结果、任务结果只路由给各自子模块；未知但有效业务帧忽略以支持前向兼容。畸形帧由服务器隔离，根监听器绝不见到原始字节或协议异常。
 
 目标设备不存在、ID 生成无效、无法构造协议帧或子模块拒绝时，发送不产生传输效果。命令只在匹配结果、超时、断线或发送失败后完成；任务只在匹配 `mission-result`、超时、断线或传输失败后完成，KMZ 分块发送完毕不是任务成功。`telemetry.read` 是一次性遥测刷新，由 `sendCommand` 下发空字段；成功只表示手机已发布当前快照，不表示 SDK、遥控或飞机已就绪。结果仅含 `deviceId`、请求/生成 ID、状态和有界详情，绝不含连接 ID、原始字节、路径或 Socket 错误。
+
+`measurePhoneLink(deviceId)` 是桌面本机到当前已配对手机的独立 WebSocket 协议往返自检，不是 DJI 遥测刷新，也不模拟或承载视频。它把 `deviceId` 映射到当前连接后委托 `relay-server.measureLink`，返回深度冻结、脱敏的 10 样本链路报告；设备离线、会话替换、超时或传输不支持只返回不可测报告。该报告不进入 `RelayLinkSnapshot`，不持久化、不改变 `devices`、不触发命令/任务等待器，也永远不能作为图传、航线或飞行动作的门禁输入。
 
 ## 边界、兼容和验证
 

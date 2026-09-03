@@ -27,6 +27,35 @@ const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkf
 } as never);
 
 describe("飞行作业工作流模块契约", () => {
+  it("在不改变控制状态或门禁的前提下转交手机在线链路自检", async () => {
+    let calls = 0;
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
+        telemetry: () => ({ payload: {}, capabilities: {} }),
+        controlTelemetry: () => ({ payload: {}, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        measurePhoneLink: async (deviceId: string) => {
+          calls += 1;
+          expect(deviceId).toBe("relay-a");
+          return Object.freeze({ status: "measured", sampleCount: 10, currentRttMs: 15, medianRttMs: 14, maximumRttMs: 22, jitterMs: 3 });
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+    const probeable = workflow as typeof workflow & { readonly measurePhoneLink?: (deviceId: string) => Promise<unknown> };
+    const revisionBefore = workflow.snapshot().revision;
+
+    expect(typeof probeable.measurePhoneLink).toBe("function");
+    await expect(probeable.measurePhoneLink!("relay-a")).resolves.toEqual({
+      ok: true,
+      value: { status: "measured", sampleCount: 10, currentRttMs: 15, medianRttMs: 14, maximumRttMs: 22, jitterMs: 3 },
+    });
+    expect(calls).toBe(1);
+    expect(workflow.snapshot().revision).toBe(revisionBefore);
+    await expect(probeable.measurePhoneLink!("offline")).resolves.toEqual({ ok: false, code: "DEVICE_OFFLINE" });
+  });
+
   it("快照分别投影显示遥测与控制遥测，控制状态不复用显示状态", () => {
     const workflow = workflowWith({
       relayOperations: {

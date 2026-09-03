@@ -2,6 +2,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { describe, expect, it } from "vitest";
 import { RelayFrameCodec, type RelayFrame } from "../src/modules/relay-link/protocol-core/index.js";
 import { RelayLink, type RelayLinkOptions, type RelayConnection, type RelayTransport, type TimerScheduler, type RelayLinkSnapshot } from "../src/modules/relay-link/index.js";
+import type { RelayConnectionProbeResult } from "../src/modules/relay-link/relay-server/index.js";
 
 class Scheduler implements TimerScheduler {
   private next = 1;
@@ -16,6 +17,8 @@ class Connection implements RelayConnection {
   readonly closed = { value: false };
   failSends = false;
   readonly localAddress?: string;
+  readonly probeResults: RelayConnectionProbeResult[] = [];
+  probeCalls = 0;
   private messages = new Set<(bytes: Uint8Array) => void>();
   private closes = new Set<(reason?: string) => void>();
   private errors = new Set<() => void>();
@@ -25,6 +28,10 @@ class Connection implements RelayConnection {
   onMessage(listener: (bytes: Uint8Array) => void): () => void { this.messages.add(listener); return () => this.messages.delete(listener); }
   onClose(listener: (reason?: string) => void): () => void { this.closes.add(listener); return () => this.closes.delete(listener); }
   onError(listener: () => void): () => void { this.errors.add(listener); return () => this.errors.delete(listener); }
+  async probeLink(): Promise<RelayConnectionProbeResult> {
+    this.probeCalls += 1;
+    return this.probeResults.shift() ?? Object.freeze({ status: "unavailable" });
+  }
   emit(frame: RelayFrame): void { const encoded = RelayFrameCodec.encode(frame); if (!encoded.ok) throw new Error("fixture"); for (const listener of [...this.messages]) listener(encoded.value); }
   emitClose(reason?: string): void { for (const listener of [...this.closes]) listener(reason); }
   emitError(): void { for (const listener of [...this.errors]) listener(); }
@@ -56,6 +63,33 @@ const payload = { missionId: "mission-1", fileName: "route.kmz", bytes: new Uint
 const flush = async (): Promise<void> => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 
 describe("relay-link root contract", () => {
+  it("maps a paired phone to a read-only link quality report without sending a command", async () => {
+    const fixture = options();
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+    for (let value = 4; value <= 40; value += 4) phone.probeResults.push(Object.freeze({ status: "measured", rttMs: value }));
+    const probeable = link as typeof link & { readonly measurePhoneLink?: (deviceId: string) => Promise<unknown> };
+    const before = JSON.stringify(link.devices());
+
+    expect(typeof probeable.measurePhoneLink).toBe("function");
+    await expect(probeable.measurePhoneLink!("phone-1")).resolves.toEqual({
+      status: "measured",
+      sampleCount: 10,
+      currentRttMs: 40,
+      medianRttMs: 22,
+      maximumRttMs: 40,
+      jitterMs: 4,
+    });
+    expect(phone.probeCalls).toBe(10);
+    expect(phone.sent).toHaveLength(1);
+    expect(JSON.stringify(link.devices())).toBe(before);
+    await expect(probeable.measurePhoneLink!("offline-phone")).resolves.toEqual({ status: "disconnected", sampleCount: 0 });
+    await link.stop();
+  });
+
   it("starts, pairs devices, maps telemetry, and publishes detached snapshots", async () => {
     const fixture = options(); const link = RelayLink.create(fixture.options); const snapshots: unknown[] = [];
     link.subscribe((snapshot) => snapshots.push(snapshot));

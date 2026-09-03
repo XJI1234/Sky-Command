@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RelayFrameCodec, type RelayFrame } from "../src/modules/relay-link/protocol-core/index.js";
-import { RelayServer, type RelayConnection, type RelayTransport, type TimerScheduler } from "../src/modules/relay-link/relay-server/index.js";
+import { RelayServer, type RelayConnection, type RelayConnectionProbeResult, type RelayTransport, type TimerScheduler } from "../src/modules/relay-link/relay-server/index.js";
 
 const address = Object.freeze({ host: "127.0.0.1", port: 8765 });
 const bytes = (frame: RelayFrame): Uint8Array => {
@@ -19,6 +19,8 @@ class FakeConnection implements RelayConnection {
   private pendingSends: Array<{ bytes: Uint8Array; resolve: () => void; reject: (error: unknown) => void }> = [];
   controlledSends = false;
   failSends = false;
+  readonly probeResults: RelayConnectionProbeResult[] = [];
+  probeCalls = 0;
 
   send(bytesToSend: Uint8Array): Promise<void> {
     if (this.closed) return Promise.reject(new Error("closed"));
@@ -46,6 +48,10 @@ class FakeConnection implements RelayConnection {
   onMessage(listener: (bytes: Uint8Array) => void): () => void { this.messageListeners.add(listener); return () => this.messageListeners.delete(listener); }
   onClose(listener: (reason?: string) => void): () => void { this.closeListeners.add(listener); return () => this.closeListeners.delete(listener); }
   onError(listener: () => void): () => void { this.errorListeners.add(listener); return () => this.errorListeners.delete(listener); }
+  async probeLink(): Promise<RelayConnectionProbeResult> {
+    this.probeCalls += 1;
+    return this.probeResults.shift() ?? Object.freeze({ status: "unavailable" });
+  }
   emitMessage(value: Uint8Array): void { for (const listener of this.messageListeners) listener(value.slice()); }
   emitClose(reason?: string): void { this.closed = true; for (const listener of this.closeListeners) listener(reason); }
   emitCloseTwice(reason = "peer-closed"): void { this.closed = true; const listeners = [...this.closeListeners]; for (const listener of listeners) listener(reason); for (const listener of listeners) listener(reason); }
@@ -105,6 +111,30 @@ function createServer(overrides: Partial<{ transport: RelayTransport; scheduler:
 }
 
 describe("relay-server contract", () => {
+  it("measures ten sequential protocol round trips without sending a relay frame", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    await server.start();
+    const connection = transport.connect();
+    connection.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+    for (let value = 10; value <= 100; value += 10) connection.probeResults.push(Object.freeze({ status: "measured", rttMs: value }));
+    const probeable = server as typeof server & { readonly measureLink?: (connectionId: string) => Promise<unknown> };
+
+    expect(typeof probeable.measureLink).toBe("function");
+    await expect(probeable.measureLink!("connection-1")).resolves.toEqual({
+      status: "measured",
+      sampleCount: 10,
+      currentRttMs: 100,
+      medianRttMs: 55,
+      maximumRttMs: 100,
+      jitterMs: 10,
+    });
+    expect(connection.probeCalls).toBe(10);
+    expect(connection.sent).toHaveLength(1);
+    await server.stop();
+  });
+
   it("starts once, publishes state, and stops idempotently", async () => {
     const transport = new FakeTransport();
     const server = createServer({ transport });

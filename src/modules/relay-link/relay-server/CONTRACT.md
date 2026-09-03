@@ -13,6 +13,7 @@ instance.stop() -> Promise<void>
 instance.snapshot() -> RelayServerSnapshot
 instance.subscribe(listener) -> unsubscribe
 instance.send(connectionId, bytes) -> Promise<SendResult>
+instance.measureLink(connectionId) -> Promise<LinkProbeReport>
 ```
 
 选项只含监听地址、传输适配器、单调连接 ID 工厂、会话 ID 工厂和握手超时。适配器拥有 Socket 细节，可替换为 WebSocket、Electron 或测试实现；本模块不维护设备目录、不跟踪命令、不解释遥测、不流式发任务，也不实现 WebSocket/Electron API。
@@ -24,6 +25,8 @@ instance.send(connectionId, bytes) -> Promise<SendResult>
 每连接先处于 `awaiting-hello` 并有一次握手截止时间。首帧必须是版本 `"1"` 的有效 `hello`；成功时生成会话 ID、恰发一帧 `paired`、变为 `paired` 并发布事件。握手前其他帧、畸形字节或不支持版本都只关闭该连接并发 `protocol-error`。同一 `deviceId` 的新 `hello` 使旧连接以 `session-replaced` 关闭，新连接完成配对并获得新的 `sessionId`。配对后同一条连接再发 `hello`/`paired` 是协议错误，其他有效帧按到达顺序发一次。
 
 仅监听中且目标已配对时 `send` 才有效；它校验/复制字节、按连接排队、保持调用顺序。无效帧为 `INVALID_FRAME`，未知或未握手为 `NOT_CONNECTED`，传输拒绝为 `SEND_FAILED` 并关闭连接。协议最大帧长在适配器发送前强制执行。
+
+`measureLink` 仅用于已配对连接的非业务网络诊断。它顺序执行固定 10 次适配器级 `probeLink()`，并只返回当前 RTT、RTT 中位数、最大 RTT 和相邻样本差的平均抖动；不公开 WebSocket、PONG 载荷、连接地址或原始样本。连接未配对、适配器不支持、单次超时、关闭或会话替换时，返回稳定的不可测结果并带已完成样本数，绝不发送协议帧、改变连接阶段、写入遥测或影响待处理命令/任务。重复调用同一连接时必须复用同一整组在途测量，避免并发发包。
 
 ## 安全与验证
 

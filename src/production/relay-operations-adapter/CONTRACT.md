@@ -39,10 +39,13 @@ instance.pairingGateway() -> PairingRelayPort
 instance.flightGateway() -> FlightRelay
 instance.settingsGateway() -> RelaySettingsGateway
 instance.refreshTelemetry(deviceId) -> Promise<{ status, snapshot, result? }>
+instance.measurePhoneLink(deviceId) -> Promise<LinkProbeReport>
 instance.dispose() -> void
 ```
 
 每次调用端口工厂返回同一逻辑门面；门面不暴露 `RelayLink`。所有快照为深度隔离的冻结副本。
+
+`measurePhoneLink` 原样转交受限的桌面链路诊断报告；它不把报告投影为 MSDK 遥测、设备能力、连接状态或任何 DJI 事实，也不得修改本模块快照。它只接受当前在线手机的安全 `deviceId`，离线、超时、会话替换或底层不支持均返回稳定的不可测结果。
 
 实现中保留的 `whipStreamGateway()` 仅供封存源码与其独立测试维持可编译性；它不是生产接口，`desktop-application`、UI、IPC 和任何新业务代码不得调用或重新接线它。
 

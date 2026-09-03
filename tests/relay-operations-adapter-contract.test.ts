@@ -72,6 +72,30 @@ function relayFixture() {
 }
 
 describe("RelayOperationsAdapter", () => {
+  it("仅转交受限的手机链路报告，不把诊断变成中继命令或遥测", async () => {
+    let calls = 0;
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({
+      relay: {
+        ...fixture.relay,
+        measurePhoneLink: async (deviceId: string) => {
+          calls += 1;
+          expect(deviceId).toBe("relay-1");
+          return Object.freeze({ status: "measured", sampleCount: 10, currentRttMs: 12, medianRttMs: 11, maximumRttMs: 17, jitterMs: 2 });
+        },
+      },
+    });
+    const probeable = adapter as typeof adapter & { readonly measurePhoneLink?: (deviceId: string) => Promise<unknown> };
+
+    expect(typeof probeable.measurePhoneLink).toBe("function");
+    await expect(probeable.measurePhoneLink!("relay-1")).resolves.toEqual({
+      status: "measured", sampleCount: 10, currentRttMs: 12, medianRttMs: 11, maximumRttMs: 17, jitterMs: 2,
+    });
+    expect(calls).toBe(1);
+    expect(fixture.sent).toEqual([]);
+    await expect(probeable.measurePhoneLink!("offline")).resolves.toEqual({ status: "disconnected", sampleCount: 0 });
+  });
+
   it("将 Android 遥测枚举投影为桌面业务模块需要的受限事实", () => {
     const fixture = relayFixture();
     const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });

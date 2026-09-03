@@ -122,6 +122,10 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
         const deviceId = one(input, "deviceId");
         return deviceId === null ? failure("INVALID_INPUT") : call("refreshDeviceState", [deviceId]);
       }
+      if (method === "device.link.measure") {
+        const deviceId = one(input, "deviceId");
+        return deviceId === null ? failure("INVALID_INPUT") : call("measurePhoneLink", [deviceId]);
+      }
       if (method === "hardware.readiness") {
         const deviceId = one(input, "deviceId");
         return deviceId === null ? failure("INVALID_INPUT") : call("checkHardwareReadiness", [deviceId]);

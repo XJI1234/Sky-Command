@@ -335,7 +335,8 @@ describe("node websocket relay adapter contract", () => {
   it("clears keepalive timers, accepts pongs, and handles both supported timer handle shapes", async () => {
     class PingSocket extends Socket {
       pings = 0;
-      ping(): void { this.pings += 1; }
+      readonly pingPayloads: Uint8Array[] = [];
+      ping(payload?: Uint8Array): void { this.pings += 1; this.pingPayloads.push(payload?.slice() ?? new Uint8Array()); }
     }
     const timers: Array<() => void> = [];
     const cleared: unknown[] = [];
@@ -356,7 +357,7 @@ describe("node websocket relay adapter contract", () => {
     server.emit("connection", socket);
 
     timers[0]!();
-    socket.emit("pong");
+    socket.emit("pong", socket.pingPayloads[0]);
     timers[0]!();
     expect(socket.pings).toBe(2);
     socket.close();
@@ -382,5 +383,103 @@ describe("node websocket relay adapter contract", () => {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
     }
+  });
+
+  it("measures one protocol ping round trip without sending a relay frame", async () => {
+    class ProbeSocket extends Socket {
+      readonly pings: Uint8Array[] = [];
+      ping(payload?: Uint8Array): void { this.pings.push(payload?.slice() ?? new Uint8Array()); }
+    }
+    let now = 1_000;
+    const server = new Server();
+    const transport = NodeWebSocketRelayTransport.create({
+      factory: { openState: 1, create: () => server },
+      now: () => now,
+    } as never);
+    let connection!: WebSocketLike & { readonly probeLink?: () => Promise<unknown> };
+    const listening = transport.listen({ host: "127.0.0.1", port: 19 }, (value) => { connection = value; });
+    server.emit("listening");
+    const listener = await listening;
+    const socket = new ProbeSocket();
+    server.sockets.push(socket);
+    server.emit("connection", socket);
+
+    expect(typeof connection.probeLink).toBe("function");
+    const measured = connection.probeLink!();
+    expect(socket.pings).toHaveLength(1);
+    expect(socket.sent).toHaveLength(0);
+    now += 23;
+    socket.emit("pong", socket.pings[0]);
+
+    await expect(measured).resolves.toEqual({ status: "measured", rttMs: 23 });
+    await listener.close();
+  });
+
+  it("does not let a diagnostic pong acknowledge a keepalive ping", async () => {
+    class ProbeSocket extends Socket {
+      readonly pings: Uint8Array[] = [];
+      ping(payload?: Uint8Array): void { this.pings.push(payload?.slice() ?? new Uint8Array()); }
+    }
+    const intervals: Array<() => void> = [];
+    const server = new Server();
+    const transport = NodeWebSocketRelayTransport.create({
+      factory: { openState: 1, create: () => server },
+      pingIntervalMs: 15_000,
+      scheduler: {
+        setInterval: (callback: () => void) => { intervals.push(callback); return intervals.length; },
+        clearInterval: () => undefined,
+      },
+    });
+    let connection!: WebSocketLike & { readonly probeLink?: () => Promise<unknown> };
+    const listening = transport.listen({ host: "127.0.0.1", port: 20 }, (value) => { connection = value; });
+    server.emit("listening");
+    const listener = await listening;
+    const socket = new ProbeSocket();
+    server.sockets.push(socket);
+    server.emit("connection", socket);
+
+    const measured = connection.probeLink!();
+    intervals[0]!();
+    expect(socket.pings).toHaveLength(2);
+    expect(socket.pings[0]).not.toEqual(socket.pings[1]);
+    socket.emit("pong", socket.pings[0]);
+    await measured;
+    intervals[0]!();
+
+    expect(socket.readyState).toBe(3);
+    await listener.close();
+  });
+
+  it("returns a timed-out result when a diagnostic ping receives no matching pong", async () => {
+    class ProbeSocket extends Socket {
+      ping(_payload?: Uint8Array): void { /* the test deliberately withholds pong */ }
+    }
+    const timeouts: Array<() => void> = [];
+    const server = new Server();
+    const transport = NodeWebSocketRelayTransport.create({
+      factory: { openState: 1, create: () => server },
+      probeTimeoutMs: 500,
+      scheduler: {
+        setInterval: () => 1,
+        clearInterval: () => undefined,
+        setTimeout: (callback: () => void) => { timeouts.push(callback); return timeouts.length; },
+        clearTimeout: () => undefined,
+      },
+    } as never);
+    let connection!: WebSocketLike & { readonly probeLink?: () => Promise<unknown> };
+    const listening = transport.listen({ host: "127.0.0.1", port: 21 }, (value) => { connection = value; });
+    server.emit("listening");
+    const listener = await listening;
+    const socket = new ProbeSocket();
+    server.sockets.push(socket);
+    server.emit("connection", socket);
+
+    const measured = connection.probeLink!();
+    expect(timeouts).toHaveLength(1);
+    timeouts[0]!();
+
+    await expect(measured).resolves.toEqual({ status: "timed-out" });
+    expect(socket.readyState).toBe(1);
+    await listener.close();
   });
 });

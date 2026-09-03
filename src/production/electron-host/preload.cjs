@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const methods = Object.freeze([
   "state-snapshot", "network-hint",
-  "device-refresh",
+  "device-refresh", "device-link-measure",
   "hardware-readiness",
   "route-import", "route-preview", "route-select", "route-remove",
   "assignment-assign", "assignment-clear",
