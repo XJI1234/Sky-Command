@@ -400,6 +400,29 @@ describe("RelayOperationsAdapter", () => {
     });
   });
 
+  it("将航线命令的结构化 DJI 结果原样交给任务调度器", async () => {
+    const result = object({
+      domain: text("wayline"),
+      outcome: text("ACTION_REJECTED"),
+      errorCode: text("COMMON_SYSTEM_BUSY"),
+      errorDescription: text("The aircraft is busy"),
+    });
+    const adapter = RelayOperationsAdapter.create({ relay: {
+      devices: () => [],
+      latestTelemetry: () => null,
+      sendMission: async () => ({ status: "rejected" }),
+      sendCommand: async () => ({ status: "rejected", result }),
+    } });
+
+    await expect(adapter.missionGateway().sendCommand("relay-1", { name: "wayline.upload", fields: { confirm: true } })).resolves.toEqual({
+      deviceId: "relay-1",
+      commandId: "adapter",
+      status: "rejected",
+      detail: "中继器未确认命令",
+      result,
+    });
+  });
+
   it("pairing.status 失败时不附带结构化 result，且桌面不得下发 pairing.start/stop", async () => {
     const result = object({ pairingState: text("PAIRED") });
     const sent: string[] = [];
@@ -458,6 +481,24 @@ describe("RelayOperationsAdapter", () => {
 
     await expect(adapter.refreshTelemetry("relay-1")).resolves.toMatchObject({ status: "succeeded", snapshot: "accepted" });
     expect(adapter.controlTelemetry("relay-1")?.receivedAtMs).toEqual(expect.any(Number));
+  });
+
+  it("业务网关保留当前会话的 MSDK 遥测，不因无关硬件 Key 缺失而把可达性变成离线", () => {
+    const adapter = RelayOperationsAdapter.create({ relay: {
+      devices: () => [{ deviceId: "relay-1", sessionId: "session-1" }],
+      latestTelemetry: () => ({
+        sessionId: "session-1",
+        payload: object({ sdkAvailability: text("READY") }),
+        capabilities: object({ liveVideo: bool(true) }),
+      }),
+      sendMission: async () => ({ status: "rejected" }),
+      sendCommand: async () => ({ status: "rejected" }),
+    } });
+
+    expect(adapter.controlTelemetry("relay-1")).toBeNull();
+    expect(adapter.missionGateway().latestTelemetry("relay-1")?.payload.sdkAvailability).toBe("READY");
+    expect(adapter.streamGateway().latestTelemetry("relay-1")?.capabilities.liveVideo).toBe(true);
+    expect(adapter.flightGateway().latestTelemetry("relay-1")?.payload.sdkAvailability).toBe("READY");
   });
 
   it("让显示与门禁共同使用当前会话的 MSDK 观察，稳定事实不因时间流逝失效", async () => {
@@ -1081,6 +1122,27 @@ describe("RelayOperationsAdapter", () => {
     );
 
     expect(adapter.telemetry("relay-1")).toEqual({ deviceId: "relay-1", receivedAtMs: null, payload: {}, capabilities: {} });
+  });
+
+  it("保留图传运行期 DJI 回调的原始错误码和说明", () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+
+    fixture.replaceTelemetry(object({
+      liveStreaming: bool(false),
+      liveStreamNotice: text("DJI live stream runtime error"),
+      liveStreamRuntimeErrorCode: text("COMMON_SYSTEM_BUSY"),
+      liveStreamRuntimeErrorDescription: text("The live stream manager is busy"),
+    }), object({}));
+
+    expect(adapter.telemetry("relay-1")).toEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        liveStreaming: false,
+        liveStreamNotice: "DJI live stream runtime error",
+        liveStreamRuntimeErrorCode: "COMMON_SYSTEM_BUSY",
+        liveStreamRuntimeErrorDescription: "The live stream manager is busy",
+      }),
+    }));
   });
 
   it("以手机端注册的精确名称和字段发送航线、图传、配对与飞控命令", async () => {

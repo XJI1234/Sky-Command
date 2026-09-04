@@ -63,7 +63,7 @@ const PHASES: readonly MissionPhase[] = Object.freeze(["idle", "staging", "stage
 const STAGEABLE: readonly MissionPhase[] = Object.freeze(["idle", "completed", "failed", "disconnected"]);
 const DISCONNECTABLE: readonly MissionPhase[] = Object.freeze(["staging", "staged", "uploading", "uploaded", "starting", "running", "pausing", "paused", "resuming", "stopping"]);
 const FAILUREABLE: readonly MissionPhase[] = Object.freeze(["staging", "uploading", "starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"]);
-const STOPPABLE: readonly MissionPhase[] = Object.freeze(["starting", "running", "pausing", "paused", "resuming", "disconnected"]);
+const STOPPABLE: readonly MissionPhase[] = Object.freeze(["starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"]);
 const EVENT_TYPES: readonly string[] = Object.freeze(["stage-requested", "stage-succeeded", "upload-requested", "upload-succeeded", "upload-rejected", "start-requested", "start-succeeded", "start-rejected", "pause-requested", "pause-succeeded", "pause-rejected", "resume-requested", "resume-succeeded", "resume-rejected", "stop-requested", "stop-succeeded", "stop-rejected", "mission-completed", "operation-failed", "connection-lost", "reset", "__invalid__"]);
 
 const idleState = (): MissionPhaseState => Object.freeze({ missionId: null, phase: "idle", failureCode: null });

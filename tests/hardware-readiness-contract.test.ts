@@ -28,7 +28,7 @@ describe("hardware readiness contract", () => {
     }, "legacy-video")).toEqual({ ok: true, blockers: [] });
   });
 
-  it("reports every independent legacy-video risk in its stable priority order", () => {
+  it("reports only desktop media risks for legacy video; relay and MSDK reachability belong to the stream dispatcher", () => {
     const result = HardwareReadiness.evaluate({
       desktop: { lanAddressAvailable: false, legacyMediaAvailable: false },
       relayConnected: false,
@@ -43,20 +43,29 @@ describe("hardware readiness contract", () => {
     expect(result.blockers.map((blocker) => blocker.code)).toEqual([
       "DESKTOP_NETWORK_UNAVAILABLE",
       "LEGACY_MEDIA_UNAVAILABLE",
-      "PHONE_DISCONNECTED",
-      "SDK_NOT_READY",
     ]);
     expect(result.blockers.every((blocker) => blocker.message.length > 0 && Object.isFrozen(blocker))).toBe(true);
   });
 
-  it("requires the fly-controller fact for flight-control readiness", () => {
+  it("treats flight-control readiness as the MSDK invocation boundary, not a device-safety decision", () => {
     const result = HardwareReadiness.evaluate({
       ...ready(),
-      payload: { ...ready().payload, flightControllerConnected: false },
+      payload: { ...ready().payload, remoteControllerConnected: false, flightControllerConnected: false },
     }, "flight-control");
-    expect(result.blockers.map((blocker) => blocker.code)).toEqual([
-      "FLIGHT_CONTROLLER_DISCONNECTED",
-    ]);
+    expect(result).toEqual({ ok: true, blockers: [] });
+  });
+
+  it("does not read unrelated controller observations while checking the direct-flight invocation boundary", () => {
+    const payload = Object.defineProperties({ sdkAvailability: "READY" }, {
+      remoteController: { get: () => { throw new Error("unrelated remote-controller observation"); } },
+      flightController: { get: () => { throw new Error("unrelated flight-controller observation"); } },
+    });
+
+    expect(HardwareReadiness.evaluate({
+      desktop: { lanAddressAvailable: true, legacyMediaAvailable: true },
+      relayConnected: true,
+      payload,
+    } as never, "flight-control")).toEqual({ ok: true, blockers: [] });
   });
 
   it("keeps desktop legacy-media requirements out of flight-control readiness", () => {
@@ -75,8 +84,9 @@ describe("hardware readiness contract", () => {
     }, "flight-control")).toEqual({ ok: true, blockers: [] });
   });
 
-  it("uses raw MSDK states when compatibility booleans disagree", () => {
-    expect(HardwareReadiness.evaluate({ ...ready(), payload: { ...ready().payload, sdkAvailability: "STARTING", sdkRegistered: true } as never }, "legacy-video")).toEqual({ ok: false, blockers: [{ code: "SDK_NOT_READY", message: "手机端 DJI 尚未就绪，请在手机上确认已启动。" }] });
-    expect(HardwareReadiness.evaluate({ ...ready(), payload: { ...ready().payload, sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "DISCONNECTED", remoteControllerConnected: true, flightControllerConnected: true } as never }, "flight-control")).toEqual({ ok: false, blockers: [{ code: "FLIGHT_CONTROLLER_DISCONNECTED", message: "飞机飞控未连接，请确认飞机已开机。" }] });
+  it("uses raw MSDK lifecycle for flight control while legacy video stays desktop-only", () => {
+    expect(HardwareReadiness.evaluate({ ...ready(), payload: { ...ready().payload, sdkAvailability: "STARTING", sdkRegistered: true } as never }, "legacy-video")).toEqual({ ok: true, blockers: [] });
+    expect(HardwareReadiness.evaluate({ ...ready(), payload: { ...ready().payload, sdkAvailability: "STARTING", sdkRegistered: true } as never }, "flight-control")).toEqual({ ok: false, blockers: [{ code: "SDK_NOT_READY", message: "手机端 DJI 尚未就绪，请在手机上确认已启动。" }] });
+    expect(HardwareReadiness.evaluate({ ...ready(), payload: { ...ready().payload, sdkAvailability: "READY", remoteController: "DISCONNECTED", flightController: "UNKNOWN", remoteControllerConnected: true, flightControllerConnected: true } as never }, "flight-control")).toEqual({ ok: true, blockers: [] });
   });
 });

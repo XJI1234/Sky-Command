@@ -1,6 +1,5 @@
 export type HardwareReadinessTarget = "legacy-video" | "flight-control";
 type HardwareMsdkSdkAvailability = "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
-type HardwareMsdkLinkState = "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
 
 export interface HardwareReadinessInput {
   readonly desktop: {
@@ -10,11 +9,7 @@ export interface HardwareReadinessInput {
   readonly relayConnected: boolean;
   readonly payload: {
     readonly sdkAvailability?: HardwareMsdkSdkAvailability;
-    readonly remoteController?: HardwareMsdkLinkState;
-    readonly flightController?: HardwareMsdkLinkState;
     readonly sdkRegistered?: boolean;
-    readonly remoteControllerConnected?: boolean;
-    readonly flightControllerConnected?: boolean;
   };
 }
 
@@ -23,9 +18,7 @@ export type HardwareReadinessBlockerCode =
   | "DESKTOP_NETWORK_UNAVAILABLE"
   | "LEGACY_MEDIA_UNAVAILABLE"
   | "PHONE_DISCONNECTED"
-  | "SDK_NOT_READY"
-  | "REMOTE_CONTROLLER_DISCONNECTED"
-  | "FLIGHT_CONTROLLER_DISCONNECTED";
+  | "SDK_NOT_READY";
 
 export interface HardwareReadinessBlocker {
   readonly code: HardwareReadinessBlockerCode;
@@ -44,8 +37,6 @@ const messages: Readonly<Record<HardwareReadinessBlockerCode, string>> = freeze(
   LEGACY_MEDIA_UNAVAILABLE: "电脑图传服务不可用，请重启 Sky Command。",
   PHONE_DISCONNECTED: "手机尚未连接到电脑。",
   SDK_NOT_READY: "手机端 DJI 尚未就绪，请在手机上确认已启动。",
-  REMOTE_CONTROLLER_DISCONNECTED: "遥控器尚未连接。",
-  FLIGHT_CONTROLLER_DISCONNECTED: "飞机飞控未连接，请确认飞机已开机。",
 });
 
 interface NormalizedInput {
@@ -53,11 +44,7 @@ interface NormalizedInput {
   readonly legacyMediaAvailable: unknown;
   readonly relayConnected: unknown;
   readonly sdkAvailability: unknown;
-  readonly remoteController: unknown;
-  readonly flightController: unknown;
   readonly sdkRegistered: unknown;
-  readonly remoteControllerConnected: unknown;
-  readonly flightControllerConnected: unknown;
 }
 
 const validTarget = (value: unknown): value is HardwareReadinessTarget => value === "legacy-video" || value === "flight-control";
@@ -69,11 +56,7 @@ const normalize = (value: unknown): NormalizedInput | null => {
       legacyMediaAvailable: value.desktop.legacyMediaAvailable,
       relayConnected: value.relayConnected,
       sdkAvailability: value.payload.sdkAvailability,
-      remoteController: value.payload.remoteController,
-      flightController: value.payload.flightController,
       sdkRegistered: value.payload.sdkRegistered,
-      remoteControllerConnected: value.payload.remoteControllerConnected,
-      flightControllerConnected: value.payload.flightControllerConnected,
     });
   } catch {
     return null;
@@ -87,7 +70,6 @@ const result = (codes: readonly HardwareReadinessBlockerCode[]): HardwareReadine
     : freeze({ ok: false as const, blockers });
 };
 const validSdk = (value: unknown): value is HardwareMsdkSdkAvailability => value === "STOPPED" || value === "STARTING" || value === "READY" || value === "FAILED" || value === "UNKNOWN";
-const validLink = (value: unknown): value is HardwareMsdkLinkState => value === "CONNECTED" || value === "DISCONNECTED" || value === "UNKNOWN";
 
 export const HardwareReadiness = freeze({
   evaluate: (input: HardwareReadinessInput, target: HardwareReadinessTarget): HardwareReadinessResult => {
@@ -96,16 +78,14 @@ export const HardwareReadiness = freeze({
     const codes: HardwareReadinessBlockerCode[] = [];
     if (target === "legacy-video" && normalized.lanAddressAvailable !== true) codes.push("DESKTOP_NETWORK_UNAVAILABLE");
     if (target === "legacy-video" && normalized.legacyMediaAvailable !== true) codes.push("LEGACY_MEDIA_UNAVAILABLE");
-    if (normalized.relayConnected !== true) codes.push("PHONE_DISCONNECTED");
-    const sdkReady = normalized.sdkAvailability === undefined ? normalized.sdkRegistered === true : validSdk(normalized.sdkAvailability) && normalized.sdkAvailability === "READY";
-    if (!sdkReady) codes.push("SDK_NOT_READY");
-    // DJI 直播管理器的实际结果由异步回调确认；旧图传只要求能调用已就绪 MSDK。
+    // The legacy-video target owns only desktop ingest prerequisites. Relay/MSDK and
+    // DJI video-source facts are evaluated by StreamDispatcher's live capability gate.
     if (target === "flight-control") {
-      const remoteConnected = normalized.remoteController === undefined ? normalized.remoteControllerConnected === true : validLink(normalized.remoteController) && normalized.remoteController === "CONNECTED";
-      const flightConnected = normalized.flightController === undefined ? normalized.flightControllerConnected === true : validLink(normalized.flightController) && normalized.flightController === "CONNECTED";
-      if (!remoteConnected) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-      if (!flightConnected) codes.push("FLIGHT_CONTROLLER_DISCONNECTED");
+      if (normalized.relayConnected !== true) codes.push("PHONE_DISCONNECTED");
+      const sdkReady = normalized.sdkAvailability === undefined ? normalized.sdkRegistered === true : validSdk(normalized.sdkAvailability) && normalized.sdkAvailability === "READY";
+      if (!sdkReady) codes.push("SDK_NOT_READY");
     }
+    // Direct flight uses the same invocation boundary. DJI Action callbacks decide hardware safety.
     return result(codes);
   },
 });

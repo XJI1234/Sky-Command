@@ -4,7 +4,7 @@
 
 ## 唯一职责
 
-`stream-dispatcher` 为每个手机设备检查当前媒体接收端点与直播能力，并把已允许的开始、停止请求映射为精确的 `live-stream.start`、`live-stream.stop` 命令及稳定的按设备控制快照。
+`stream-dispatcher` 为每个手机设备检查当前媒体接收端点、命令可达性与同设备操作顺序，并把已允许的开始、停止请求映射为精确的 `live-stream.start`、`live-stream.stop` 命令及稳定的按设备控制快照。
 
 它不生成 RTMP 地址规则、不接收 RTMP、不转码、不管理播放器、不保存视频、不创建 WebSocket、不访问 DJI SDK，也不自行重试。RTMP 目标仅由 `stream-protocol-config` 构造；媒体接收事实仅由 `media-pipeline` 公开；命令传输只经过注入的 `relay-link` 端口。
 
@@ -33,14 +33,16 @@ instance.subscribe(listener) -> unsubscribe
 1. 校验设备标识和同设备互斥；
 2. 读取 `media-pipeline` 快照，只有 `phase === "running"` 且存在有效 `endpoint.host`、`endpoint.port` 时继续；
 3. 调用 `stream-protocol-config.createRtmpTarget`，获得唯一的 RTMP 目标；
-4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。开始要求中继、MSDK 以及手机端实时推导的 `capabilities.liveVideo === true`；飞控不参与。能力未知或当前未就绪时不发送命令；
+4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。开始仅要求中继与 MSDK 可达；不读取、不依赖 `capabilities.liveVideo`、AirLink、主相机、飞控或遥控器遥测来拒绝人工启动。它们的硬件可用性必须交给 DJI `startStream` 回调裁决；
 5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。
 
 当同一设备正处于 `stopping` 时，`start(deviceId)` 不是并发命令：它登记一次“停止后重启”意图，并等待现有停止命令的终态。停止成功后，调度器必须重新执行上述全部启动检查，再发送唯一一条 `live-stream.start`；停止失败、设备断线或图传源失效时，不得发送启动命令，所有已登记调用必须得到该终态失败。处于 `starting` 的同设备 `start`、以及所有其他忙碌冲突，仍返回 `OPERATION_IN_PROGRESS`。多个停止期间的启动请求可以合并为一次实际启动，但每个调用都必须收到该次启动的最终结果。
 
 `stop(deviceId)` 不读取媒体端点、不构造地址、也不走启动用的 `CapabilityGate(live-stream)`。它只校验设备标识与同设备互斥，进入 `stopping` 后发送冻结空字段对象。中继成功时进入 `idle`，失败时进入 `failed`。手机端命令成功只表示 DJI 操作结果，播放器可用性仍由 `media-pipeline` 决定。
 
-错误码只能是：`INVALID_INPUT`、`MEDIA_PIPELINE_UNAVAILABLE`、`CONFIGURATION_INVALID`、`CAPABILITY_BLOCKED`、`OPERATION_IN_PROGRESS`、`RELAY_REJECTED`、`DEPENDENCY_FAILURE`、`DISCONNECTED`、`SOURCE_UNAVAILABLE` 或 `ILLEGAL_STATE`。能力拒绝必须复制 `CapabilityGate` 的原因码。`RELAY_REJECTED` 可以把手机端已知拒绝详情映射为封闭原因码 `ANOTHER_VIDEO_TRANSPORT_ACTIVE`，但不能把遥测、RTMP URL 或原始异常带入结果。
+错误码只能是：`INVALID_INPUT`、`MEDIA_PIPELINE_UNAVAILABLE`、`CONFIGURATION_INVALID`、`CAPABILITY_BLOCKED`、`OPERATION_IN_PROGRESS`、`RELAY_REJECTED`、`STREAM_ACTION_REJECTED`、`STREAM_ACTION_INVOCATION_FAILED`、`STREAM_ACTION_UNCONFIRMED`、`DEPENDENCY_FAILURE`、`DISCONNECTED`、`SOURCE_UNAVAILABLE` 或 `ILLEGAL_STATE`。能力拒绝必须复制 `CapabilityGate` 的原因码。`RELAY_REJECTED` 可以把手机端已知拒绝详情映射为封闭原因码 `ANOTHER_VIDEO_TRANSPORT_ACTIVE`，但不能把遥测、RTMP URL 或原始异常带入结果。
+
+对 `status=rejected`，本模块只接受受限的 Android 结构化结果 `{ domain: "live-stream", outcome, errorCode?, errorDescription? }`。`ACTION_REJECTED` 必须同时包含安全的、非空的 DJI 错误码和说明，并映射为 `STREAM_ACTION_REJECTED + platformError`，供操作台原样显示；`INVOCATION_FAILED` 映射为 `STREAM_ACTION_INVOCATION_FAILED`；`RESULT_UNCONFIRMED` 以及中继 `timed-out` / `disconnected` 映射为 `STREAM_ACTION_UNCONFIRMED`。结构缺失、畸形或其他普通中继拒绝仍是 `RELAY_REJECTED`。所有非 DJI 明确拒绝的情况都不得带入或显示为 `platformError`。
 
 ## 状态、并发与订阅
 

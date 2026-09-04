@@ -9,7 +9,6 @@ const telemetry = () => ({
 
 function fixture(overrides: Partial<{
   readonly preflight: (input: unknown) => unknown;
-  readonly gate: (input: unknown) => unknown;
   readonly latestTelemetry: (deviceId: string) => unknown;
   readonly sendCommand: (deviceId: string, request: unknown) => Promise<unknown>;
 }> = {}) {
@@ -20,8 +19,7 @@ function fixture(overrides: Partial<{
       sendCommand: overrides.sendCommand ?? (async (deviceId, request) => { sent.push({ deviceId, request }); return { deviceId, commandId: "command-1", status: "succeeded", detail: "ok" }; })
     },
     preflight: { evaluateFlightAction: overrides.preflight ?? (() => ({ ok: true, blockers: [] })) },
-    capabilityGate: { evaluate: overrides.gate ?? (() => ({ ok: true, value: { operation: "direct-flight", enabled: true, reason: null } })) }
-  });
+  } as never);
   return { dispatcher, sent };
 }
 
@@ -47,15 +45,21 @@ describe("FlightCommandDispatcher", () => {
     expect(value.sent).toEqual([]);
   });
 
-  it("uses the capability gate only after preflight and refuses unavailable direct flight", async () => {
-    const order: string[] = [];
-    const value = fixture({
-      preflight: () => { order.push("preflight"); return { ok: true, blockers: [] }; },
-      gate: () => { order.push("gate"); return { ok: true, value: { operation: "direct-flight", enabled: false, reason: "DIRECT_FLIGHT_UNSUPPORTED" } }; }
-    });
-    await expect(value.dispatcher.dispatch("phone-1", "takeoff")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "DIRECT_FLIGHT_UNSUPPORTED" });
-    expect(order).toEqual(["preflight", "gate"]);
-    expect(value.sent).toEqual([]);
+  it("submits a confirmed takeoff without a generic capability gate deciding DJI hardware safety", async () => {
+    const sent: unknown[] = [];
+    let gateCalls = 0;
+    const dispatcher = FlightCommandDispatcher.create({
+      relay: {
+        latestTelemetry: () => ({ payload: { sdkAvailability: "READY", remoteController: "DISCONNECTED", flightController: "UNKNOWN", batteryPercent: 1, isFlying: true, motorsOn: true }, capabilities: {} }),
+        sendCommand: async (_deviceId, request) => { sent.push(request); return { status: "succeeded" }; },
+      },
+      preflight: { evaluateFlightAction: () => ({ ok: true, blockers: [] }) },
+      capabilityGate: { evaluate: () => { gateCalls += 1; throw new Error("direct-flight must not invoke the generic capability gate"); } },
+    } as never);
+
+    await expect(dispatcher.dispatch("phone-1", "takeoff")).resolves.toMatchObject({ ok: true, code: "SUCCEEDED" });
+    expect(gateCalls).toBe(0);
+    expect(sent).toEqual([{ name: "flight.takeoff", fields: { confirm: true } }]);
   });
 
   it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"] as const)("does not call the capability gate before sending recovery action %s", async (action) => {
@@ -77,8 +81,6 @@ describe("FlightCommandDispatcher", () => {
     expect(missing.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "PREFLIGHT_BLOCKED" });
     const failed = fixture({ preflight: () => { throw new Error("fault"); } });
     expect(failed.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-    const malformed = fixture({ gate: () => 7 });
-    expect(malformed.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     const rejected = fixture({ sendCommand: async () => ({ status: "rejected", detail: "unavailable" }) });
     await expect(rejected.dispatcher.dispatch("phone-1", "takeoff")).resolves.toMatchObject({ ok: false, code: "RELAY_REJECTED" });
     const throwing = fixture({ sendCommand: async () => { throw new Error("transport"); } });
@@ -159,8 +161,6 @@ describe("FlightCommandDispatcher", () => {
     expect(invalidBlockers.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     const getterBlockers = fixture({ preflight: () => ({ ok: false, get blockers(): never { throw new Error("blockers"); } }) });
     expect(getterBlockers.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-    const missingReason = fixture({ gate: () => ({ ok: true, value: { enabled: false } }) });
-    expect(missingReason.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "CAPABILITY_UNKNOWN" });
     const malformedResult = fixture({ sendCommand: async () => 7 });
     await expect(malformedResult.dispatcher.dispatch("phone-1", "takeoff")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     const hostileResult = fixture({ sendCommand: async () => new Proxy({}, { get() { throw new Error("result"); } }) });
@@ -178,12 +178,6 @@ describe("FlightCommandDispatcher", () => {
     expect(mappedFailure.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     const unknownStatus = fixture({ sendCommand: async () => ({ status: 4 }) });
     await expect(unknownStatus.dispatcher.dispatch("phone-1", "takeoff")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-    const gateThrow = fixture({ gate: () => { throw new Error("gate"); } });
-    expect(gateThrow.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-    const gateMalformed = fixture({ gate: () => ({ ok: true, value: 1 }) });
-    expect(gateMalformed.dispatcher.check("phone-1", "takeoff")).toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
-    const capabilityBlocked = fixture({ gate: () => ({ ok: true, value: { enabled: false, reason: null } }) });
-    await expect(capabilityBlocked.dispatcher.dispatch("phone-1", "takeoff")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "CAPABILITY_UNKNOWN" });
   });
 
   it("rechecks at dispatch time and preserves blocked results with no optional fields", async () => {
@@ -198,16 +192,14 @@ describe("FlightCommandDispatcher", () => {
     await expect(throwStatus.dispatcher.dispatch(1 as never, "takeoff")).resolves.toMatchObject({ ok: false, code: "INVALID_INPUT", deviceId: "invalid" });
   });
 
-  it("passes the exact takeoff action and link facts into both safety seams", async () => {
+  it("passes the exact takeoff action to the MSDK-invocation preflight seam", async () => {
     const inputs: unknown[] = [];
     const value = fixture({
       preflight: (input) => { inputs.push(input); return { ok: true, blockers: [] }; },
-      gate: (input) => { inputs.push(input); return { ok: true, value: { enabled: true } }; }
     });
     await expect(value.dispatcher.dispatch("phone-1", "takeoff")).resolves.toMatchObject({ ok: true, action: "takeoff" });
     expect(inputs[0]).toMatchObject({ relayConnected: true, action: "takeoff", payload: { sdkRegistered: true }, capabilities: { directFlight: true } });
-    expect(inputs[1]).toMatchObject({ operation: "direct-flight", relayConnected: true, sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true });
-    expect(inputs[1]).not.toHaveProperty("aircraftConnected");
+    expect(inputs).toHaveLength(1);
     expect(value.dispatcher.isBusy("phone-1")).toBe(false);
   });
 });

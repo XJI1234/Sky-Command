@@ -82,6 +82,7 @@ instance.dispose() -> void
 | `landingConfirmationNeeded` | 同名字段 | 仅保留 `FlightControllerKey.KeyIsLandingConfirmationNeeded` 的原始布尔值；本程序不因该字段自动调用 `KeyConfirmLanding` |
 | `takeoffFailureError`、`motorStartFailureError` | 同名字段 | 仅保留 `FlightControllerKey.KeyTakeoffFailureError`、`KeyMotorStartFailureError` 的安全 MSDK 枚举名称；包括 `NONE`、`UNKNOWN` 与每个 SDK 定义的失败码，不翻译或合并 |
 | `liveStreaming` | 同名字段 | 仅保留 Android `LiveStreamStatus.isStreaming` 的原始布尔值；缺失/JSON null 表示尚未取得或已失效，不能由 `live-stream.start`/`stop` 命令结果、桌面图传状态机或媒体指标推断 |
+| `liveStreamRuntimeErrorCode` / `liveStreamRuntimeErrorDescription` | 同名字段 | 仅当二者均为非空白、无控制字符，且分别不超过 128 / 512 Unicode 码点时成对保留；它们分别来自 Android MSDK `LiveStreamStatusListener.onError(IDJIError)` 的 `errorCode()` / `description()`，绝不能从命令失败、播放器失败或文字提示推断 |
 | `liveResolution` | 同名字段 | 仅在 `liveStreaming=true` 时保留非空白、最多 128 个 Unicode 码点且不含控制字符的字符串 |
 | `liveFps` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..240` 的有限数值 |
 | `liveVideoBitrateKbps` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..100,000` 的有限数值 |
@@ -99,6 +100,8 @@ instance.dispose() -> void
 投影只保留表中声明的安全枚举值，不得公开协议 JSON 或任意未知字段。`sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera`、`battery`、`pairing` 和新增的飞控/飞控辅助 Key 是设备页的只读 MSDK 原始状态事实：显示链路必须直接消费这些值，不能改读兼容布尔值、别名、合并多个字段或施加显示保持。`batteryPercent` 只由同一帧的 `battery=CONNECTED` 授权，不能被飞控连接状态清除或放行。`aircraft` 与兼容布尔值 `connected` 的唯一来源是 `ProductKey.KeyConnection`，只留在适配器诊断遥测中，不能显示或被读取为飞机物理连接。`sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected` 与 `pairingState` 是既有调用方的兼容投影。适配器不得把“Relay 在线”推导为“SDK 已就绪”或“飞机已连接”。
 
 `liveStreaming=false` 或未知时，适配器不得投影分辨率、帧率、码率或 RTT，避免设备页把上一轮图传留下的指标显示为当前事实。该字段与桌面图传调度的“开始已接受”和媒体管线的“已播放”独立：它们只能分别显示，互不推导或授权。
+
+图传命令端口必须保留 Android 已验证的结构化 `command-result.result`，但只允许 `stream-dispatcher` 读取其中受限的 `live-stream` 终态结果。MSDK `ACTION_REJECTED` 的错误码和说明必须透明传给该模块；普通中继失败、传输异常、超时或断连不得伪造成 DJI 的 `onFailure`。运行期 `onError` 不走命令结果，而只通过上表中的成对遥测字段进入工作流快照。
 
 `telemetry(deviceId)` 与 `controlTelemetry(deviceId)` 必须读取同一份“当前会话设备事实”，两者不得维护不同来源、不同值或不同的显示保持期。该事实以 Android MSDK Key 的持续订阅为主，手机组合根为每次实际发布的 `TelemetryFrame` 赋予单调 `telemetrySequence`；设备页显式 `telemetry.read` 只读取并回传当前已订阅的快照，不重建任何 MSDK Key 观察。订阅遥测必须同时携带 `relay-link` 为它绑定的 `sessionId`，且与当前 `{ deviceId, sessionId }` 完全一致；缺失或不一致时整条遥测不得显示、不得写入观察、不得授权控制。`controlTelemetry` 的结构化基线只要求 `sdkAvailability`、遥控器、飞控与正 `deviceRevision`；`ProductKey.KeyConnection` 可留在原始诊断遥测，但不得影响完整性或控制。AirLink 和主相机是图传能力与设备显示的原始事实，不能因缺失而阻断航线或飞控操作。图传开始则必须由 `capabilities.liveVideo` 单独实行失效关闭的门禁。有 `telemetrySequence` 的同一会话内，只有严格更大的序号才能替换当前事实；未带序号的旧兼容帧不得覆盖已带序号的事实。仅旧兼容帧之间才可回退到 `deviceRevision` 比较。一次有效 `telemetry.read` 结果可在尚未收到订阅帧时成为当前事实，但不能覆盖更高序号的订阅事实；随后抵达的新订阅帧继续替换该事实。
 

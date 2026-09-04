@@ -211,7 +211,6 @@ const start = async (options: DesktopTestHostOptions): Promise<DesktopTestHostIn
     dispatcher: FlightCommandDispatcher.create({
       relay: operations.flightGateway(),
       preflight: { evaluateFlightAction: (input) => MissionControl.PreflightCheck.evaluateFlightAction(input as never) },
-      capabilityGate: DeviceConsole.CapabilityGate,
     }),
   }, {
     now: () => Date.now(),

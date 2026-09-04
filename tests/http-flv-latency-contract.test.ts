@@ -50,7 +50,7 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).not.toContain('from "hls.js"');
     expect(source).not.toContain('invoke("webrtc-refresh")');
     expect(source).not.toContain("图传已在独立窗口播放");
-    expect(page).toContain("未就绪时「启动图传」不可点");
+    expect(page).toContain("图传源状态只供观察；是否可启动以 DJI MSDK 回调为准。");
     expect(page).toContain("#workspace-flight video");
     expect(page.slice(page.indexOf('id="workspace-flight"'))).toContain('<video id="video"');
   });

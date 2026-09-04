@@ -31,7 +31,7 @@ instance.subscribe(listener) -> unsubscribe
 | 二级模块 | 唯一职责 | 明确不负责 |
 | --- | --- | --- |
 | `stream-protocol-config` | 根据接收端点和设备标识构造、校验 RTMP 目标 | 下发命令、接收视频、保存配置 |
-| `stream-dispatcher` | 检查设备能力、接收端点和命令结果，维护按设备隔离的直播控制状态 | 构造任意协议地址、接收视频、管理媒体进程 |
+| `stream-dispatcher` | 检查命令可达性、接收端点和命令结果，维护按设备隔离的直播控制状态 | 构造任意协议地址、接收视频、管理媒体进程 |
 
 一级组合根只组合这两个公开二级接口。它只可以依赖注入的 `relay-link` 命令端口、`device-console/capability-gate` 的公开判定接口，以及 `media-pipeline` 的只读接收端点接口；禁止导入它们的内部实现。
 
@@ -45,7 +45,7 @@ rtmp://{电脑局域网接收主机}:{RTMP端口}/live/{encodeURIComponent(devic
 
 端口来自已经运行的 `media-pipeline` 公开接收端点。若中继为该设备提供了合法私网入站本端 IPv4，主机必须使用该地址；否则使用媒体管线当前端点。该入站地址不进入设备或 UI 快照，且地址选择不得重启媒体服务或改变已发布流。媒体服务未运行、端点不完整、设备标识非法或地址不能通过 RTMP 规则时，开始请求必须在桌面端被拒绝，绝不发送命令。停止不需要媒体服务端点，但仍需要设备可连接并且不允许与同设备的其他直播命令并发。
 
-手机端遥测能力字段 `capabilities.liveVideo` 是唯一能力来源。开始和停止前均通过 `CapabilityGate.evaluate({ operation: "live-stream", ... })`；未连接、SDK/遥控器/飞机链路未就绪、能力未知或不支持必须返回稳定可显示原因。能力允许只表示“可以提交”，不表示 DJI 直播或本地画面一定成功。
+手机端遥测中的 `capabilities.liveVideo` 仍表示由 `AirLinkKey.KeyConnection` 和主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 推导的当前图传源观测。它用于设备页显示与运行中的断源清理，不是图传开始门禁：中继和 MSDK 可达时，即使它为 false 或未知，也必须允许人工发出一次 `live-stream.start`，由 DJI `startStream` 回调裁决硬件是否可用。停止不复用启动门禁或媒体端点检查：在同设备命令未并发且手机仍可达时必须允许尝试停止，以处理启动半成功和恢复情形。调度器允许下发不表示 DJI 直播或本地画面一定成功。
 
 ## 状态、并发和断线
 

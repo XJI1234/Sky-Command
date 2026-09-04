@@ -135,14 +135,15 @@ describe("飞行作业工作流模块契约", () => {
     expect(uploads).toBe(1);
   });
 
-  it("无法取得当前控制快照时不上传、不启动图传，也不创建飞行确认", async () => {
+  it("不完整控制快照不阻止已确认 MSDK 就绪的上传、图传、设置或飞行动作委托", async () => {
     let uploads = 0;
     let streamStarts = 0;
     let flightRequests = 0;
+    let cameraReads = 0;
     const workflow = workflowWith({
       relayOperations: {
         devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
-        telemetry: () => ({ payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: { liveVideo: true } }),
+        telemetry: () => ({ payload: { sdkAvailability: "READY" }, capabilities: { liveVideo: true } }),
         controlTelemetry: () => null,
         refreshTelemetry: async () => ({ status: "timed-out" }),
         subscribe: () => () => undefined,
@@ -150,12 +151,14 @@ describe("飞行作业工作流模块契约", () => {
       missionControl: { upload: async () => { uploads += 1; return { ok: true }; }, get: (deviceId: string) => ({ deviceId, phase: "staged" }), subscribe: () => () => undefined },
       liveStreamControl: { start: async () => { streamStarts += 1; return { ok: true }; }, get: () => ({ phase: "idle" }), subscribe: () => () => undefined },
       flightControl: { request: () => { flightRequests += 1; return { ok: true, confirmation: { confirmationId: "confirm-a" } }; }, get: () => null, subscribe: () => () => undefined },
+      deviceSettings: { readCamera: async () => { cameraReads += 1; return { ok: true }; } },
     });
 
-    await expect(workflow.upload("relay-a")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
-    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
-    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
-    expect({ uploads, streamStarts, flightRequests }).toEqual({ uploads: 0, streamStarts: 0, flightRequests: 0 });
+    await expect(workflow.upload("relay-a")).resolves.toMatchObject({ ok: true });
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: true });
+    await expect(workflow.readCameraSettings("relay-a")).resolves.toMatchObject({ ok: true });
+    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: true });
+    expect({ uploads, streamStarts, cameraReads, flightRequests }).toEqual({ uploads: 1, streamStarts: 1, cameraReads: 1, flightRequests: 1 });
   });
 
   it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"] as const)("收尾动作 %s 不由工作流的飞控就绪预检拦截", async (action) => {
@@ -186,7 +189,7 @@ describe("飞行作业工作流模块契约", () => {
     expect(calls).toEqual([`request:relay-a:${action}`, `confirm:relay-a:confirm-${action}`]);
   });
 
-  it("降落命令已成功下发后，在 MSDK 确认落地前拒绝重复请求", async () => {
+  it("降落命令已成功下发后仍把后续请求交给可达的 MSDK", async () => {
     let requests = 0;
     const workflow = workflowWith({
       flightControl: {
@@ -210,8 +213,8 @@ describe("飞行作业工作流模块契约", () => {
 
     await expect(workflow.requestFlightAction("relay-a", "land")).resolves.toMatchObject({ ok: true });
     await expect(workflow.confirmFlightAction("relay-a", "confirm-land")).resolves.toMatchObject({ ok: true });
-    await expect(workflow.requestFlightAction("relay-a", "land")).resolves.toEqual({ ok: false, code: "LANDING_IN_PROGRESS" });
-    expect(requests).toBe(1);
+    await expect(workflow.requestFlightAction("relay-a", "land")).resolves.toMatchObject({ ok: true });
+    expect(requests).toBe(2);
   });
 
   it("停止自动降落成功后记录已停止意图并允许后续状态投影", async () => {
@@ -336,7 +339,6 @@ describe("飞行作业工作流模块契约", () => {
         ok: false,
         blockers: expect.arrayContaining([
           expect.objectContaining({ code: "SDK_NOT_READY" }),
-          expect.objectContaining({ code: "REMOTE_CONTROLLER_DISCONNECTED" }),
         ]),
       },
     });
@@ -423,7 +425,7 @@ describe("飞行作业工作流模块契约", () => {
     await Promise.resolve();
   });
 
-  it("飞控确认前状态读取失败时不下发命令，并保留待确认动作", async () => {
+  it("飞控确认时控制快照暂缺仍委托调度器，并保留下游的可达性结果", async () => {
     let control: unknown = { payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true }, capabilities: {} };
     let confirms = 0;
     let online = true;
@@ -443,7 +445,7 @@ describe("飞行作业工作流模块契约", () => {
       },
       flightControl: {
         request: () => { pending = confirmation; return { ok: true, code: "CONFIRMATION_REQUIRED", confirmation }; },
-        confirm: async () => { confirms += 1; pending = null; return { ok: true }; },
+        confirm: async () => { confirms += 1; pending = null; return { ok: false, code: "PREFLIGHT_BLOCKED" }; },
         cancel: (_deviceId: string, confirmationId: string) => { cancellations.push(confirmationId); pending = null; return { ok: true }; },
         get: () => pending,
         subscribe: () => () => undefined,
@@ -452,12 +454,15 @@ describe("飞行作业工作流模块契约", () => {
 
     await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: true });
     control = null;
-    await expect(workflow.confirmFlightAction("relay-a", "confirm-a")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
-    expect(confirms).toBe(0);
-    expect(workflow.snapshot().devices[0]?.pendingFlightAction).toEqual(confirmation);
+    await expect(workflow.confirmFlightAction("relay-a", "confirm-a")).resolves.toEqual({
+      ok: true,
+      value: { ok: false, code: "PREFLIGHT_BLOCKED" },
+    });
+    expect(confirms).toBe(1);
+    expect(workflow.snapshot().devices[0]?.pendingFlightAction).toBeNull();
     online = false;
     relayChanged();
-    expect(cancellations).toEqual(["confirm-a"]);
+    expect(cancellations).toEqual([]);
   });
 
   it("将精确 MSDK 生命周期作为只读事实投影，且不改变既有 SDK 门禁", () => {
@@ -509,7 +514,7 @@ describe("飞行作业工作流模块契约", () => {
     expect(workflow.snapshot().devices[0]?.control).not.toHaveProperty("aircraft");
   });
 
-  it("设备页立即显示本次 MSDK 连接事实，飞控类新控制仍按断开事实拒绝", async () => {
+  it("设备页立即显示本次 MSDK 连接事实，但可达 MSDK 的飞行与设置请求不由桌面遥测提前拒绝", async () => {
     let now = 0;
     let payload: Record<string, unknown> = {
       sdkRegistered: true,
@@ -582,11 +587,11 @@ describe("飞行作业工作流模块契约", () => {
     expect(workflow.snapshot().devices[0]?.connection).not.toHaveProperty("aircraft");
     expect(workflow.snapshot().devices[0]?.control).not.toHaveProperty("aircraft");
     await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: true });
-    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
-    await expect(workflow.writeTransmissionSettings("relay-a", { bandwidth: "20" })).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED" });
+    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: true });
+    await expect(workflow.writeTransmissionSettings("relay-a", { bandwidth: "20" })).resolves.toMatchObject({ ok: true });
     expect(streamStarts).toBe(1);
-    expect(flightRequests).toBe(0);
-    expect(settingsWrites).toBe(0);
+    expect(flightRequests).toBe(1);
+    expect(settingsWrites).toBe(1);
   });
 
   it("内部模块契约反映已实施的公开接口", () => {
@@ -802,7 +807,7 @@ describe("飞行作业工作流模块契约", () => {
     expect(started).toEqual(["relay-a"]);
   });
 
-  it("缺少 MSDK 图传事实时拒绝图传", async () => {
+  it("图传事实由图传控制模块裁决，工作流不重复拦截", async () => {
     let starts = 0;
     const workflow = workflowWith({
       hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true },
@@ -815,7 +820,7 @@ describe("飞行作业工作流模块契约", () => {
         subscribe: () => () => undefined,
       },
       liveStreamControl: {
-        start: async () => { starts += 1; return { ok: true }; },
+        start: async () => { starts += 1; return { ok: false, code: "CAPABILITY_BLOCKED" }; },
         stop: async () => ({ ok: true }),
         get: () => ({ phase: "idle" }),
         list: () => [],
@@ -824,11 +829,11 @@ describe("飞行作业工作流模块契约", () => {
         subscribe: () => () => undefined,
       },
     });
-    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
-    expect(starts).toBe(0);
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: true, value: { ok: false, code: "CAPABILITY_BLOCKED" } });
+    expect(starts).toBe(1);
   });
 
-  it("飞控链路未就绪时在电脑端阻止向手机发送直接飞行动作", async () => {
+  it("飞控链路未就绪时仍把确认请求交给飞控模块，由 MSDK 的 Action 回调裁决", async () => {
     let requests = 0;
     const workflow = workflowWith({
       relayOperations: {
@@ -848,12 +853,8 @@ describe("飞行作业工作流模块契约", () => {
       },
     });
 
-    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({
-      ok: false,
-      code: "HARDWARE_NOT_READY",
-      value: { blockers: [{ code: "FLIGHT_CONTROLLER_DISCONNECTED" }] },
-    });
-    expect(requests).toBe(0);
+    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: true });
+    expect(requests).toBe(1);
   });
 
   it("导入预览和删除航线时保留航线库语义，并阻止删除已分配航线", async () => {
@@ -883,9 +884,9 @@ describe("飞行作业工作流模块契约", () => {
     expect(workflow.clearAssignment("relay-a")).toMatchObject({ ok: false, code: "TASK_ACTIVE" });
     expect(workflow.selectVideo("relay-a")).toMatchObject({ ok: false, code: "VIDEO_NOT_READY" });
     expect(workflow.refreshMedia()).toMatchObject({ ok: false, code: "CLOCK_FAILURE" });
-    await expect(workflow.readCameraSettings("relay-a")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
-    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
-    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: false, code: "CONTROL_STATE_UNAVAILABLE" });
+    await expect(workflow.readCameraSettings("relay-a")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED" });
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
+    await expect(workflow.requestFlightAction("relay-a", "takeoff")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     workflow.dispose();
     expect(workflow.selectRoute("route-a")).toMatchObject({ ok: false, code: "DISPOSED" });
     await expect(workflow.importRoute({})).resolves.toMatchObject({ ok: false, code: "DISPOSED" });

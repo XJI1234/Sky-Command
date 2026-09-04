@@ -4,7 +4,7 @@
 
 ## 唯一职责
 
-`hardware-readiness` 是桌面端真机操作前的纯决策模块。它根据桌面环境事实、手机 Relay 事实和手机上报的 DJI 连接事实，判断旧 RTMP/HTTP-FLV 图传或直接飞控是否允许开始。
+`hardware-readiness` 是桌面端调用边界的纯决策模块。它根据桌面环境事实、手机 Relay 事实和手机上报的 MSDK 生命周期，判断旧 RTMP/HTTP-FLV 图传或直接飞行动作是否能够进入 MSDK。
 
 它不读取 Electron、文件系统、端口、WebSocket、DJI 或 UI；不发送命令；不改变任何图传、飞控或会话状态。宿主负责探测事实，工作流负责在动作前调用本模块。
 
@@ -27,17 +27,16 @@ interface HardwareReadinessInput {
   readonly relayConnected: boolean;
   readonly payload: {
     readonly sdkAvailability?: "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
-    readonly remoteController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
-    readonly flightController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
+    readonly sdkRegistered?: boolean;
   };
 }
 ```
 
-三个 MSDK 原始字段是唯一硬件事实来源：`sdkAvailability` 来自 Android SDK 生命周期，`remoteController` 来自 `RemoteControllerKey.KeyConnection`，`flightController` 来自 `FlightControllerKey.KeyConnection`。旧的 `*Connected` 布尔投影仅为迁移兼容保留，原始字段存在时一律忽略；缺失、`UNKNOWN`、非就绪或畸形值都不能放行开始型操作。
+`sdkAvailability` 是本模块唯一读取的 MSDK 状态，来自 Android SDK 生命周期。旧的 `sdkRegistered` 布尔投影仅为迁移兼容保留，原始字段存在时一律忽略；缺失、`UNKNOWN`、非就绪或畸形值都不能放行 MSDK 调用。遥控器、飞控与其它 MSDK Key 不属于本模块输入，避免显示事实或无关读取错误阻止命令到达 DJI。
 
-旧图传检查桌面局域网与媒体服务事实；飞控检查不要求这两项。两种检查都要求手机当前在线和 MSDK 已就绪。飞控动作额外要求遥控器和飞控连接事实均明确为已连接；旧图传不把遥控器、飞控或航线遥测当作桌面端推流门闩。中继在线经过的时间不能替代任何 MSDK Key 事实。`ProductKey.KeyConnection` 的原始值保留在 Relay 诊断遥测中，但不属于本模块输入，也不参与任何就绪结论。
+旧图传额外检查桌面局域网与媒体服务事实；直接飞行动作不要求这两项。两种检查都要求手机当前在线和 MSDK 已就绪。中继在线经过的时间不能替代 MSDK 生命周期事实。`ProductKey.KeyConnection`、`RemoteControllerKey.KeyConnection` 与 `FlightControllerKey.KeyConnection` 的原始值仍在 Relay 遥测中供显示与相应业务使用，但不参与此模块的可达性结论。
 
-这是 DJI MSDK `ILiveStreamManager.startStream` 的调用边界：桌面只能先确认手机能调用已经配置好的直播管理器，真实的遥控器/飞机链路、产品支持性、网络服务及推流创建结果必须由 DJI 的异步完成回调和后续 RTMP 入流确认。桌面不得把瞬时遥测或缺失的型号能力字段写成“当前机不支持图传”。缺失、非布尔或畸形的必要安全事实仍一律阻塞，不得推定为安全。
+这是 DJI MSDK `ILiveStreamManager.startStream` 与飞行 Action 的调用边界：桌面只能先确认手机能调用已就绪 MSDK，真实的遥控器/飞机链路、产品支持性、飞行安全、网络服务及推流创建结果必须由 DJI 的异步完成回调和后续 RTMP 入流确认。桌面不得把瞬时遥测或缺失的型号能力字段写成“当前机不支持图传”。
 
 ## 阻塞项和顺序
 
@@ -48,8 +47,6 @@ interface HardwareReadinessInput {
 3. `LEGACY_MEDIA_UNAVAILABLE`（仅旧图传）
 4. `PHONE_DISCONNECTED`
 5. `SDK_NOT_READY`
-6. `REMOTE_CONTROLLER_DISCONNECTED`（仅飞控）
-7. `FLIGHT_CONTROLLER_DISCONNECTED`（仅飞控）
 
 畸形输入仅返回 `INVALID_INPUT`。其余合法输入必须收集全部独立阻塞项，不得因为前一项失败而短路。
 
@@ -67,4 +64,4 @@ type HardwareReadinessResult =
 
 本模块只使用语言标准库。禁止导入 Electron、Node、网络、文件系统、媒体、Relay、DJI、飞控、图传、UI 或任何生产适配器。
 
-测试必须覆盖两种目标的完全通过、每个阻塞项、完整顺序、目标隔离、缺失事实、畸形输入、getter 异常、不可变性和重复评估。架构测试必须锁住纯模块边界。
+测试必须覆盖两种目标的完全通过、每个阻塞项、完整顺序、目标隔离、缺失事实、畸形输入、无关 MSDK Key 的 getter 异常、不可变性和重复评估。架构测试必须锁住纯模块边界。

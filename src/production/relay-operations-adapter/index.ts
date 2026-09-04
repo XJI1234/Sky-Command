@@ -62,6 +62,12 @@ export interface DesktopRelayTelemetryPayload {
   readonly longitude?: number;
   readonly altitudeMeters?: number;
   readonly liveStreaming?: boolean;
+  /** Raw MSDK LiveStreamStatusListener.onError errorCode; never inferred from a command result. */
+  readonly liveStreamRuntimeErrorCode?: string;
+  /** Raw MSDK LiveStreamStatusListener.onError description; never inferred from a command result. */
+  readonly liveStreamRuntimeErrorDescription?: string;
+  /** Safe Android state summary for the current live-stream lifecycle. */
+  readonly liveStreamNotice?: string;
   readonly liveResolution?: string;
   readonly liveFps?: number;
   readonly liveVideoBitrateKbps?: number;
@@ -117,7 +123,7 @@ export interface RelayOperationsSnapshot {
 export interface StreamRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
   readonly ingressAddress?: (deviceId: string) => string | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string; readonly result?: JsonValue }>>;
 }
 export interface WhipStreamRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
@@ -215,7 +221,7 @@ const number = (value: unknown): number | undefined => {
   const parsed = finiteNumber(value);
   return parsed !== undefined && parsed >= 0 && parsed <= 100 ? parsed : undefined;
 };
-const safeText = (value: unknown): string | undefined => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value) ? value : undefined;
+const safeText = (value: unknown, maximumCodePoints = 128): string | undefined => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maximumCodePoints && !/[\p{Cc}]/u.test(value) ? value : undefined;
 const boundedNumber = (value: unknown, minimum: number, maximum: number): number | undefined => {
   const parsed = finiteNumber(value);
   return parsed !== undefined && parsed >= minimum && parsed <= maximum ? parsed : undefined;
@@ -324,6 +330,14 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   }
   const altitudeMeters = finiteNumber(payload.altitudeMeters); if (altitudeMeters !== undefined) outputPayload.altitudeMeters = altitudeMeters;
   const liveStreaming = boolean(payload.liveStreaming);
+  const liveStreamNotice = safeText(string(payload.liveStreamNotice), 256);
+  if (liveStreamNotice !== undefined) outputPayload.liveStreamNotice = liveStreamNotice;
+  const liveStreamRuntimeErrorCode = safeText(string(payload.liveStreamRuntimeErrorCode), 128);
+  const liveStreamRuntimeErrorDescription = safeText(string(payload.liveStreamRuntimeErrorDescription), 512);
+  if (liveStreamRuntimeErrorCode !== undefined && liveStreamRuntimeErrorDescription !== undefined) {
+    outputPayload.liveStreamRuntimeErrorCode = liveStreamRuntimeErrorCode;
+    outputPayload.liveStreamRuntimeErrorDescription = liveStreamRuntimeErrorDescription;
+  }
   if (liveStreaming !== undefined) {
     outputPayload.liveStreaming = liveStreaming;
     if (liveStreaming) {
@@ -497,16 +511,24 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
         : freeze({ status: status(outcome) });
     } catch { return freeze({ status: "transport-failed" as const }); }
   };
-  const sendVideo = async (deviceId: string, name: string, fields: Record<string, JsonValue>): Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string }>> => {
+  const sendVideo = async (deviceId: string, name: string, fields: Record<string, JsonValue>): Promise<Readonly<{ readonly status: CommandStatus; readonly detail?: string; readonly result?: JsonValue }>> => {
     if (disposed || !validId(deviceId) || typeof relay.sendCommand !== "function") return commandFailure();
     try {
       const outcome = await relay.sendCommand(deviceId, freeze({ name, fields: object(fields) }));
       const detail = commandDetail(outcome);
-      return freeze({ status: status(outcome), ...(detail === undefined ? {} : { detail }) });
+      const result = read(outcome, "result");
+      return freeze({
+        status: status(outcome),
+        ...(detail === undefined ? {} : { detail }),
+        ...(result !== undefined && record(result) !== null && read(result, "kind") === "object" ? { result: result as JsonValue } : {}),
+      });
     } catch { return freeze({ status: "transport-failed" as const }); }
   };
   const missionGateway: MissionRelayGateway = freeze({
-    latestTelemetry: controlTelemetry,
+    // Commands need the current relay-session observation to determine MSDK reachability.
+    // `controlTelemetry` remains a stricter display projection and must not turn a missing
+    // unrelated hardware Key into a local command rejection.
+    latestTelemetry: telemetry,
     sendMission: async (deviceId, payload) => {
       if (disposed || !validId(deviceId) || typeof relay.sendMission !== "function") return freeze({ deviceId, missionId: payload.missionId, status: "rejected" as const, detail: "设备未连接" });
       try { const value = await relay.sendMission(deviceId, payload); return freeze({ deviceId, missionId: payload.missionId, status: status(value), detail: typeof read(value, "detail") === "string" ? read(value, "detail") as string : "中继器未确认任务" }); } catch { return freeze({ deviceId, missionId: payload.missionId, status: "transport-failed" as const, detail: "中继器通信失败" }); }
@@ -515,11 +537,17 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
       const outcome = (request.name === "wayline.upload" || request.name === "wayline.start" || request.name === "wayline.pause" || request.name === "wayline.resume" || request.name === "wayline.stop") && request.fields.confirm === true
         ? await send(deviceId, request.name, { confirm: bool(true) })
         : commandFailure();
-      return freeze({ deviceId, commandId: "adapter", status: outcome.status, detail: outcome.status === "succeeded" ? "中继器已确认命令" : "中继器未确认命令" });
+      return freeze({
+        deviceId,
+        commandId: "adapter",
+        status: outcome.status,
+        detail: outcome.status === "succeeded" ? "中继器已确认命令" : "中继器未确认命令",
+        ...(!("result" in outcome) || outcome.result === undefined ? {} : { result: outcome.result }),
+      });
     }
   });
   const streamGateway: StreamRelayGateway = freeze({
-    latestTelemetry: controlTelemetry,
+    latestTelemetry: telemetry,
     ingressAddress,
     sendCommand: async (deviceId, request) => {
       if (request.name === "live-stream.stop" && Object.keys(request.fields).length === 0) return sendVideo(deviceId, request.name, {});
@@ -528,7 +556,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     }
   });
   const whipStreamGateway: WhipStreamRelayGateway = freeze({
-    latestTelemetry: controlTelemetry,
+    latestTelemetry: telemetry,
     sendCommand: async (deviceId, request) => {
       if (request.name === "live-stream-webrtc.stop" && Object.keys(request.fields).length === 0) return sendVideo(deviceId, request.name, {});
       if (request.name !== "live-stream-webrtc.start" || Object.keys(request.fields).length !== 1 || typeof request.fields.whipUrl !== "string" || request.fields.whipUrl.trim().length === 0 || /[\p{Cc}]/u.test(request.fields.whipUrl)) return commandFailure();
@@ -547,7 +575,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     }
   });
   const flightGateway: AdapterFlightRelay = freeze({
-    latestTelemetry: controlTelemetry,
+    latestTelemetry: telemetry,
     sendCommand: async (deviceId, request) => (request.name === "flight.takeoff" || request.name === "flight.land" || request.name === "flight.confirm-landing" || request.name === "flight.return-home" || request.name === "flight.stop-takeoff" || request.name === "flight.stop-auto-landing") && request.fields.confirm === true ? send(deviceId, request.name, { confirm: bool(true) }) : commandFailure()
   });
   const settingsGateway: RelaySettingsGateway = freeze({

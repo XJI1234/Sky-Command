@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { StreamDispatcher } from "../src/modules/live-stream-control/stream-dispatcher/index.js";
+import { CapabilityGate } from "../src/modules/device-console/capability-gate/index.js";
 
 const telemetry = () => ({
   payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true },
@@ -88,6 +89,29 @@ describe("StreamDispatcher", () => {
     expect(blocked.sent).toEqual([]);
   });
 
+  it("不以手机端图传源当前报告为 false 而拦住已可达的 DJI 启动命令", async () => {
+    const value = fixture({
+      telemetry: () => ({
+        payload: { sdkAvailability: "READY" },
+        capabilities: { liveVideo: false },
+      }),
+      gate: CapabilityGate.evaluate,
+    });
+
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start" });
+    expect(value.sent).toEqual([{ deviceId: "phone-1", request: { name: "live-stream.start", fields: { rtmpUrl: "rtmp://192.168.1.20:1935/live/phone-1" } } }]);
+  });
+
+  it("不读取手机端图传源观测，以免其异常拦住启动命令", async () => {
+    const telemetry = Object.defineProperty({ payload: { sdkAvailability: "READY" } }, "capabilities", {
+      get: () => { throw new Error("source state is display-only before start"); },
+    });
+    const value = fixture({ telemetry: () => telemetry, gate: CapabilityGate.evaluate });
+
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start" });
+    expect(value.sent).toHaveLength(1);
+  });
+
   it("reports missing telemetry through the capability gate as a disconnected relay", async () => {
     const inputs: unknown[] = [];
     const value = fixture({
@@ -95,7 +119,8 @@ describe("StreamDispatcher", () => {
       gate: (input) => { inputs.push(input); return { ok: true, value: { enabled: false, reason: "RELAY_OFFLINE" } }; }
     });
     await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "RELAY_OFFLINE" });
-    expect(inputs).toEqual([expect.objectContaining({ relayConnected: false, capabilities: {} })]);
+    expect(inputs).toEqual([expect.objectContaining({ relayConnected: false })]);
+    expect(inputs[0]).not.toHaveProperty("capabilities");
   });
 
   it("isolates devices, ignores late completion after disconnect and manages terminal records", async () => {
@@ -132,6 +157,32 @@ describe("StreamDispatcher", () => {
     await expect(failed.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "DEPENDENCY_FAILURE" });
     await expect(failed.dispatcher.start(" ")).resolves.toMatchObject({ ok: false, code: "INVALID_INPUT", state: null });
     expect(failed.dispatcher.get(" ")).toMatchObject({ phase: "idle" });
+  });
+
+  it("preserves a structured DJI live-stream rejection instead of flattening it into a relay rejection", async () => {
+    const value = fixture({
+      send: async () => ({
+        status: "rejected",
+        result: {
+          kind: "object",
+          fields: {
+            domain: { kind: "string", value: "live-stream" },
+            outcome: { kind: "string", value: "ACTION_REJECTED" },
+            errorCode: { kind: "string", value: "COMMON_SYSTEM_BUSY" },
+            errorDescription: { kind: "string", value: "The live stream manager is busy" },
+          },
+        },
+      }),
+    });
+
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({
+      ok: false,
+      code: "STREAM_ACTION_REJECTED",
+      platformError: {
+        code: "COMMON_SYSTEM_BUSY",
+        description: "The live stream manager is busy",
+      },
+    });
   });
 
   it("contains malformed dependencies and preserves state-listener isolation", async () => {
@@ -178,29 +229,26 @@ describe("StreamDispatcher", () => {
     await expect(value.dispatcher.stop("phone\n1")).resolves.toMatchObject({ ok: false, code: "INVALID_INPUT" });
   });
 
-  it("passes telemetry capabilities and control-link state to the capability gate, excluding retained ProductKey telemetry", () => {
+  it("图传启动门禁只传递 Relay 与 MSDK 生命周期事实", () => {
     const onlineInputs: unknown[] = [];
-    const capabilities = { liveVideo: true, custom: "retained" };
     const online = fixture({
-      telemetry: () => ({ payload: { sdkRegistered: false, remoteControllerConnected: false, flightControllerConnected: false, connected: false }, capabilities }),
+      telemetry: () => ({ payload: { sdkAvailability: "READY", remoteControllerConnected: false, flightControllerConnected: false, connected: false }, capabilities: { liveVideo: true, custom: "retained" } }),
       gate: (input) => { onlineInputs.push(input); return { ok: true, value: { enabled: true } }; }
     });
     expect(online.dispatcher.check("phone-1")).toEqual({ ok: true });
     expect(onlineInputs).toEqual([{
       operation: "live-stream",
       relayConnected: true,
-      sdkRegistered: false,
-      remoteControllerConnected: false,
-      flightControllerConnected: false,
-      capabilities
+      sdkAvailability: "READY",
     }]);
 
     const offlineInputs: unknown[] = [];
     const offline = fixture({ telemetry: () => null, gate: (input) => { offlineInputs.push(input); return { ok: true, value: { enabled: true } }; } });
     expect(offline.dispatcher.check("phone-1")).toEqual({ ok: true });
-    expect(offlineInputs).toEqual([expect.objectContaining({ relayConnected: false, capabilities: {}, sdkRegistered: undefined, remoteControllerConnected: undefined, flightControllerConnected: undefined })]);
-    expect(onlineInputs[0]).not.toHaveProperty("aircraftConnected");
-    expect(offlineInputs[0]).not.toHaveProperty("aircraftConnected");
+    expect(offlineInputs).toEqual([{ operation: "live-stream", relayConnected: false }]);
+    expect(onlineInputs[0]).not.toHaveProperty("capabilities");
+    expect(onlineInputs[0]).not.toHaveProperty("remoteControllerConnected");
+    expect(onlineInputs[0]).not.toHaveProperty("flightControllerConnected");
   });
 
   it("treats malformed telemetry and gate contracts as start dependency failures without blocking stop", async () => {

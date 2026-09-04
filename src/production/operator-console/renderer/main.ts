@@ -1,5 +1,6 @@
 import flvjs from "flv.js";
 import { OperatorConsole } from "../index.js";
+import { operationFeedback, type OperationFeedback } from "./operation-feedback.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight";
@@ -37,6 +38,14 @@ const unwrap = (result: unknown): unknown => {
 
 const read = (value: unknown, key: string): unknown => value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
 const text = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 ? value : null;
+type OperationFeedbackRecord = Readonly<{
+  readonly deviceId: string | null;
+  readonly connectionEpoch: number | null;
+  readonly feedback: OperationFeedback;
+}>;
+const feedbackByAction = new Map<string, OperationFeedbackRecord>();
+// `operationFeedback` owns the wording, including the literal "DJI MSDK 回调" for
+// an actual structured callback. The renderer only chooses the correct operation lane.
 
 const el = (id: string): HTMLElement => {
   const node = document.getElementById(id);
@@ -45,6 +54,38 @@ const el = (id: string): HTMLElement => {
 };
 
 const show = (message: string): void => { el("status").textContent = message; };
+
+const feedbackForDevice = (action: string, deviceId: string | null, connectionEpoch: number | null, feedback: OperationFeedback): void => {
+  feedbackByAction.set(action, Object.freeze({ deviceId, connectionEpoch, feedback }));
+};
+
+const feedbackDeviceEpoch = (view: ReturnType<typeof OperatorConsole.project>, deviceId: string | null): number | null => {
+  if (deviceId === null) return null;
+  const device = (view.devices as readonly unknown[]).find((item) => read(item, "deviceId") === deviceId);
+  const epoch = read(device, "connectionEpoch");
+  return typeof epoch === "number" && Number.isSafeInteger(epoch) && epoch >= 0 ? epoch : null;
+};
+
+const captureFeedback = (action: string, deviceId: string | null, connectionEpoch: number | null, value: unknown): OperationFeedback => {
+  const feedback = operationFeedback(action, value);
+  feedbackForDevice(action, deviceId, connectionEpoch, feedback);
+  return feedback;
+};
+
+const renderOperationFeedback = (action: string, deviceId: string | null, connectionEpoch: number | null): void => {
+  const node = document.querySelector(`[data-operation-feedback="${action}"]`);
+  if (!(node instanceof HTMLElement)) return;
+  const record = feedbackByAction.get(action);
+  const visible = record !== undefined && record.deviceId === deviceId && (deviceId === null || record.connectionEpoch === connectionEpoch);
+  node.textContent = visible ? record.feedback.message : "";
+  if (visible) {
+    node.dataset.feedbackSource = record.feedback.source;
+    node.dataset.feedbackOutcome = record.feedback.outcome;
+  } else {
+    delete node.dataset.feedbackSource;
+    delete node.dataset.feedbackOutcome;
+  }
+};
 
 const flightActionLabel = (action: unknown): string => {
   if (action === "takeoff") return "起飞";
@@ -83,12 +124,10 @@ const operatorNotice = (value: unknown): string => {
   if (code === "FLIGHT_ACTION_INVOCATION_FAILED") return "手机在取得 DJI 命令结果前发生错误；本次命令未获确认";
   if (code === "RELAY_REJECTED") return "手机拒绝了该命令，请在手机上看原因后重试";
   if (read(inner, "ok") === true && read(inner, "action") === "land") return "DJI 已接受自动降落，正在等待 MSDK 回报落地或继续确认";
-  if (code === "LANDING_IN_PROGRESS") return "降落正在进行，请等待 MSDK 确认落地";
   if (code === "CAPABILITY_BLOCKED") {
     if (reason === "RELAY_OFFLINE") return "手机已离线，无法发送图传命令";
     if (reason === "SDK_NOT_READY") return "手机端 DJI 尚未就绪，无法启动图传";
-    if (reason === "LIVE_VIDEO_UNAVAILABLE") return "图传链路当前未就绪，请确认 DJI 产品、AirLink 和主相机均已连接后刷新状态";
-    return "图传启动条件刚发生变化，请刷新设备状态后重试";
+    return "图传命令此刻不可达，请确认手机中继与 MSDK 状态后重试";
   }
   if (code === "OPERATION_IN_PROGRESS") return "上一条命令还在处理，请稍候";
   if (code === "VIDEO_NOT_READY") return "画面还没出来，请稍候或重新启动图传";
@@ -597,16 +636,26 @@ async function projectView(): Promise<ReturnType<typeof OperatorConsole.project>
   });
 }
 
-const blocked = (action: string, reason: string): void => {
-  show(reason);
+const blocked = (action: string, reason: string, deviceId: string | null = null, connectionEpoch: number | null = null): void => {
+  const feedback = captureFeedback(action, deviceId, connectionEpoch, { ok: false, code: "DESKTOP_BLOCKED", reason });
+  show(feedback.message);
   void bridge().invoke("diagnostics-record", { action, reason });
 };
 
-async function run(action: string, invokeName: string, input: unknown): Promise<void> {
+async function run(action: string, invokeName: string, input: unknown, feedbackAction = action): Promise<void> {
   const view = await projectView();
   const decision = OperatorConsole.evaluate(action, view);
-  if (!decision.ok) { blocked(action, decision.reason ?? "无法执行"); return; }
-  show(operatorNotice(await bridge().invoke(invokeName, input)));
+  const deviceId = text(read(input, "deviceId"));
+  const connectionEpoch = feedbackDeviceEpoch(view, deviceId);
+  if (!decision.ok) { blocked(action, decision.reason ?? "无法执行", deviceId, connectionEpoch); return; }
+  let result: unknown;
+  try {
+    result = await bridge().invoke(invokeName, input);
+  } catch {
+    result = { ok: false, code: "DEPENDENCY_FAILURE" };
+  }
+  const feedback = captureFeedback(feedbackAction, deviceId, connectionEpoch, result);
+  show(feedback.message);
   await render();
 }
 
@@ -621,13 +670,18 @@ const createMissionStartIntent = (view: ReturnType<typeof OperatorConsole.projec
 
 const requestMissionStartConfirmation = async (view: ReturnType<typeof OperatorConsole.project>): Promise<void> => {
   const decision = OperatorConsole.evaluate("mission-start", view);
-  if (!decision.ok) { blocked("mission-start", decision.reason ?? "无法执行航线"); return; }
+  if (!decision.ok) { blocked("mission-start", decision.reason ?? "无法执行航线", view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId)); return; }
   const intent = createMissionStartIntent(view);
   if (intent === null) {
-    blocked("mission-start", "已上传任务的身份不完整，请重新准备并上传航线");
+    blocked("mission-start", "已上传任务的身份不完整，请重新准备并上传航线", view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
     return;
   }
   pendingMissionStart = intent;
+  captureFeedback("mission-start", intent.deviceId, feedbackDeviceEpoch(view, intent.deviceId), {
+    ok: true,
+    value: { ok: true, code: "CONFIRMATION_REQUIRED", action: "start", confirmation: { deviceId: intent.deviceId, action: "start" } },
+  });
+  show("等待人工确认：执行航线尚未调用 DJI MSDK");
   await render();
 };
 
@@ -641,7 +695,7 @@ const confirmMissionStart = async (): Promise<void> => {
     text(read(view.mission, "missionId")) !== intent.missionId ||
     view.missionRoute?.routeId !== intent.routeId
   ) {
-    blocked("mission-start", "任务、目标飞机或航线已变化，请重新确认");
+    blocked("mission-start", "任务、目标飞机或航线已变化，请重新确认", view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
     await render();
     return;
   }
@@ -774,15 +828,20 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     const availability = view.missionActions[action];
     button.disabled = !availability.enabled;
     button.title = availability.enabled ? button.textContent ?? "" : availability.reason ?? "当前阶段不能执行此操作";
+    renderOperationFeedback(dataAction, view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
   }
   const streamStopping = view.streamLabel === "正在停止图传";
+  const streamHasDjiRuntimeError = view.streamLabel.startsWith("DJI MSDK 图传运行回调：");
   el("stream-label").textContent = view.streamLabel;
-  el("stream-label").classList.toggle("ok", !streamStopping && (view.playbackReady || view.streamCanStart));
+  el("stream-label").classList.toggle("ok", !streamStopping && !streamHasDjiRuntimeError && (view.playbackReady || view.streamCanStart));
   const streamReady = el("stream-ready");
   if (streamStopping) {
     streamReady.textContent = view.streamCanStart
       ? "正在等待手机确认停止。可点「停止后重启图传」，确认后才会重新启动。"
       : "正在等待手机确认停止。停止完成后才能重新启动图传。";
+    streamReady.classList.remove("ok");
+  } else if (streamHasDjiRuntimeError) {
+    streamReady.textContent = view.streamLabel;
     streamReady.classList.remove("ok");
   } else if (view.playbackReady || view.streamCanStop) {
     streamReady.textContent = view.playbackReady
@@ -790,7 +849,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
       : `${view.streamLabel}。要结束请点「停止图传」`;
     streamReady.classList.add("ok");
   } else if (view.streamCanStart) {
-    streamReady.textContent = "图传可请求启动：电脑、中继、手机 MSDK、DJI 产品、AirLink 和主相机均已就绪，真实推流结果以手机 DJI 和首帧为准";
+    streamReady.textContent = "图传可请求启动：已选择手机且 MSDK 已就绪；发送前会检查电脑接收端和中继，图传源是否可用以 DJI 回调和实际画面为准";
     streamReady.classList.add("ok");
   } else {
     streamReady.textContent = view.streamLabel.startsWith("图传未就绪")
@@ -810,6 +869,8 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     stopButton.disabled = !canStop;
     stopButton.title = canStop ? "停止图传" : view.streamSourceUnavailable ? "图传源已断开，手机已自动停止图传" : streamStopping ? "正在等待手机确认停止" : "当前没有进行中的图传";
   }
+  renderOperationFeedback("stream-start", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
+  renderOperationFeedback("stream-stop", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
   const guidance = view.guidance as { message?: string } | null;
   el("guidance").textContent = guidance?.message ?? "";
   for (const action of ["flight-takeoff", "flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"]) {
@@ -818,6 +879,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     const decision = OperatorConsole.evaluate(action, view);
     button.disabled = !decision.ok;
     button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
+    renderOperationFeedback(action, view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
   }
   const landingDevice = devices.find((device) => device.deviceId === view.missionDeviceId);
   const landing = read(landingDevice, "landing");
@@ -1077,22 +1139,36 @@ el("route-remove").addEventListener("click", async () => {
     if (action === "mission-stage" && view.selectedRoute !== null && deviceId !== null) {
       const assigned = unwrap(await bridge().invoke("assignment-assign", { deviceId, routeId: view.selectedRoute.routeId }));
       if (!accepted(assigned)) {
-        blocked("assignment-assign", "航线未能赋给所选手机，未开始传输");
+        blocked("assignment-assign", "航线未能赋给所选手机，未开始传输", deviceId, feedbackDeviceEpoch(view, deviceId));
         return;
       }
     }
-     await run(action, invokeName, input);
+    await run(action, invokeName, input);
   });
 });
 
 el("confirm-yes").addEventListener("click", async () => {
-  await run("flight-confirm", "flight-confirm", { deviceId: el("confirm").dataset.deviceId, confirmationId: el("confirm").dataset.confirmationId });
+  const view = await projectView();
+  const deviceId = el("confirm").dataset.deviceId;
+  const originalAction = view.confirmation?.action;
+  await run("flight-confirm", "flight-confirm", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, originalAction === undefined ? "flight-confirm" : `flight-${originalAction}`);
 });
 el("confirm-no").addEventListener("click", async () => {
-  await run("flight-cancel", "flight-cancel", { deviceId: el("confirm").dataset.deviceId, confirmationId: el("confirm").dataset.confirmationId });
+  const view = await projectView();
+  const deviceId = el("confirm").dataset.deviceId;
+  const originalAction = view.confirmation?.action;
+  await run("flight-cancel", "flight-cancel", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, originalAction === undefined ? "flight-cancel" : `flight-${originalAction}`);
 });
 el("mission-confirm-yes").addEventListener("click", () => { void confirmMissionStart(); });
-el("mission-confirm-no").addEventListener("click", () => { pendingMissionStart = null; void render(); });
+el("mission-confirm-no").addEventListener("click", () => {
+  const intent = pendingMissionStart;
+  pendingMissionStart = null;
+  if (intent !== null) {
+    captureFeedback("mission-start", intent.deviceId, null, { ok: false, code: "DESKTOP_BLOCKED", reason: "已取消执行航线" });
+    show("未调用 DJI MSDK：已取消执行航线");
+  }
+  void render();
+});
 
 const tick = async (): Promise<void> => {
    try {

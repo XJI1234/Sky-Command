@@ -44,7 +44,8 @@ describe("Electron 生产图传渲染", () => {
     expect(page).toContain('data-action="flight-takeoff"');
     expect(page).not.toContain('data-action="stream-select"');
     expect(page).not.toContain("启动低延迟");
-    expect(page).toContain("未就绪时「启动图传」不可点");
+    expect(page).toContain("图传源状态只供观察；是否可启动以 DJI MSDK 回调为准。");
+    expect(renderer()).toContain("图传可请求启动：已选择手机且 MSDK 已就绪；发送前会检查电脑接收端和中继");
     expect(renderer()).toContain("playVideo");
     expect(renderer()).toContain("flvjs");
     expect(renderer()).toContain("自动播放被拦截，请点一下上方画面");

@@ -121,6 +121,14 @@ const controlConnection = (device: Record<string, unknown> | undefined): unknown
   if (device === undefined) return null;
   return record(read(device, "control")) ?? read(device, "connection");
 };
+// The workflow's `connection` is the current raw MSDK projection. `control` is
+// a stricter display/diagnostic compatibility projection and may be incomplete;
+// it must not make an otherwise READY MSDK invocation look unreachable.
+const invocationConnection = (device: Record<string, unknown> | undefined): unknown => {
+  if (device === undefined) return null;
+  const connection = record(read(device, "connection"));
+  return connection !== null && read(connection, "msdk") !== undefined ? connection : controlConnection(device);
+};
 const guidanceOf = (device: Record<string, unknown> | undefined): unknown => {
   if (device === undefined) return null;
   const deviceId = text(read(device, "deviceId"));
@@ -184,7 +192,7 @@ const missionFailureLabel = (value: unknown): string => {
     case "WAYLINE_START_UNCONFIRMED": return "启动状态不确定：不得重复执行，可停止航线";
     case "WAYLINE_PAUSE_UNCONFIRMED": return "暂停状态不确定：不得重复暂停，可停止航线";
     case "WAYLINE_RESUME_UNCONFIRMED": return "恢复状态不确定：不得重复恢复，可停止航线";
-    case "WAYLINE_STOP_UNCONFIRMED": return "停止状态不确定：不得重复停止，请核实飞机状态";
+    case "WAYLINE_STOP_UNCONFIRMED": return "停止状态不确定：恢复手机和 MSDK 连接后可再次尝试停止";
     default: return "任务失败，请重新准备航线";
   }
 };
@@ -199,7 +207,7 @@ const missionLabelOf = (mission: unknown): string => {
     case "pausing": return "正在暂停，等待手机确认；如无响应可停止航线";
     case "paused": return "已暂停";
     case "resuming": return "正在恢复，等待手机确认；如无响应可停止航线";
-    case "stopping": return "停止已提交，等待手机确认；不得重复停止";
+    case "stopping": return "停止已提交，等待手机确认；结果未确认且连接恢复后可再次尝试停止";
     case "completed": return "已结束";
     case "failed": return missionFailureLabel(read(mission, "failureCode"));
     case "disconnected": return "与手机失联，飞机状态未知；重连后只能停止或重新准备航线";
@@ -208,12 +216,20 @@ const missionLabelOf = (mission: unknown): string => {
 };
 const streamSourceUnavailableOf = (device: Record<string, unknown> | undefined): boolean =>
   text(read(read(device, "stream"), "phase")) === "failed" && text(read(read(device, "stream"), "failureCode")) === "SOURCE_UNAVAILABLE";
+const streamRuntimeErrorOf = (device: Record<string, unknown> | undefined): Readonly<{ readonly code: string; readonly description: string }> | null => {
+  const error = read(read(read(device, "connection"), "live"), "runtimeError");
+  const code = text(read(error, "code"));
+  const description = text(read(error, "description"));
+  return code === null || description === null ? null : freeze({ code, description });
+};
 const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (device === undefined) return "图传未就绪：未选择图传机";
   const streamPhase = text(read(read(device, "stream"), "phase"));
   // 停止命令尚未确认时，播放器的最后一帧不能覆盖控制车道的事实。
   if (streamPhase === "stopping") return "正在停止图传";
   if (streamSourceUnavailableOf(device)) return "图传源已断开，请恢复后手动启动图传";
+  const runtimeError = streamRuntimeErrorOf(device);
+  if (runtimeError !== null) return `DJI MSDK 图传运行回调：错误码：${runtimeError.code}；错误说明：${runtimeError.description}`;
   const videoPhase = text(read(read(device, "video"), "phase"));
   if (videoPhase === "ready") return "图传播放中";
   if (videoPhase === "awaiting-playback") return "正在准备画面";
@@ -227,17 +243,20 @@ const streamLabelOf = (device: Record<string, unknown> | undefined): string => {
   if (streamPhase === "failed") return "图传失败";
   if (streamPhase === "disconnected") return "图传已中断，可重新启动";
   const issue = streamStartIssueOf(device);
-  return issue === null ? "图传可启动" : `图传未就绪：${issue.label}`;
+  if (issue !== null) return `图传未就绪：${issue.label}`;
+  const sourceState = text(read(read(device, "capabilities"), "liveVideo"));
+  if (sourceState === "unsupported") return "图传可尝试启动（图传源当前报告未就绪）";
+  if (sourceState !== "supported") return "图传可尝试启动（图传源状态未知）";
+  return "图传可请求启动";
 };
 type StreamStartIssue = Readonly<{ readonly label: string; readonly reason: string }>;
 const streamStartIssueOf = (device: Record<string, unknown> | undefined): StreamStartIssue | null => {
   if (device === undefined) return freeze({ label: "未选择图传机", reason: "请选择用于图传的飞机" });
-  const connection = controlConnection(device);
-  if (read(connection, "sdk") !== "ready") return freeze({ label: "等待手机就绪", reason: "手机尚未就绪，无法启动图传" });
-  const liveVideo = read(read(device, "capabilities"), "liveVideo");
-  if (liveVideo === "supported") return null;
-  if (liveVideo === "unsupported") return freeze({ label: "图传链路未就绪", reason: "手机端尚未确认 DJI 产品、AirLink 和主相机均已连接，无法启动图传" });
-  return freeze({ label: "图传状态未知", reason: "手机端尚未确认当前图传链路状态，请刷新设备状态后重试" });
+  const connection = invocationConnection(device);
+  const msdk = read(connection, "msdk");
+  const sdkReady = msdk === undefined ? read(connection, "sdk") === "ready" : msdk === "ready";
+  if (!sdkReady) return freeze({ label: "等待手机就绪", reason: "手机尚未就绪，无法启动图传" });
+  return null;
 };
 const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean => {
   if (device === undefined) return false;
@@ -257,17 +276,11 @@ const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean =
 };
 const reject = (reason: string): OperatorActionResult => freeze({ ok: false, reason });
 const accept = (): OperatorActionResult => freeze({ ok: true });
-const waypointSupported = (device: Record<string, unknown> | undefined): boolean => read(read(device, "capabilities"), "waypointMission") === "supported";
-const batteryPercent = (device: Record<string, unknown> | undefined): number | null => finite(read(read(device, "connection"), "batteryPercent"));
-const recoveryFlightAction = (action: string): boolean => action === "flight-land" || action === "flight-confirm-landing" || action === "flight-return-home" || action === "flight-stop-takeoff" || action === "flight-stop-auto-landing";
-const msdkInvocationIssue = (device: Record<string, unknown>): string | null => read(controlConnection(device), "sdk") === "ready" ? null : "手机尚未就绪";
-const controlLinkIssue = (device: Record<string, unknown>): string | null => {
-  const msdkIssue = msdkInvocationIssue(device);
-  if (msdkIssue !== null) return msdkIssue;
-  const connection = controlConnection(device);
-  if (read(connection, "remoteController") !== "connected") return "遥控器未连接";
-  if (read(connection, "flightController") !== "connected") return "飞机飞控未连接，请确认飞机已开机";
-  return null;
+const msdkInvocationIssue = (device: Record<string, unknown>): string | null => {
+  const connection = invocationConnection(device);
+  const msdk = read(connection, "msdk");
+  if (msdk !== undefined) return msdk === "ready" ? null : "手机尚未就绪";
+  return read(connection, "sdk") === "ready" ? null : "手机尚未就绪";
 };
 const deviceById = (view: OperatorView, deviceId: string | null): Record<string, unknown> | undefined =>
   view.devices.flatMap((item) => { const row = record(item); return row !== null && read(row, "deviceId") === deviceId ? [row] : []; })[0];
@@ -357,25 +370,8 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   }
   if (name === "flight-confirm" || name === "flight-cancel") return accept();
   if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing") {
-    const linkIssue = recoveryFlightAction(name) ? msdkInvocationIssue(device) : controlLinkIssue(device);
+    const linkIssue = msdkInvocationIssue(device);
     if (linkIssue !== null) return reject(linkIssue);
-    if (name === "flight-land") {
-      const landingPhase = text(read(read(device, "landing"), "phase"));
-      if (landingPhase === "awaiting-msdk" || landingPhase === "confirmation-required") {
-        return reject("降落命令已发送，等待 MSDK 确认落地");
-      }
-    }
-    if (name === "flight-takeoff") {
-      const battery = batteryPercent(device);
-      if (battery === null) return reject("尚未取得所选飞机的电池遥测");
-      if (battery < 20) return reject("电量低于 20%，不能起飞");
-      const flightState = read(read(device, "connection"), "flightState");
-      if (flightState === "flying") return reject("飞机已在空中，不能起飞");
-      if (flightState !== "grounded") return reject("尚未确认飞机是否在地面，不能起飞");
-      const motorsOn = read(read(device, "connection"), "motorsOn");
-      if (motorsOn === true) return reject("电机已启动，不能起飞");
-      if (motorsOn !== false) return reject("尚未确认电机是否关闭，不能起飞");
-    }
     return accept();
   }
   if (name === "mission-stage") {
@@ -386,35 +382,30 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   if (name === "mission-upload") {
     const phase = text(read(current.mission, "phase"));
     if (phase !== "staged") return reject("请先将航线传输到手机");
-    const linkIssue = controlLinkIssue(device);
-    if (linkIssue !== null) return reject(linkIssue);
-    return waypointSupported(device) ? accept() : reject("所选机型未上报航线能力");
+    const msdkIssue = msdkInvocationIssue(device);
+    return msdkIssue === null ? accept() : reject(msdkIssue);
   }
   if (name === "mission-pause") {
-    return text(read(current.mission, "phase")) === "running" ? accept() : reject("当前阶段不能暂停");
+    if (text(read(current.mission, "phase")) !== "running") return reject("当前阶段不能暂停");
+    const msdkIssue = msdkInvocationIssue(device);
+    return msdkIssue === null ? accept() : reject(msdkIssue);
   }
   if (name === "mission-resume") {
-    return text(read(current.mission, "phase")) === "paused" ? accept() : reject("当前阶段不能恢复");
+    if (text(read(current.mission, "phase")) !== "paused") return reject("当前阶段不能恢复");
+    const msdkIssue = msdkInvocationIssue(device);
+    return msdkIssue === null ? accept() : reject(msdkIssue);
   }
   if (name === "mission-stop") {
     const phase = text(read(current.mission, "phase"));
-    return phase === "starting" || phase === "running" || phase === "pausing" || phase === "paused" || phase === "resuming" || phase === "disconnected" ? accept() : reject("当前阶段不能停止航线");
+    if (phase !== "starting" && phase !== "running" && phase !== "pausing" && phase !== "paused" && phase !== "resuming" && phase !== "stopping" && phase !== "disconnected") return reject("当前阶段不能停止航线");
+    const msdkIssue = msdkInvocationIssue(device);
+    return msdkIssue === null ? accept() : reject(msdkIssue);
   }
   if (name !== "mission-start") return reject("未知操作");
-  if (!waypointSupported(device)) return reject("所选机型未上报航线能力");
-  const battery = batteryPercent(device);
-  if (battery === null) return reject("尚未取得所选飞机的电池遥测");
-  if (battery < 20) return reject("电量低于 20%，禁止启动或继续任务");
   const phase = text(read(current.mission, "phase"));
   if (phase !== "uploaded") return reject("请先将当前航线上传到所选飞机");
-  const linkIssue = controlLinkIssue(device);
-  if (linkIssue !== null) return reject(linkIssue);
-  if (read(read(device, "connection"), "flightState") === "flying") return reject("飞机已在空中，禁止启动航线");
-  if (read(read(device, "connection"), "flightState") !== "grounded") return reject("尚未确认飞机是否在地面，禁止启动航线");
-  const motorsOn = read(read(device, "connection"), "motorsOn");
-  if (motorsOn === true) return reject("电机已启动，禁止启动航线");
-  if (motorsOn !== false) return reject("尚未确认电机是否关闭，禁止启动航线");
-  return accept();
+  const msdkIssue = msdkInvocationIssue(device);
+  return msdkIssue === null ? accept() : reject(msdkIssue);
 }
 
 export const OperatorConsole = freeze({ project, evaluate });

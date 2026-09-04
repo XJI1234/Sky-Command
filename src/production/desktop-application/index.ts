@@ -172,7 +172,6 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       dispatcher: FlightCommandDispatcher.create({
         relay: operations.flightGateway(),
         preflight: { evaluateFlightAction: (input) => MissionControl.PreflightCheck.evaluateFlightAction(input as never) },
-        capabilityGate: DeviceConsole.CapabilityGate,
       })
     }, options.flight);
     const runtime = DesktopRuntime.create({

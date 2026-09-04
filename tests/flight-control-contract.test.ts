@@ -27,7 +27,6 @@ describe("FlightControl", () => {
         sendCommand: async (_deviceId, request) => { requests.push(request); return { status: "succeeded" }; }
       },
       preflight: { evaluateFlightAction: () => ({ ok: true }) },
-      capabilityGate: { evaluate: () => ({ ok: true, value: { enabled: true } }) }
     });
 
     await expect(dispatcher.dispatch("phone-1", "return-home")).resolves.toMatchObject({ ok: true, code: "SUCCEEDED" });

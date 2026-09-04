@@ -119,18 +119,21 @@
     .mission-step-detail { color: var(--muted); font-size: 11px; line-height: 1.45; }
     .mission-step button { min-width: 116px; }
     .mission-step button:not(:disabled) { border-color: var(--accent); background: #1d2915; color: var(--accent); font-weight: 600; }
-    .mission-secondary-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+    .operation-feedback { min-height: 1.5em; margin: 7px 0 0; color: var(--muted); font: 10px/1.5 monospace; overflow-wrap: anywhere; }
+    .operation-feedback:empty { display: none; }
+    .mission-secondary-actions, .stream-controls, .direct-flight-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .operation-action { min-width: 112px; flex: 1 1 112px; }
+    .operation-action button { width: 100%; }
     .mission-secondary-actions button { min-width: 78px; }
     .mission-secondary-actions button[data-action="mission-stop"] { border-color: #704044; color: var(--danger); }
     .mission-confirmation, .flight-confirmation { margin-top: 12px; padding: 12px; border-left: 2px solid #d8b456; background: #1a1912; }
     .mission-confirmation p, .flight-confirmation p { margin-bottom: 10px; color: #f3d58d; font-size: 12px; line-height: 1.55; }
     .confirmation-actions { display: flex; flex-wrap: wrap; gap: 7px; }
     .mission-confirmation button:first-of-type, .flight-confirmation button:first-of-type { border-color: #d8b456; color: #f3d58d; }
-    .stream-controls { margin-top: 14px; }
     .stream-controls .row, .flight-safety-controls .row { margin: 10px 0 0; }
     .flight-safety-controls { margin-top: 14px; }
     .flight-safety-controls > p { margin: 0; }
-    .direct-flight-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .direct-flight-actions { margin-top: 10px; }
     .direct-flight-actions button[data-action="flight-takeoff"] { border-color: #668661; }
     .direct-flight-actions button[data-action="flight-land"], .direct-flight-actions button[data-action="flight-return-home"] { border-color: #704044; color: var(--danger); }
     .direct-flight-actions button[data-action="flight-stop-takeoff"], .direct-flight-actions button[data-action="flight-stop-auto-landing"] { border-color: #d8b456; color: #f3d58d; }
@@ -263,6 +266,7 @@
             <div class="mission-step-copy">
               <span class="mission-step-name">准备到手机</span>
               <span class="mission-step-detail">仅传输到手机并校验文件</span>
+              <p class="operation-feedback" data-operation-feedback="mission-stage" aria-live="polite"></p>
             </div>
             <button data-action="mission-stage">准备航线</button>
           </div>
@@ -270,6 +274,7 @@
             <div class="mission-step-copy">
               <span class="mission-step-name">上传至飞机</span>
               <span class="mission-step-detail">手机将已校验文件交给飞机</span>
+              <p class="operation-feedback" data-operation-feedback="mission-upload" aria-live="polite"></p>
             </div>
             <button data-action="mission-upload">上传至飞机</button>
           </div>
@@ -277,14 +282,24 @@
             <div class="mission-step-copy">
               <span class="mission-step-name">执行航线</span>
               <span class="mission-step-detail">执行前会再次要求确认</span>
+              <p class="operation-feedback" data-operation-feedback="mission-start" aria-live="polite"></p>
             </div>
             <button data-action="mission-start">执行航线</button>
           </div>
         </div>
         <div class="mission-secondary-actions" aria-label="航线进行中控制">
-          <button data-action="mission-pause">暂停</button>
-          <button data-action="mission-resume">恢复</button>
-          <button data-action="mission-stop">停止航线</button>
+          <div class="operation-action">
+            <button data-action="mission-pause">暂停</button>
+            <p class="operation-feedback" data-operation-feedback="mission-pause" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="mission-resume">恢复</button>
+            <p class="operation-feedback" data-operation-feedback="mission-resume" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="mission-stop">停止航线</button>
+            <p class="operation-feedback" data-operation-feedback="mission-stop" aria-live="polite"></p>
+          </div>
         </div>
         <div id="mission-confirm" class="mission-confirmation" hidden>
           <p id="mission-confirm-text"></p>
@@ -300,12 +315,18 @@
           <div>
             <h3>图传控制</h3>
             <p id="stream-ready" class="notice"></p>
-            <p class="muted">未就绪时「启动图传」不可点。</p>
+            <p class="muted">图传源状态只供观察；是否可启动以 DJI MSDK 回调为准。</p>
           </div>
         </div>
         <div class="row stream-controls">
-          <button data-action="stream-start">启动图传</button>
-          <button data-action="stream-stop">停止图传</button>
+          <div class="operation-action">
+            <button data-action="stream-start">启动图传</button>
+            <p class="operation-feedback" data-operation-feedback="stream-start" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="stream-stop">停止图传</button>
+            <p class="operation-feedback" data-operation-feedback="stream-stop" aria-live="polite"></p>
+          </div>
         </div>
       </div>
 
@@ -320,12 +341,30 @@
           <button data-action="hardware-readiness">实机预检</button>
         </div>
         <div class="direct-flight-actions">
-          <button data-action="flight-takeoff">起飞</button>
-           <button data-action="flight-land">降落</button>
-           <button data-action="flight-confirm-landing">确认继续降落</button>
-          <button data-action="flight-return-home">返航</button>
-          <button data-action="flight-stop-takeoff">停止自动起飞</button>
-          <button data-action="flight-stop-auto-landing">停止自动降落</button>
+          <div class="operation-action">
+            <button data-action="flight-takeoff">起飞</button>
+            <p class="operation-feedback" data-operation-feedback="flight-takeoff" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="flight-land">降落</button>
+            <p class="operation-feedback" data-operation-feedback="flight-land" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="flight-confirm-landing">确认继续降落</button>
+            <p class="operation-feedback" data-operation-feedback="flight-confirm-landing" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="flight-return-home">返航</button>
+            <p class="operation-feedback" data-operation-feedback="flight-return-home" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="flight-stop-takeoff">停止自动起飞</button>
+            <p class="operation-feedback" data-operation-feedback="flight-stop-takeoff" aria-live="polite"></p>
+          </div>
+          <div class="operation-action">
+            <button data-action="flight-stop-auto-landing">停止自动降落</button>
+            <p class="operation-feedback" data-operation-feedback="flight-stop-auto-landing" aria-live="polite"></p>
+          </div>
         </div>
         <div id="confirm" class="flight-confirmation" hidden>
           <p id="confirm-text"></p>

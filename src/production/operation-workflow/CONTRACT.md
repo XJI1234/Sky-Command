@@ -118,7 +118,7 @@ instance.dispose() -> void
 
 它还接收唯一的运行时选项 `now(): number`，用于调用既有 `mediaPipeline.evaluate(now)`。该函数必须返回非负有限毫秒数；不可用时 `refreshMedia()` 返回稳定失败，且不执行后续效果。模块不创建计时器，未来 Electron/IPC 装配或页面按固定频率调用 `refreshMedia()`。
 
-`hardwareReadiness` 是装配根确认过的桌面事实。开始型操作只消费当前同一 Relay 会话的 `controlTelemetry`，它来自 Android 的持续 MSDK Key 订阅和首次异步硬件读取；不得用连接时间、缓存重读或一次操作前刷新推定状态可信。设备页显式刷新可以发送一次只读 `telemetry.read`，但该命令只回传当前已观察快照，不能重启或重建手机端 MSDK Key 观察。
+`hardwareReadiness` 是装配根确认过的桌面事实，只用于报告电脑本地媒体和调用边界。设备页显示使用当前同一 Relay 会话的遥测快照，它来自 Android 的持续 MSDK Key 订阅和首次异步硬件读取；不得用连接时间、缓存重读或一次操作前刷新推定状态可信。任务、图传、设置和直接飞控的命令模块各自只读取完成该调用所需的最小当前事实，不能把 `controlTelemetry` 的完整性当作公共硬门禁。设备页显式刷新可以发送一次只读 `telemetry.read`，但该命令只回传当前已观察快照，不能重启或重建手机端 MSDK Key 观察。
 
 `desktop-runtime` 负责启动、停止中继与媒体服务；`operation-workflow` 不得替代其生命周期职责。最外层生产装配根负责按下列顺序构造：
 
@@ -247,7 +247,7 @@ resume(deviceId) -> missionControl.resume(deviceId)
 stop(deviceId)   -> missionControl.stop(deviceId)
 ```
 
-工作流不得跳过、合并或自动串联这些操作。`stage`、`pause`、`resume`、`stop` 只要求手机仍在线；`upload` 与 `start` 必须使用当前同会话的完整 `controlTelemetry` 进入下游预检，不得在操作前发送 `telemetry.read` 或重建 MSDK Key 观察。该事实缺失、畸形或会话变化均返回 `CONTROL_STATE_UNAVAILABLE`，且不发送 `wayline.*`。每次操作必须等待其结果，保持下游 `MissionDispatchSnapshot` 的原始阶段含义：
+工作流不得跳过、合并或自动串联这些操作。`stage` 只要求手机仍在线；`upload`、`start`、`pause`、`resume`、`stop` 由任务调度器检查 Relay/MSDK 可达性及必要的任务阶段顺序，不读取或等待完整的控制遥测，不得在操作前发送 `telemetry.read` 或重建 MSDK Key 观察。遥控器、飞控、电量、飞行状态、电机和航线能力均不在桌面本地替 DJI 预先裁决；每次操作必须等待手机端 DJI 结果并保持下游 `MissionDispatchSnapshot` 的原始阶段含义：
 
 | 阶段/结果 | 对操作者的准确含义 |
 | --- | --- |
@@ -268,7 +268,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 1. `refreshDeviceState(deviceId)` 是设备页的显式只读刷新入口。它仅发送一次 `telemetry.read` 并返回稳定结果；只有手机回复的快照被适配器验证为当前会话的 `accepted` 或 `already-current` 时才成功。成功只表示桌面取得了当次手机状态，绝不表示飞机或图传就绪，也不发送 DJI、任务、图传或飞控命令。
 2. `measurePhoneLink(deviceId)` 是设备页独立的网络自检入口。它仅在指定手机当前在线时转交 `relayOperations.measurePhoneLink` 的固定 10 样本 WebSocket RTT 报告，不发布或修改工作流快照，不读取/写入 MSDK 遥测，也不调用 DJI、任务、图传、媒体或飞控模块。成功只表示该次协议往返已完成；不可测结果同样是诊断事实，绝不改变任何控制门禁。
 3. `checkHardwareReadiness(deviceId)` 只评估当前中继上报的显示事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
-3. `startStream(deviceId)` 在委托 `live-stream-control.start` 前必须取得当前同会话的控制遥测，再通过基于该控制事实的 `legacy-video` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，不发送启动命令。该预检只检查电脑媒体服务、在线中继和 MSDK 已就绪；它不以遥控器或飞控作为图传门槛。预检未通过返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`，且不得向手机发送启动命令。预检通过后，`live-stream-control` 必须以同会话手机实时 `capabilities.liveVideo === true` 作为最终启动门禁；该值由手机端的 MSDK 就绪状态、`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 当前三态共同推导。值缺失或为 false 只能表示当前图传链路未就绪，绝不表示机型永久不支持。由 DJI 完成回调与 RTMP 入流确认真实结果。
+3. `startStream(deviceId)` 只在电脑端媒体接收服务可用时调用 `live-stream-control.start`；`hardware-readiness` 的 `legacy-video` 结果只包含局域网地址和本机媒体服务事实，不读取完整控制遥测。`live-stream-control` 只以 Relay/MSDK 可达性、RTMP 接收端点和同设备操作顺序决定是否下发。手机端实时 `capabilities.liveVideo` 由 MSDK 就绪状态、`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 当前三态共同推导，但仅表示当前图传源观测，不得拒绝人工启动。由 DJI `startStream` 完成回调、`LiveStreamStatus.isStreaming` 与 RTMP 入流分别确认真实结果。
 4. `stopStream(deviceId)` 不经过实机预检或控制遥测读取，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
 4. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
 5. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。生产渲染器在成功附着当前图传机的 HTTP-FLV 播放器时必须调用该入口，使主进程选择状态与实际播放器目标一致；该选择本身不等同于首帧已经绘制。
@@ -281,17 +281,17 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 ## 9. 设备设置规则
 
 1. 四个设置操作只委托注入的 `deviceSettings`：图传设置读取/写入对应 `readTransmission`/`writeTransmission`，相机设置读取/写入对应 `readCamera`/`writeCamera`。
-2. 每次设置操作前，工作流必须取得当前同会话控制遥测，再以该事实调用既有 `CapabilityGate.evaluate`，操作名分别为 `transmission-settings` 或 `camera-settings`。事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`；门禁失败时不得调用设置模块。
+2. 每次设置操作只通过 `CapabilityGate.evaluate` 检查 Relay 与 MSDK 可达性；它不读取遥控器、飞控或任何图传/航线能力字段。设备状态快照不完整时仍允许把命令交给设置模块，由手机端 DJI 回调返回拒绝或未确认结果；Relay 或 MSDK 不可达时不得调用设置模块。
 3. 设备快照应包含 `deviceSettings.snapshot(deviceId)` 的已确认设置快照和请求中标识。写入成功只能展示手机端 DJI 回调返回的完整确认快照，禁止以提交补丁作乐观更新。
 4. 设置读取、写入、超时、拒绝、畸形结果和同设备同域并发语义全部保持 `device-settings-panel` 契约；工作流不解析字段、不维护机型枚举，也不将设置失败归类为任务或图传失败。
 5. 设备断连后，后续设置结果不得重新出现在在线设备视图；同设备的新会话必须重新读取设置。
 
 ## 10. 直接飞控规则
 
-1. `requestFlightAction` 对 `takeoff` 必须取得当前同会话控制遥测，并通过基于该事实的 `flight-control` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且不得创建确认或向手机发送飞控请求。预检未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`。对 `land`、`confirm-landing`、`return-home`、`stop-takeoff`、`stop-auto-landing`，工作流只确认目标手机仍在线，然后直接委托 `flightControl.request`；下游会以同一会话的 `MSDK READY` 事实执行最小可达性检查。工作流不得以飞控、遥控器、飞行模式、电量或其它遥测替 DJI 预先拒绝收尾动作。
-2. `confirmFlightAction` 对 `takeoff` 在消费确认、可能发送飞控命令之前，必须再次取得当前同会话控制遥测；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且必须保留原待确认动作，以便操作者在恢复控制状态后重试或显式取消。收尾型动作直接委托确认，由下游在发送前重读最小可达性；只有已实际委托确认或确认本身被下游拒绝、过期时才可清除该待确认动作。`cancelFlightAction` 不需要控制遥测或实机预检。确认不可跨设备、跨动作、重复或过期复用。
+1. `requestFlightAction` 只负责释放前一次有效确认并委托 `flightControl.request` 创建新的显式二次确认；它不得读取控制遥测或替 DJI 预先拒绝任何六类动作。`flightControl` 在创建确认与实际发送前均重新执行同一最小可达性检查：目标 Relay 在线且 MSDK 已就绪。工作流不得以飞控、遥控器、飞行模式、电量、电机、降落确认或其它遥测替 DJI Action 裁决。
+2. `confirmFlightAction` 必须直接委托 `flightControl.confirm`，不得在消费确认前再次以工作流控制快照阻断。飞控调度器会在真正发送前重读最小可达性；因此下游的 `PREFLIGHT_BLOCKED`、DJI 明确拒绝、结果未确认或调用失败必须保留到界面。确认一经下游消费即不可重试；`cancelFlightAction` 不需要控制遥测或实机预检。确认不可跨设备、跨动作、重复或过期复用。
 3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 对应 `KeyConfirmLanding`，停止自动起飞/降落分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`，不表示停机、立即落地或已经悬停。它们的实际适用状态由 MSDK Action 回调裁决，不由工作流使用页面快照推断。
-4. `flight.land` 的 DJI Action 成功只使该设备的 `landing.phase` 进入 `awaiting-msdk`。在该意图仍为 `requested` 且尚未观察到 `confirmed-grounded` 之前，新的 `land` 请求必须返回 `LANDING_IN_PROGRESS`，不得重复创建确认或再次调用 DJI。其后只能由同一会话的持续 MSDK 遥测改变：`KeyIsLandingConfirmationNeeded=true` 为 `confirmation-required`，`KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 为 `confirmed-grounded`，任一所需事实未知或飞控断开为 `state-unknown`。它绝不因时间流逝、命令回调、页面刷新或旧缓存显示为已落地。`flight.stop-auto-landing` 成功才进入 `stopped`；其它成功的直接飞行动作重置为 `idle`。
+4. `flight.land` 的 DJI Action 成功只使该设备的 `landing.phase` 进入 `awaiting-msdk`，它只描述同一 Relay 会话观察到的降落进度，不表示已经着陆，也不构成后续 `land` 的本地拒绝理由。只要 Relay 在线且 MSDK 已就绪，新的人工 `land` 请求必须创建新的显式确认并交给 DJI Action 裁决。其后只能由同一会话的持续 MSDK 遥测改变：`KeyIsLandingConfirmationNeeded=true` 为 `confirmation-required`，`KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 为 `confirmed-grounded`，任一所需事实未知或飞控断开为 `state-unknown`。它绝不因时间流逝、命令回调、页面刷新或旧缓存显示为已落地。`flight.stop-auto-landing` 成功才进入 `stopped`；其它成功的直接飞行动作重置为 `idle`。
 5. 工作流只保存由 `requestFlightAction` 返回的待确认 ID 和上述已接受降落的最小意图。设备断连或会话替换时，如动作仍未确认，工作流只能调用既有 `flightControl.cancel(deviceId, confirmationId)` 取消确认，并丢弃该会话的降落意图；它绝不补发飞控命令。已经发送中的 DJI 调用不可由本模块撤销，其迟到结果也不得让离线设备重新出现在工作流快照中。
 
 ## 11. 断连、异常与释放
@@ -308,7 +308,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道；不得让旧确认对话框在新会话上继续可点。
 
-设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示与禁用明显不满足前置条件的操作；它不是后端授权。图传启动、设备设置、航线上传、航线启动与 `takeoff` 分别只接受当前同会话的完整控制遥测；事实缺失、会话变化、明确 `false` 或 `unknown` 都必须拒绝新操作。收尾型直接飞行动作只读取下游所需的中继可达性和 `MSDK READY`，不得被其它缺失或旧遥测阻断。
+设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示已知状态；它不是后端授权。图传启动、设备设置、航线上传、航线启动、暂停、恢复和停止分别只接受各自模块读取的当前同会话最小事实：图传还需 `capabilities.liveVideo`，任务还需合法阶段；其余设备安全条件由 DJI 回调裁决。直接飞行动作由 `flight-control` 的同一最小 Relay+MSDK 可达性检查统一裁决，不得被其它缺失或旧遥测阻断。
 
 同 ID 的新手机会话后续重新出现时被视为新在线设备：旧任务和旧图传都不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。
 
@@ -344,7 +344,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 1. 所有工作流动作的精确委托、非法阶段拒绝、错误码和冻结返回值；
 2. 航线导入的成功、拒绝、取消和重复语义，航线选择与预览，合格/不合格航线分配、在途任务禁止重分配、删除已分配航线拒绝；
 3. 所有任务阶段及“暂存/上传/启动接受/实际执行”的严格区分；
-4. 全部预检阻塞项、空设备、未知能力、电量边界和设备状态未知；
+4. 全部预检阻塞项、空设备、未知图传能力、最小可达性与设备状态未知；
 5. 图传控制成功、媒体刷新中的媒体未到达、HTTP-FLV 分发未就绪、可播放、播放器失败、时钟失败和视频选择切换；
 6. 三项直接飞控动作、一次性确认、取消、过期、跨设备隔离和遥测迟到；
 7. 两类设备设置的读取、写入、门禁、完整确认快照、同设备同域互斥和多设备隔离；

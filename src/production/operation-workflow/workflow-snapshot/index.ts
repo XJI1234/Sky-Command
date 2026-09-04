@@ -31,7 +31,7 @@ const landingPhase = (intent: unknown, connection: RecordValue): "idle" | "await
   return "awaiting-msdk";
 };
 const poseNumber = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
-const safeText = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value) ? value : null;
+const safeText = (value: unknown, maximumCodePoints = 128): string | null => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maximumCodePoints && !/[\p{Cc}]/u.test(value) ? value : null;
 const boundedInteger = (value: unknown, minimum: number, maximum: number): number | null => typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : null;
 const boundedNumber = (value: unknown, minimum: number, maximum: number): number | null => typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum ? value : null;
 const pose = (payload: unknown): Readonly<{ readonly latitude: number | null; readonly longitude: number | null; readonly altitudeMeters: number | null }> | null => {
@@ -44,9 +44,17 @@ const pose = (payload: unknown): Readonly<{ readonly latitude: number | null; re
 };
 const live = (payload: unknown) => {
   const streaming = read(payload, "liveStreaming");
-  if (streaming !== true) return freeze({ streaming: streaming === false ? false : null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
+  const notice = safeText(read(payload, "liveStreamNotice"), 256);
+  const runtimeErrorCode = safeText(read(payload, "liveStreamRuntimeErrorCode"), 128);
+  const runtimeErrorDescription = safeText(read(payload, "liveStreamRuntimeErrorDescription"), 512);
+  const runtimeError = runtimeErrorCode !== null && runtimeErrorDescription !== null
+    ? freeze({ code: runtimeErrorCode, description: runtimeErrorDescription })
+    : null;
+  if (streaming !== true) return freeze({ streaming: streaming === false ? false : null, notice, runtimeError, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
   return freeze({
     streaming: true,
+    notice,
+    runtimeError,
     resolution: safeText(read(payload, "liveResolution")),
     fps: boundedNumber(read(payload, "liveFps"), 0, 240),
     videoBitrateKbps: boundedNumber(read(payload, "liveVideoBitrateKbps"), 0, 100_000),

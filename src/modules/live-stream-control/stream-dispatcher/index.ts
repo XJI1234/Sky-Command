@@ -1,8 +1,9 @@
 export type StreamOperation = "start" | "stop";
-export type StreamDispatchCode = "INVALID_INPUT" | "MEDIA_PIPELINE_UNAVAILABLE" | "CONFIGURATION_INVALID" | "CAPABILITY_BLOCKED" | "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "DEPENDENCY_FAILURE" | "DISCONNECTED" | "SOURCE_UNAVAILABLE" | "ILLEGAL_STATE";
+export type StreamDispatchCode = "INVALID_INPUT" | "MEDIA_PIPELINE_UNAVAILABLE" | "CONFIGURATION_INVALID" | "CAPABILITY_BLOCKED" | "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "STREAM_ACTION_REJECTED" | "STREAM_ACTION_INVOCATION_FAILED" | "STREAM_ACTION_UNCONFIRMED" | "DEPENDENCY_FAILURE" | "DISCONNECTED" | "SOURCE_UNAVAILABLE" | "ILLEGAL_STATE";
 export interface StreamDispatchSnapshot { readonly deviceId: string; readonly phase: "idle" | "starting" | "streaming" | "stopping" | "failed" | "disconnected"; readonly lastOperation: StreamOperation | null; readonly failureCode: StreamDispatchCode | null; readonly reason: string | null; }
-export type StreamDispatchCheck = Readonly<{ readonly ok: true }> | Readonly<{ readonly ok: false; readonly code: Exclude<StreamDispatchCode, "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "DISCONNECTED" | "ILLEGAL_STATE">; readonly reason?: string }>;
-export type StreamDispatchResult = Readonly<{ readonly ok: true; readonly operation: StreamOperation; readonly state: StreamDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: StreamOperation; readonly code: StreamDispatchCode; readonly state: StreamDispatchSnapshot | null; readonly reason?: string }>;
+export interface StreamPlatformError { readonly code: string; readonly description: string; }
+export type StreamDispatchCheck = Readonly<{ readonly ok: true }> | Readonly<{ readonly ok: false; readonly code: Exclude<StreamDispatchCode, "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "STREAM_ACTION_REJECTED" | "STREAM_ACTION_INVOCATION_FAILED" | "STREAM_ACTION_UNCONFIRMED" | "DISCONNECTED" | "ILLEGAL_STATE">; readonly reason?: string }>;
+export type StreamDispatchResult = Readonly<{ readonly ok: true; readonly operation: StreamOperation; readonly state: StreamDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: StreamOperation; readonly code: StreamDispatchCode; readonly state: StreamDispatchSnapshot | null; readonly reason?: string; readonly platformError?: StreamPlatformError }>;
 export interface StreamDispatcherDependencies {
   readonly media: { readonly snapshot: () => unknown };
   readonly relay: { readonly latestTelemetry: (deviceId: string) => unknown; readonly ingressAddress?: (deviceId: string) => unknown; readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<unknown>; };
@@ -25,6 +26,7 @@ const privateIpv4 = (value: unknown): value is string => {
 };
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；畸形依赖边界由公开契约覆盖。
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
+const validText = (value: unknown, maxCodePoints: number): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maxCodePoints && !/[\p{Cc}]/u.test(value);
 const attempt = <T>(action: () => T): Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false }> => {
   try {
     return freeze({ ok: true as const, value: action() });
@@ -44,6 +46,26 @@ const attemptAsync = async <T>(action: () => Promise<T>): Promise<Readonly<{ rea
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；空快照由公开查询契约覆盖。
 const empty = (deviceId: string): StreamDispatchSnapshot => freeze({ deviceId, phase: "idle", lastOperation: null, failureCode: null, reason: null });
 const relayRejectionReason = (value: unknown): string | null => value === "Another video transport is active" ? "ANOTHER_VIDEO_TRANSPORT_ACTIVE" : null;
+type StreamTerminalResult =
+  | Readonly<{ readonly outcome: "ACTION_REJECTED"; readonly platformError: StreamPlatformError }>
+  | Readonly<{ readonly outcome: "INVOCATION_FAILED" | "RESULT_UNCONFIRMED" }>;
+const readStreamTerminalResult = (value: unknown): StreamTerminalResult | null => {
+  try {
+    if (!record(value) || !record(value.result) || value.result.kind !== "object" || !record(value.result.fields)) return null;
+    const fields = value.result.fields;
+    const field = (name: string, maxCodePoints: number): string | null => {
+      const candidate = fields[name];
+      return record(candidate) && candidate.kind === "string" && validText(candidate.value, maxCodePoints) ? candidate.value : null;
+    };
+    if (field("domain", 32) !== "live-stream") return null;
+    const outcome = field("outcome", 64);
+    if (outcome === "INVOCATION_FAILED" || outcome === "RESULT_UNCONFIRMED") return freeze({ outcome });
+    if (outcome !== "ACTION_REJECTED") return null;
+    const code = field("errorCode", 128);
+    const description = field("errorDescription", 512);
+    return code === null || description === null ? null : freeze({ outcome, platformError: freeze({ code, description }) });
+  } catch { return null; }
+};
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；断线迟到结果由公开契约覆盖。
 const isDisconnected = (lane: Lane): boolean => lane.phase === "disconnected";
 const isSourceUnavailable = (lane: Lane): boolean => lane.phase === "failed" && lane.failureCode === "SOURCE_UNAVAILABLE";
@@ -61,17 +83,11 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     if (!telemetryAttempt.ok || (telemetryAttempt.value !== null && !record(telemetryAttempt.value))) return freeze({ ok: false as const, code: "DEPENDENCY_FAILURE" as const });
     const telemetry = telemetryAttempt.value;
     const payload = telemetry === null ? freeze({ ok: true as const, value: {} }) : attempt(() => telemetry.payload);
-    const capabilities = telemetry === null ? freeze({ ok: true as const, value: {} }) : attempt(() => telemetry.capabilities);
-    if (!payload.ok || !capabilities.ok) return freeze({ ok: false as const, code: "DEPENDENCY_FAILURE" as const });
+    if (!payload.ok) return freeze({ ok: false as const, code: "DEPENDENCY_FAILURE" as const });
     const gate = attempt(() => {
-      const facts: Record<string, unknown> = { operation: "live-stream", relayConnected: telemetry !== null, capabilities: capabilities.value };
+      const facts: Record<string, unknown> = { operation: "live-stream", relayConnected: telemetry !== null };
       if (record(payload.value)) {
         facts.sdkAvailability = payload.value.sdkAvailability;
-        facts.remoteController = payload.value.remoteController;
-        facts.flightController = payload.value.flightController;
-        facts.sdkRegistered = payload.value.sdkRegistered;
-        facts.remoteControllerConnected = payload.value.remoteControllerConnected;
-        facts.flightControllerConnected = payload.value.flightControllerConnected;
       }
       return dependencies.capabilityGate.evaluate(facts);
     });
@@ -86,10 +102,10 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     if (!allowed.ok) return freeze({ ok: false as const, operation, code: allowed.code, state: snapshot(deviceId, lane), ...(allowed.reason === undefined ? {} : { reason: allowed.reason }) });
     return null;
   };
-  const result = (deviceId: string, lane: Lane, operation: StreamOperation, ok: boolean, code: StreamDispatchCode | null, reason: string | null = null): StreamDispatchResult => {
+  const result = (deviceId: string, lane: Lane, operation: StreamOperation, ok: boolean, code: StreamDispatchCode | null, reason: string | null = null, extra: Partial<Pick<Extract<StreamDispatchResult, { readonly ok: false }>, "platformError">> = {}): StreamDispatchResult => {
     lane.busy = false; lane.lastOperation = operation; lane.failureCode = code; lane.reason = reason; lane.phase = ok ? operation === "start" ? "streaming" : "idle" : "failed";
     const state = snapshot(deviceId, lane); publish();
-    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state, ...(reason === null ? {} : { reason }) });
+    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state, ...(reason === null ? {} : { reason }), ...extra });
   };
   const send = async (deviceId: string, lane: Lane, operation: StreamOperation, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>): Promise<StreamDispatchResult> => {
     lane.busy = true; lane.phase = operation === "start" ? "starting" : "stopping"; publish();
@@ -99,12 +115,17 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
     if (!sent.ok) return result(deviceId, lane, operation, false, "DEPENDENCY_FAILURE");
     const payload = attempt(() => {
       if (!record(sent.value)) return null;
-      return freeze({ status: sent.value.status, detail: sent.value.detail });
+      return freeze({ status: sent.value.status, detail: sent.value.detail, result: sent.value.result });
     });
     if (!payload.ok || payload.value === null) return result(deviceId, lane, operation, false, "RELAY_REJECTED");
-    return payload.value.status === "succeeded"
-      ? result(deviceId, lane, operation, true, null)
-      : result(deviceId, lane, operation, false, "RELAY_REJECTED", relayRejectionReason(payload.value.detail));
+    if (payload.value.status === "succeeded") return result(deviceId, lane, operation, true, null);
+    if (payload.value.status === "timed-out" || payload.value.status === "disconnected") return result(deviceId, lane, operation, false, "STREAM_ACTION_UNCONFIRMED");
+    if (payload.value.status !== "rejected") return result(deviceId, lane, operation, false, "DEPENDENCY_FAILURE");
+    const terminal = readStreamTerminalResult(payload.value);
+    if (terminal?.outcome === "ACTION_REJECTED") return result(deviceId, lane, operation, false, "STREAM_ACTION_REJECTED", null, { platformError: terminal.platformError });
+    if (terminal?.outcome === "INVOCATION_FAILED") return result(deviceId, lane, operation, false, "STREAM_ACTION_INVOCATION_FAILED");
+    if (terminal?.outcome === "RESULT_UNCONFIRMED") return result(deviceId, lane, operation, false, "STREAM_ACTION_UNCONFIRMED");
+    return result(deviceId, lane, operation, false, "RELAY_REJECTED", relayRejectionReason(payload.value.detail));
   };
   const restartFailure = (deviceId: string, lane: Lane, code: StreamDispatchCode, reason: string | null = null): StreamDispatchResult => {
     const state = snapshot(deviceId, lane);

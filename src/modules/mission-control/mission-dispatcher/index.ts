@@ -148,7 +148,13 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     publish();
     return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state, ...extra });
   };
-  const blocked = (lane: Lane, operation: "upload" | "start", blockers: readonly PreflightBlocker[]): DispatchResult => {
+  const disconnectedResult = (lane: Lane, operation: DispatchOperation, code: DispatchErrorCode): DispatchResult => {
+    lane.lastResult = freeze({ operation, ok: false, code });
+    const state = snapshot(lane);
+    publish();
+    return freeze({ ok: false as const, operation, code, state });
+  };
+  const blocked = (lane: Lane, operation: Exclude<DispatchOperation, "stage">, blockers: readonly PreflightBlocker[]): DispatchResult => {
     lane.lastResult = freeze({ operation, ok: false, code: "PREFLIGHT_BLOCKED" });
     const state = snapshot(lane);
     publish();
@@ -184,6 +190,9 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const payload: RelayMissionPayload = freeze({ missionId, fileName: routePayload.fileName, size: routePayload.sizeBytes, sha256: routePayload.sha256, bytes: routePayload.bytes.slice() });
     const sent = await attemptAsync(() => dependencies.relay.sendMission(deviceId, payload));
     lane.busy = false;
+    // A relay disappearance wins over any late transfer completion. The
+    // caller must not mistake a stale acknowledgement for a current stage.
+    if (lane.machine.state().phase === "disconnected") return disconnectedResult(lane, "stage", "MISSION_TRANSFER_FAILED");
     if (sent.ok && succeeded(sent.value)) {
       lane.machine.transition({ type: "stage-succeeded", missionId });
       return result(lane, "stage", true, null);
@@ -197,14 +206,17 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const lane = lanes.get(deviceId);
     if (!lane) return rejected(operation, "ILLEGAL_PHASE", null);
     if (lane.busy) return rejected(operation, "OPERATION_IN_PROGRESS", lane);
-    if (operation === "upload" || operation === "start") {
+    if (operation === "upload" || operation === "start" || operation === "pause" || operation === "resume" || operation === "stop") {
       if (operation === "start" && lane.machine.state().phase !== "uploaded") return rejected(operation, "ILLEGAL_PHASE", lane);
       const telemetryAttempt = attempt(() => dependencies.relay.latestTelemetry(deviceId));
       if (!telemetryAttempt.ok) return rejected(operation, "DEPENDENCY_FAILURE", lane);
       const telemetry = telemetryAttempt.value;
       const preflightAttempt = attempt(() => {
         const input = { relayConnected: telemetry !== null, payload: telemetry?.payload ?? {}, capabilities: telemetry?.capabilities ?? {}, missionPhase: lane.machine.state().phase };
-        return operation === "upload" ? PreflightCheck.evaluateUpload(input) : PreflightCheck.evaluate(input);
+        // Every DJI-backed command needs the same minimal invocation boundary.
+        // `evaluateUpload` is the compatibility-named check that validates only
+        // Relay reachability and MSDK readiness; device safety remains DJI-owned.
+        return operation === "start" ? PreflightCheck.evaluate(input) : PreflightCheck.evaluateUpload(input);
       });
       if (!preflightAttempt.ok) return rejected(operation, "DEPENDENCY_FAILURE", lane);
       const preflight = preflightAttempt.value;
@@ -216,6 +228,16 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     publish();
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, { name: commandName, fields: COMMANDS }));
     lane.busy = false;
+    // `recordDisconnected` may have settled the lane while the transport was
+    // still pending. Keep that terminal observation authoritative.
+    if (lane.machine.state().phase === "disconnected") {
+      const unconfirmed = operation === "start" ? "WAYLINE_START_UNCONFIRMED" as const
+        : operation === "pause" ? "WAYLINE_PAUSE_UNCONFIRMED" as const
+          : operation === "resume" ? "WAYLINE_RESUME_UNCONFIRMED" as const
+            : operation === "stop" ? "WAYLINE_STOP_UNCONFIRMED" as const
+              : "WAYLINE_UPLOAD_FAILED" as const;
+      return disconnectedResult(lane, operation, unconfirmed);
+    }
     if (sent.ok && succeeded(sent.value)) {
       completeCommand[operation](lane.machine);
       return result(lane, operation, true, null);

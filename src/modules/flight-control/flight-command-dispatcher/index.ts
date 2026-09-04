@@ -2,7 +2,7 @@ import type { FlightAction } from "../dangerous-action-confirm/index.js";
 
 export type { FlightAction } from "../dangerous-action-confirm/index.js";
 
-export type FlightCommandCode = "SUCCEEDED" | "PREFLIGHT_BLOCKED" | "CAPABILITY_BLOCKED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "DEPENDENCY_FAILURE" | "OPERATION_IN_PROGRESS" | "INVALID_INPUT" | "DISPOSED" | "NO_PENDING_CONFIRMATION" | "CONFIRMATION_MISMATCH" | "CONFIRMATION_EXPIRED" | "CONFIGURATION_INVALID" | "ID_UNAVAILABLE";
+export type FlightCommandCode = "SUCCEEDED" | "PREFLIGHT_BLOCKED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "DEPENDENCY_FAILURE" | "OPERATION_IN_PROGRESS" | "INVALID_INPUT" | "DISPOSED" | "NO_PENDING_CONFIRMATION" | "CONFIRMATION_MISMATCH" | "CONFIRMATION_EXPIRED" | "CONFIGURATION_INVALID" | "ID_UNAVAILABLE";
 export interface FlightBlocker { readonly code: string; readonly message: string; }
 export interface FlightPlatformError { readonly code: string; readonly description: string; }
 export type FlightCommandCheck =
@@ -14,8 +14,7 @@ export interface FlightRelay {
   readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing"; readonly fields: Readonly<{ readonly confirm: true }> }>) => Promise<unknown>;
 }
 export interface FlightPreflight { readonly evaluateFlightAction: (input: unknown) => unknown; }
-export interface FlightCapabilityGate { readonly evaluate: (input: unknown) => unknown; }
-export interface FlightCommandDispatcherDependencies { readonly relay: FlightRelay; readonly preflight: FlightPreflight; readonly capabilityGate: FlightCapabilityGate; }
+export interface FlightCommandDispatcherDependencies { readonly relay: FlightRelay; readonly preflight: FlightPreflight; }
 export interface FlightCommandDispatcherInstance { readonly check: (deviceId: string, action: FlightAction) => FlightCommandCheck; readonly dispatch: (deviceId: string, action: FlightAction) => Promise<FlightCommandResult>; readonly isBusy: (deviceId: string) => boolean; }
 
 const actions: readonly FlightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"];
@@ -93,25 +92,6 @@ function create(dependencies: FlightCommandDispatcherDependencies): FlightComman
       const blockersAttempt = attempt(() => readBlockers(safetyValue.blockers));
       if (!blockersAttempt.ok || blockersAttempt.value === null) return invalid("DEPENDENCY_FAILURE");
       return freeze({ ok: false as const, code: "PREFLIGHT_BLOCKED" as const, blockers: blockersAttempt.value });
-    }
-    if (action === "takeoff") {
-      // Stryker disable next-line ObjectLiteral, ConditionalExpression, EqualityOperator: exact gate facts are asserted at the seam.
-      const gate = attempt(() => {
-        const facts: Record<string, unknown> = { operation: "direct-flight", relayConnected: telemetry !== null, capabilities };
-        if (isRecord(payload)) {
-          facts.sdkAvailability = payload.sdkAvailability;
-          facts.remoteController = payload.remoteController;
-          facts.flightController = payload.flightController;
-          facts.sdkRegistered = payload.sdkRegistered;
-          facts.remoteControllerConnected = payload.remoteControllerConnected;
-          facts.flightControllerConnected = payload.flightControllerConnected;
-          facts.landingConfirmationNeeded = payload.landingConfirmationNeeded;
-        }
-        return dependencies.capabilityGate.evaluate(facts);
-      });
-      // Stryker disable next-line LogicalOperator, ConditionalExpression: malformed gate values normalize identically.
-      if (!gate.ok || !isRecord(gate.value) || gate.value.ok !== true || !isRecord(gate.value.value) || typeof gate.value.value.enabled !== "boolean") return invalid("DEPENDENCY_FAILURE");
-      if (gate.value.value.enabled !== true) return freeze({ ok: false as const, code: "CAPABILITY_BLOCKED" as const, reason: typeof gate.value.value.reason === "string" ? gate.value.value.reason : "CAPABILITY_UNKNOWN" });
     }
     return freeze({ ok: true as const });
   };

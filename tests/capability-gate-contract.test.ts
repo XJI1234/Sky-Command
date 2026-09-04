@@ -22,50 +22,92 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteControllerConnected: false, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
   });
 
-  it("不把飞机操作的遥控器断开误判为飞机断开", () => {
+  it("直接飞行只判断 MSDK 可达，不把遥控器显示状态当作本地硬拦截", () => {
     expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, remoteControllerConnected: false })).toEqual({
       ok: true,
-      value: { operation: "direct-flight", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" }
+      value: { operation: "direct-flight", enabled: true, reason: null }
     });
   });
 
   it.each([
     [{ operation: "live-stream", ...base, relayConnected: false }, "RELAY_OFFLINE"],
     [{ operation: "live-stream", ...base, sdkRegistered: false }, "SDK_NOT_READY"],
-    [{ operation: "waypoint-mission", ...base, capabilities: { ...base.capabilities, waypointMission: false } }, "WAYPOINT_UNSUPPORTED"],
-    [{ operation: "waypoint-mission", ...base, capabilities: { ...base.capabilities, waypointMissionSupport: "unsupported" } }, "WAYPOINT_UNSUPPORTED"]
   ])("针对不可提交条件返回精确原因", (input, reason) => {
     expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: input.operation, enabled: false, reason } });
   });
 
-  it("图传只依赖实时图传能力，不依赖飞控连接", () => {
+  it("图传只确认 Relay 与 MSDK 可达，不以图传源观测预先拒绝", () => {
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, remoteControllerConnected: false, flightControllerConnected: false, aircraftConnected: false })).toEqual({
       ok: true,
       value: { operation: "live-stream", enabled: true, reason: null },
     });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: null })).toEqual({
       ok: true,
-      value: { operation: "live-stream", enabled: false, reason: "CAPABILITY_UNKNOWN" },
+      value: { operation: "live-stream", enabled: true, reason: null },
     });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: {} })).toEqual({
       ok: true,
-      value: { operation: "live-stream", enabled: false, reason: "CAPABILITY_UNKNOWN" },
+      value: { operation: "live-stream", enabled: true, reason: null },
     });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: { ...base.capabilities, liveVideo: false } })).toEqual({
       ok: true,
-      value: { operation: "live-stream", enabled: false, reason: "LIVE_VIDEO_UNAVAILABLE" },
+      value: { operation: "live-stream", enabled: true, reason: null },
     });
   });
 
-  it("航线能力字段缺失不会被擅自当作支持", () => {
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMission: true } })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: false, reason: "CAPABILITY_UNKNOWN" } });
+  it.each(["transmission-settings", "camera-settings"] as const)("%s 只要求手机中继和 MSDK 可达，不以遥控器或飞控遥测提前拒绝", (operation) => {
+    expect(CapabilityGate.evaluate({
+      operation,
+      ...base,
+      sdkAvailability: "READY",
+      remoteController: "DISCONNECTED",
+      flightController: "UNKNOWN",
+      remoteControllerConnected: false,
+      flightControllerConnected: false,
+    })).toEqual({ ok: true, value: { operation, enabled: true, reason: null } });
+  });
+
+  it.each(["transmission-settings", "camera-settings"] as const)("%s 不读取无关的遥控器、飞控和能力字段", (operation) => {
+    const input = Object.defineProperties({ operation, relayConnected: true, sdkAvailability: "READY" }, {
+      remoteController: { get: () => { throw new Error("unrelated remote-controller observation"); } },
+      flightController: { get: () => { throw new Error("unrelated flight-controller observation"); } },
+      capabilities: { get: () => { throw new Error("unrelated capability observation"); } },
+    });
+
+    expect(CapabilityGate.evaluate(input)).toEqual({
+      ok: true,
+      value: { operation, enabled: true, reason: null },
+    });
+  });
+
+  it.each(["direct-flight", "waypoint-mission"] as const)("%s 只确认 Relay 与 MSDK 可达，不以设备遥测或能力取代 DJI 裁决", (operation) => {
+    const input = Object.defineProperties({ operation, relayConnected: true, sdkAvailability: "READY" }, {
+      remoteController: { get: () => { throw new Error("unrelated remote-controller observation"); } },
+      flightController: { get: () => { throw new Error("unrelated flight-controller observation"); } },
+      capabilities: { get: () => { throw new Error("unrelated capability observation"); } },
+    });
+
+    expect(CapabilityGate.evaluate(input)).toEqual({
+      ok: true,
+      value: { operation, enabled: true, reason: null },
+    });
+  });
+
+  it("图传门禁不读取 AirLink/主相机的组合观测", () => {
+    const input = Object.defineProperties({ operation: "live-stream", relayConnected: true, sdkAvailability: "READY" }, {
+      capabilities: { get: () => { throw new Error("source observation is not a start gate"); } },
+    });
+
+    expect(CapabilityGate.evaluate(input)).toEqual({
+      ok: true,
+      value: { operation: "live-stream", enabled: true, reason: null },
+    });
   });
 
   it.each([
     [null, "input"],
     [{ operation: "unknown", ...base }, "operation"],
-    [{ operation: "live-stream", ...base, sdkRegistered: "yes" }, "sdkRegistered"],
-    [{ operation: "waypoint-mission", ...base, capabilities: { liveVideo: "yes" } }, "capabilities.liveVideo"]
+    [{ operation: "live-stream", ...base, sdkRegistered: "yes" }, "sdkRegistered"]
   ])("拒绝无效门禁输入", (input, field) => {
     expect(CapabilityGate.evaluate(input)).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field, reason: "invalid-value" } } });
   });
@@ -77,40 +119,37 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate(hostile)).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "input", reason: "unreadable" } } });
   });
 
-  it("拒绝航线所需的非对象、未知支持枚举和不可读取能力对象", () => {
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: true })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "capabilities.liveVideo", reason: "invalid-value" } } });
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMissionSupport: "pending" } })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "capabilities.liveVideo", reason: "invalid-value" } } });
+  it("图传门禁忽略非对象、非法或不可读取的源观测", () => {
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: true })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: { liveVideo: "pending" } })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
     const hostileCapabilities = new Proxy({}, { get() { throw new Error("secret"); } });
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: hostileCapabilities })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "capabilities.liveVideo", reason: "unreadable" } } });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: hostileCapabilities })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
   });
 
   it("独立校验每个能力字段和每一段飞行连接事实", () => {
     expect(CapabilityGate.evaluate(1)).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "input", reason: "invalid-value" } } });
     expect(CapabilityGate.evaluate({ operation: ["live-stream"], ...base })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "operation", reason: "invalid-value" } } });
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMission: "yes" } })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "capabilities.liveVideo", reason: "invalid-value" } } });
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { virtualStick: "yes" } })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "capabilities.liveVideo", reason: "invalid-value" } } });
+    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMission: "yes" } })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMission: true, waypointMissionSupport: "supported", virtualStick: "yes" } })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: true, aircraftConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: false, aircraftConnected: true })).toEqual({ ok: true, value: { operation: "pairing", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, aircraftConnected: false })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
-    expect(CapabilityGate.evaluate({ operation: "transmission-settings", ...base, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "transmission-settings", enabled: false, reason: "FLIGHT_CONTROLLER_OFFLINE" } });
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: null })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: false, reason: "CAPABILITY_UNKNOWN" } });
-    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMissionSupport: "supported" } })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: false, reason: "CAPABILITY_UNKNOWN" } });
+    expect(CapabilityGate.evaluate({ operation: "transmission-settings", ...base, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "transmission-settings", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: null })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ operation: "waypoint-mission", ...base, capabilities: { waypointMissionSupport: "supported" } })).toEqual({ ok: true, value: { operation: "waypoint-mission", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "transmission-settings", ...base, capabilities: null })).toEqual({ ok: true, value: { operation: "transmission-settings", enabled: true, reason: null } });
-    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, remoteControllerConnected: false, capabilities: { ...base.capabilities, liveVideo: false } })).toEqual({ ok: true, value: { operation: "live-stream", enabled: false, reason: "LIVE_VIDEO_UNAVAILABLE" } });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, remoteControllerConnected: false, capabilities: { ...base.capabilities, liveVideo: false } })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
   });
 
-  it.each([
-    ["remoteControllerConnected", "remoteControllerConnected"],
-    ["flightControllerConnected", "flightControllerConnected"],
-  ] as const)("拒绝非布尔的 %s 飞行链路事实", (field, expectedField) => {
-    expect(CapabilityGate.evaluate({
-      operation: "direct-flight",
-      ...base,
-      [field]: "connected",
-    })).toEqual({
+  it("配对仍拒绝其依赖的非布尔连接事实", () => {
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteControllerConnected: "connected", flightControllerConnected: false })).toEqual({
       ok: false,
-      error: { code: "INVALID_INPUT", details: { field: expectedField, reason: "invalid-value" } },
+      error: { code: "INVALID_INPUT", details: { field: "remoteControllerConnected", reason: "invalid-value" } },
+    });
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteControllerConnected: true, flightControllerConnected: "connected" })).toEqual({
+      ok: false,
+      error: { code: "INVALID_INPUT", details: { field: "flightControllerConnected", reason: "invalid-value" } },
     });
   });
 
@@ -128,8 +167,6 @@ describe("设备操作能力门禁契约", () => {
 
   it("原始 MSDK 状态优先于兼容布尔值", () => {
     expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "STARTING", remoteController: "CONNECTED", flightController: "CONNECTED" })).toEqual({ ok: true, value: { operation: "direct-flight", enabled: false, reason: "SDK_NOT_READY" } });
-    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "READY", remoteController: "DISCONNECTED", flightController: "CONNECTED" })).toEqual({ ok: true, value: { operation: "direct-flight", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
-    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "DISCONNECTED" })).toEqual({ ok: true, value: { operation: "direct-flight", enabled: false, reason: "FLIGHT_CONTROLLER_OFFLINE" } });
   });
 
   it("原始未知状态不会被兼容布尔值伪装成可用", () => {
@@ -138,7 +175,7 @@ describe("设备操作能力门禁契约", () => {
 
   it("拒绝原始 MSDK 生命周期和链路枚举中的非法值", () => {
     expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, sdkAvailability: "BROKEN" })).toMatchObject({ ok: false, error: { details: { field: "sdkAvailability" } } });
-    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, remoteController: "BROKEN" })).toMatchObject({ ok: false, error: { details: { field: "remoteController" } } });
-    expect(CapabilityGate.evaluate({ operation: "direct-flight", ...base, flightController: "BROKEN" })).toMatchObject({ ok: false, error: { details: { field: "flightController" } } });
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteController: "BROKEN", flightControllerConnected: false })).toMatchObject({ ok: false, error: { details: { field: "remoteController" } } });
+    expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteController: "CONNECTED", flightController: "BROKEN" })).toMatchObject({ ok: false, error: { details: { field: "flightController" } } });
   });
 });

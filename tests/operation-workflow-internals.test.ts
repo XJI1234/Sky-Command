@@ -388,7 +388,7 @@ describe("飞行作业工作流内部模块", () => {
       flightMode: null,
       lowBatteryRthState: "UNKNOWN",
       remainingFlightTimeSeconds: null,
-      live: { streaming: false, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null },
+      live: { streaming: false, notice: null, runtimeError: null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null },
     });
 
     expect(create({
@@ -399,8 +399,30 @@ describe("飞行作业工作流内部模块", () => {
       liveRttMillis: 1.5,
       livePacketLoss: -1,
       livePacketCacheLength: 2_147_483_648,
-    })?.live).toEqual({ streaming: true, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
-    expect(create({})?.live).toEqual({ streaming: null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
+    })?.live).toEqual({ streaming: true, notice: null, runtimeError: null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
+    expect(create({
+      liveStreaming: false,
+      liveStreamNotice: "DJI live stream runtime error",
+      liveStreamRuntimeErrorCode: "COMMON_SYSTEM_BUSY",
+      liveStreamRuntimeErrorDescription: "The live stream manager is busy",
+    })?.live).toEqual({
+      streaming: false,
+      notice: "DJI live stream runtime error",
+      runtimeError: { code: "COMMON_SYSTEM_BUSY", description: "The live stream manager is busy" },
+      resolution: null,
+      fps: null,
+      videoBitrateKbps: null,
+      rttMillis: null,
+      packetLoss: null,
+      packetCacheLength: null,
+    });
+    expect(create({
+      liveStreaming: false,
+      liveStreamNotice: "DJI live stream runtime error",
+      liveStreamRuntimeErrorCode: "COMMON_SYSTEM_BUSY",
+      liveStreamRuntimeErrorDescription: "\u0000",
+    })?.live.runtimeError).toBeNull();
+    expect(create({})?.live).toEqual({ streaming: null, notice: null, runtimeError: null, resolution: null, fps: null, videoBitrateKbps: null, rttMillis: null, packetLoss: null, packetCacheLength: null });
 
     const snapshot = WorkflowSnapshot.create({
       devices: [device({})], routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0,
