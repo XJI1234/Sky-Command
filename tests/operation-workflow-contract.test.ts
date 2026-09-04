@@ -158,6 +158,34 @@ describe("飞行作业工作流模块契约", () => {
     expect({ uploads, streamStarts, flightRequests }).toEqual({ uploads: 0, streamStarts: 0, flightRequests: 0 });
   });
 
+  it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"] as const)("收尾动作 %s 不由工作流的飞控就绪预检拦截", async (action) => {
+    const calls: string[] = [];
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
+        telemetry: () => ({ payload: { sdkAvailability: "READY", remoteController: "DISCONNECTED", flightController: "UNKNOWN" }, capabilities: {} }),
+        controlTelemetry: () => ({ payload: { sdkAvailability: "READY", remoteController: "DISCONNECTED", flightController: "UNKNOWN" }, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        subscribe: () => () => undefined,
+      },
+      flightControl: {
+        request: (deviceId: string, requestedAction: string) => {
+          calls.push(`request:${deviceId}:${requestedAction}`);
+          return { ok: true, code: "CONFIRMATION_REQUIRED", confirmation: { deviceId, action: requestedAction, confirmationId: `confirm-${requestedAction}`, expiresAtMs: 10_000 } };
+        },
+        confirm: async (deviceId: string, confirmationId: string) => {
+          calls.push(`confirm:${deviceId}:${confirmationId}`);
+          return { ok: true, code: "SUCCEEDED", deviceId, action };
+        },
+        cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined,
+      },
+    });
+
+    await expect(workflow.requestFlightAction("relay-a", action)).resolves.toMatchObject({ ok: true });
+    await expect(workflow.confirmFlightAction("relay-a", `confirm-${action}`)).resolves.toMatchObject({ ok: true });
+    expect(calls).toEqual([`request:relay-a:${action}`, `confirm:relay-a:confirm-${action}`]);
+  });
+
   it("降落命令已成功下发后，在 MSDK 确认落地前拒绝重复请求", async () => {
     let requests = 0;
     const workflow = workflowWith({
@@ -1275,6 +1303,29 @@ describe("飞行作业工作流模块契约", () => {
     expect(disconnected).toEqual(["relay-a"]);
     expect(cancelled).toEqual([{ deviceId: "relay-a", confirmationId: "confirm-old" }]);
     expect(workflow.snapshot().devices[0]?.pendingFlightAction).toBeNull();
+  });
+
+  it("同一手机换会话时只投影新的不透明连接代次，不向界面泄露会话标识", () => {
+    let sessionId = "session-1";
+    let signal!: () => void;
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId }],
+        telemetry: () => ({ payload: {}, capabilities: {} }),
+        controlTelemetry: () => ({ payload: {}, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        subscribe: (listener: () => void) => { signal = listener; return () => undefined; },
+      },
+    });
+
+    expect(workflow.snapshot().devices[0]).toMatchObject({ deviceId: "relay-a", connectionEpoch: 0 });
+    expect(workflow.snapshot().devices[0]).not.toHaveProperty("sessionId");
+
+    sessionId = "session-2";
+    signal();
+
+    expect(workflow.snapshot().devices[0]).toMatchObject({ deviceId: "relay-a", connectionEpoch: 1 });
+    expect(workflow.snapshot().devices[0]).not.toHaveProperty("sessionId");
   });
 
   it("转码失败且手机仍在线时必须停止这一路图传，手机已离线则不得补发停止", async () => {

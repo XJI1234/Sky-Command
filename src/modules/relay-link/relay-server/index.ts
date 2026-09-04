@@ -83,6 +83,18 @@ const serverError = (code: RelayServerErrorCode, message: string): RelayServerEr
 const success = <T extends object>(value: T): Readonly<{ readonly ok: true } & T> => Object.freeze({ ok: true as const, ...value });
 const failure = <T = never>(code: RelayServerErrorCode, message: string): Readonly<{ readonly ok: false; readonly error: RelayServerError }> => Object.freeze({ ok: false as const, error: serverError(code, message) });
 const probeFailure = (status: "unavailable" | "timed-out" | "disconnected", sampleCount: number): LinkProbeReport => Object.freeze({ status, sampleCount });
+const probeResult = (value: unknown): RelayConnectionProbeResult | null => {
+  try {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+    const status = (value as { readonly status?: unknown }).status;
+    if (status === "timed-out" || status === "unavailable") return Object.freeze({ status });
+    if (status !== "measured") return null;
+    const rttMs = (value as { readonly rttMs?: unknown }).rttMs;
+    return typeof rttMs === "number" && Number.isFinite(rttMs) && rttMs >= 0
+      ? Object.freeze({ status, rttMs })
+      : null;
+  } catch { return null; }
+};
 const probeSuccess = (samples: readonly number[]): LinkProbeReport => {
   const ordered = [...samples].sort((left, right) => left - right);
   const middle = ordered.length / 2;
@@ -105,6 +117,8 @@ function create(options: RelayServerOptions): RelayServerInstance {
     phase: ConnectionPhase;
     deviceId: string | null;
     sessionId: string | null;
+    /** Identity held while a paired acknowledgement is still in flight. */
+    reservedDeviceId: string | null;
     timeout: unknown;
     closed: boolean;
     inbound: Promise<void> | null;
@@ -155,15 +169,19 @@ function create(options: RelayServerOptions): RelayServerInstance {
     if (entry.phase === "awaiting-hello") {
       if (frame.type !== "hello") { rejectProtocol(entry, protocolError("INVALID_MESSAGE_TYPE", "First frame must be hello")); return; }
       for (const candidate of [...connections.values()]) {
-        if (candidate !== entry && candidate.deviceId === frame.deviceId) finish(candidate, "session-replaced");
+        if (candidate !== entry && candidate.reservedDeviceId === frame.deviceId) finish(candidate, "session-replaced");
       }
-      const occupied = [...connections.values()].filter((candidate) => candidate !== entry && candidate.phase === "paired").length;
+      const occupied = [...connections.values()].filter((candidate) => candidate !== entry && candidate.reservedDeviceId !== null).length;
       if (occupied >= options.maxConnections) { finish(entry, "capacity"); return; }
       const sessionId = options.createSessionId(frame.deviceId);
       const paired: RelayFrame = { type: "paired", sessionId, protocolVersion: "1" };
       const encoded = RelayFrameCodec.encode(paired);
       if (!encoded.ok) { rejectProtocol(entry, protocolError("INVALID_FIELD", "Pairing frame cannot be encoded")); return; }
+      // Identity reservation is deliberately committed before the awaited transport
+      // write. A reconnect must replace a still-pairing predecessor as well.
+      entry.reservedDeviceId = frame.deviceId;
       try { await sendDirect(entry, encoded.value); } catch { finish(entry, "send-failed"); return; }
+      if (entry.closed || connections.get(entry.id) !== entry) return;
       options.scheduler.clearTimeout(entry.timeout);
       entry.phase = "paired";
       entry.deviceId = frame.deviceId;
@@ -187,7 +205,7 @@ function create(options: RelayServerOptions): RelayServerInstance {
       return;
     }
     const entry: InternalConnection = {
-      id: options.createConnectionId(), transport: transportConnection, phase: "awaiting-hello", deviceId: null, sessionId: null,
+      id: options.createConnectionId(), transport: transportConnection, phase: "awaiting-hello", deviceId: null, sessionId: null, reservedDeviceId: null,
       timeout: null, closed: false, inbound: null, outbound: Promise.resolve(), measurement: null, unsubscribe: []
     };
     connections.set(entry.id, entry);
@@ -264,11 +282,11 @@ function create(options: RelayServerOptions): RelayServerInstance {
         let probe: RelayConnection["probeLink"];
         try { probe = entry.transport.probeLink; } catch { return probeFailure("unavailable", samples.length); }
         if (typeof probe !== "function") return probeFailure("unavailable", samples.length);
-        let result: RelayConnectionProbeResult;
-        try { result = await probe.call(entry.transport); } catch { return probeFailure("unavailable", samples.length); }
+        let result: RelayConnectionProbeResult | null;
+        try { result = probeResult(await probe.call(entry.transport)); } catch { return probeFailure("unavailable", samples.length); }
         if (entry.closed || entry.phase !== "paired") return probeFailure("disconnected", samples.length);
+        if (result === null) return probeFailure("unavailable", samples.length);
         if (result.status !== "measured") return probeFailure(result.status, samples.length);
-        if (!Number.isFinite(result.rttMs) || result.rttMs < 0) return probeFailure("unavailable", samples.length);
         samples.push(result.rttMs);
       }
       return probeSuccess(samples);

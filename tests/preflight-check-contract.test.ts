@@ -55,9 +55,9 @@ describe("preflight check contract", () => {
 
     const flightAction = (payload: Record<string, unknown>) => PreflightCheck.evaluateFlightAction({
       relayConnected: true,
-      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, isFlying: true, motorsOn: true, ...payload } as never,
+      payload: { sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "CONNECTED", isFlying: false, motorsOn: false, batteryPercent: 80, ...payload } as never,
       capabilities: {},
-      action: "land",
+      action: "takeoff",
     });
     expect(flightAction({ sdkAvailability: "BROKEN" }).blockers.map((blocker) => blocker.code)).toContain("SDK_NOT_READY");
     expect(flightAction({ remoteController: "BROKEN" }).blockers.map((blocker) => blocker.code)).toContain("REMOTE_CONTROLLER_DISCONNECTED");
@@ -190,14 +190,8 @@ describe("preflight check contract", () => {
     expect(PreflightCheck.evaluateFlightAction(action)).toEqual({ ok: true, blockers: [] });
     expect(PreflightCheck.evaluateFlightAction({ ...action, action: "return-home", payload: { ...action.payload, batteryPercent: 10 } })).toEqual({ ok: true, blockers: [] });
     expect(PreflightCheck.evaluateFlightAction({ ...action, action: "land", payload: { ...action.payload, batteryPercent: undefined, motorsOn: undefined } })).toEqual({ ok: true, blockers: [] });
-    expect(PreflightCheck.evaluateFlightAction({ ...action, action: "return-home", payload: { ...action.payload, isFlying: undefined } })).toMatchObject({
-      ok: false,
-      blockers: [{ code: "FLIGHT_STATE_UNKNOWN" }],
-    });
-    expect(PreflightCheck.evaluateFlightAction({ ...grounded, action: "land" })).toMatchObject({
-      ok: false,
-      blockers: [{ code: "AIRCRAFT_ON_GROUND" }],
-    });
+    expect(PreflightCheck.evaluateFlightAction({ ...action, action: "return-home", payload: { ...action.payload, isFlying: undefined } })).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluateFlightAction({ ...grounded, action: "land" })).toEqual({ ok: true, blockers: [] });
   });
 
   it("checks upload hardware without applying launch-only telemetry constraints", () => {
@@ -290,48 +284,35 @@ describe("preflight check contract", () => {
     expect(PreflightCheck.evaluateFlightAction({ ...action, payload: { ...action.payload, motorsOn: undefined } })).toMatchObject({ ok: false, blockers: [{ code: "MOTOR_STATE_UNKNOWN" }] });
   });
 
-  it("allows each recovery action only while its matching DJI flight mode is observed", () => {
+  it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"] as const)("allows recovery action %s through a ready MSDK despite stale or unavailable control telemetry", (action) => {
     const input: FlightActionPreflightInput = {
       relayConnected: true,
-      payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, flightMode: "AUTO_TAKE_OFF" },
+      payload: {
+        sdkAvailability: "READY",
+        remoteController: "DISCONNECTED",
+        flightController: "UNKNOWN",
+        isFlying: undefined,
+        motorsOn: undefined,
+        batteryPercent: undefined,
+        flightMode: "GPS_NORMAL",
+        landingConfirmationNeeded: false,
+      },
       capabilities: {},
-      action: "stop-takeoff",
+      action,
     };
     expect(PreflightCheck.evaluateFlightAction(input)).toEqual({ ok: true, blockers: [] });
-    expect(PreflightCheck.evaluateFlightAction({ ...input, action: "stop-auto-landing", payload: { ...input.payload, flightMode: "AUTO_LANDING" } })).toEqual({ ok: true, blockers: [] });
-    expect(PreflightCheck.evaluateFlightAction({ ...input, action: "stop-auto-landing", payload: { ...input.payload, flightMode: "CONFIRM_LANDING" } })).toEqual({ ok: true, blockers: [] });
-    expect(PreflightCheck.evaluateFlightAction({ ...input, action: "stop-auto-landing", payload: { ...input.payload, flightMode: "GPS_NORMAL" } })).toMatchObject({
-      ok: false,
-      blockers: [{ code: "AUTO_LANDING_NOT_ACTIVE" }],
-    });
-    expect(PreflightCheck.evaluateFlightAction({ ...input, payload: { ...input.payload, flightMode: "GPS_NORMAL" } })).toMatchObject({ ok: false });
   });
 
-  it("only permits confirmation to continue landing when MSDK explicitly requests it", () => {
+  it("keeps recovery actions blocked when the MSDK invocation boundary is unavailable", () => {
     const input: FlightActionPreflightInput = {
       relayConnected: true,
-      payload: { sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "CONNECTED", isFlying: true, landingConfirmationNeeded: true },
+      payload: { sdkAvailability: "STARTING", remoteController: "CONNECTED", flightController: "CONNECTED", isFlying: true, landingConfirmationNeeded: true },
       capabilities: {},
       action: "confirm-landing" as never,
     };
-    expect(PreflightCheck.evaluateFlightAction(input)).toEqual({ ok: true, blockers: [] });
-    expect(PreflightCheck.evaluateFlightAction({ ...input, payload: { ...input.payload, landingConfirmationNeeded: false } })).toMatchObject({
+    expect(PreflightCheck.evaluateFlightAction(input)).toMatchObject({
       ok: false,
-      blockers: [{ code: "LANDING_CONFIRMATION_NOT_REQUIRED" }],
+      blockers: [{ code: "SDK_NOT_READY" }],
     });
-    expect(PreflightCheck.evaluateFlightAction({ ...input, payload: { ...input.payload, isFlying: false } })).toMatchObject({
-      ok: false,
-      blockers: [{ code: "AIRCRAFT_ON_GROUND" }],
-    });
-  });
-
-  it("拒绝在未知飞行状态下确认继续降落", () => {
-    const result = PreflightCheck.evaluateFlightAction({
-      relayConnected: true,
-      payload: { sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "CONNECTED", isFlying: "unknown", landingConfirmationNeeded: true } as never,
-      capabilities: {},
-      action: "confirm-landing",
-    });
-    expect(result.blockers.map((blocker) => blocker.code)).toContain("FLIGHT_STATE_UNKNOWN");
   });
 });

@@ -259,9 +259,12 @@ const reject = (reason: string): OperatorActionResult => freeze({ ok: false, rea
 const accept = (): OperatorActionResult => freeze({ ok: true });
 const waypointSupported = (device: Record<string, unknown> | undefined): boolean => read(read(device, "capabilities"), "waypointMission") === "supported";
 const batteryPercent = (device: Record<string, unknown> | undefined): number | null => finite(read(read(device, "connection"), "batteryPercent"));
+const recoveryFlightAction = (action: string): boolean => action === "flight-land" || action === "flight-confirm-landing" || action === "flight-return-home" || action === "flight-stop-takeoff" || action === "flight-stop-auto-landing";
+const msdkInvocationIssue = (device: Record<string, unknown>): string | null => read(controlConnection(device), "sdk") === "ready" ? null : "手机尚未就绪";
 const controlLinkIssue = (device: Record<string, unknown>): string | null => {
+  const msdkIssue = msdkInvocationIssue(device);
+  if (msdkIssue !== null) return msdkIssue;
   const connection = controlConnection(device);
-  if (read(connection, "sdk") !== "ready") return "手机尚未就绪";
   if (read(connection, "remoteController") !== "connected") return "遥控器未连接";
   if (read(connection, "flightController") !== "connected") return "飞机飞控未连接，请确认飞机已开机";
   return null;
@@ -354,14 +357,8 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   }
   if (name === "flight-confirm" || name === "flight-cancel") return accept();
   if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing") {
-    const linkIssue = controlLinkIssue(device);
+    const linkIssue = recoveryFlightAction(name) ? msdkInvocationIssue(device) : controlLinkIssue(device);
     if (linkIssue !== null) return reject(linkIssue);
-    if (name === "flight-confirm-landing") {
-      const connection = read(device, "connection");
-      if (read(connection, "flightState") !== "flying") return reject("尚未确认飞机正在空中，不能确认继续降落");
-      if (read(connection, "landingConfirmationNeeded") !== true) return reject("MSDK 未要求确认继续降落");
-      return accept();
-    }
     if (name === "flight-land") {
       const landingPhase = text(read(read(device, "landing"), "phase"));
       if (landingPhase === "awaiting-msdk" || landingPhase === "confirmation-required") {
@@ -378,18 +375,6 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
       const motorsOn = read(read(device, "connection"), "motorsOn");
       if (motorsOn === true) return reject("电机已启动，不能起飞");
       if (motorsOn !== false) return reject("尚未确认电机是否关闭，不能起飞");
-    }
-    if (name === "flight-land" || name === "flight-return-home") {
-      const flightState = read(read(device, "connection"), "flightState");
-      if (flightState === "unknown" || flightState === null || flightState === undefined) return reject("尚未确认飞机是否在空中");
-      if (flightState === "grounded") return reject(name === "flight-land" ? "飞机已在地面，无需降落" : "飞机已在地面，不能返航");
-    }
-    if (name === "flight-stop-takeoff" && read(read(device, "connection"), "flightMode") !== "AUTO_TAKE_OFF") {
-      return reject("MSDK 未报告正在自动起飞，不能停止自动起飞");
-    }
-    if (name === "flight-stop-auto-landing") {
-      const flightMode = read(read(device, "connection"), "flightMode");
-      if (flightMode !== "AUTO_LANDING" && flightMode !== "CONFIRM_LANDING") return reject("MSDK 未报告正在自动降落，不能停止自动降落");
     }
     return accept();
   }

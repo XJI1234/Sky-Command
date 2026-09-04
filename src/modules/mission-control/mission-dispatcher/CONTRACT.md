@@ -97,11 +97,11 @@ interface MissionDispatchSnapshot {
 
 ### 启动
 
-`start` 仅允许从 `uploaded` 执行。在任何出站命令前，它读取当前控制遥测并调用 `PreflightCheck.evaluate`；只有当前手机会话内显式读取的完整控制快照可传入这个门面，且仅有该快照时 `relayConnected` 才为真，绝不从 WebSocket 或会话对象推导飞机连接状态。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `uploaded` 且不发送命令。通过后进入 `starting`，发送 `wayline.start`。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到带任务身份的 `ROUTE_EXECUTION_STARTED` 后才进入 `running`。启动回执超时、断开或传输失败不能证明 DJI 未接受请求，必须保持 `starting` 并返回 `WAYLINE_START_UNCONFIRMED`；此时禁止重发启动，只允许停止。
+`start` 仅允许从 `uploaded` 执行。在任何出站命令前，它读取当前控制遥测并调用 `PreflightCheck.evaluate`；只有当前手机会话内显式读取的完整控制快照可传入这个门面，且仅有该快照时 `relayConnected` 才为真，绝不从 WebSocket 或会话对象推导飞机连接状态。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `uploaded` 且不发送命令。通过后进入 `starting`，发送 `wayline.start`。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到带任务身份的 `ROUTE_EXECUTION_STARTED` 后才进入 `running`。DJI 明确 `onFailure` 证明本次启动未被接受，调度器必须保留受限错误并以 `start-rejected` 恢复 `uploaded`，返回 `WAYLINE_ACTION_REJECTED`。没有 DJI 错误的调用异常或失败无法证明 `startMission` 未产生设备端效果，必须保持 `starting` 并按 `WAYLINE_START_UNCONFIRMED` 处理，禁止重发启动，只允许停止。启动回执超时、取消、断开或传输失败同样不能证明 DJI 未接受请求。若可信的 `ROUTE_EXECUTION_STARTED` 已先到达而后收到迟到失败，不能回退已经进入 `running` 的任务。
 
 ### 暂停、恢复和停止
 
-`pause` 只允许 `running -> pausing -> paused`；`resume` 只允许 `paused -> resuming -> running`；`stop` 只允许从 `starting`、`running`、`pausing`、`paused`、`resuming` 或重连后的 `disconnected` 进入 `stopping`，成功后回到 `idle`。其中 `pausing` 和 `resuming` 表示等待手机端确认 DJI 调用，不能显示成最终状态。它们均发送相应命令和 `{ confirm: true }`。暂停、继续或停止回执超时、断开或传输失败时，必须保留相应中间阶段并返回 `WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_UNCONFIRMED` 或 `WAYLINE_STOP_UNCONFIRMED`；不得重发同一动作。暂停/继续不确定时只允许一次停止作为保守处置，停止不确定时不得再发控制命令或替换任务。上传完成但尚未启动时不得发送 `wayline.stop`，因为飞机端执行器此时仍是未开始。`starting` 期间允许停止，以便中止已接受但尚未进入执行回报的航线。`ROUTE_EXECUTION_STARTED` 可在启动命令仍在等待结果时把任务从 `starting` 转入 `running`；此后迟到的启动失败不得把已在执行的任务写成失败。
+`pause` 只允许 `running -> pausing -> paused`；`resume` 只允许 `paused -> resuming -> running`；`stop` 只允许从 `starting`、`running`、`pausing`、`paused`、`resuming` 或重连后的 `disconnected` 进入 `stopping`，成功后回到 `idle`。其中 `pausing` 和 `resuming` 表示等待手机端确认 DJI 调用，不能显示成最终状态。它们均发送相应命令和 `{ confirm: true }`，不因电量、飞控、飞行模式或页面推断阻断。DJI 明确 `onFailure` 时，手机必须回传受限的 `{ domain: "wayline", outcome: "ACTION_REJECTED", errorCode, errorDescription }`；调度器返回 `WAYLINE_ACTION_REJECTED` 与冻结的 `platformError`，并恢复请求前阶段。适配器同步异常或未携带 DJI 错误的明确失败回传 `INVOCATION_FAILED`，调度器返回 `WAYLINE_ACTION_INVOCATION_FAILED` 并恢复请求前阶段。暂停、继续或停止回执超时、断开、传输失败、取消或缺少有效终态时，必须保留相应中间阶段并返回 `WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_UNCONFIRMED` 或 `WAYLINE_STOP_UNCONFIRMED`；不得重发同一动作。暂停/继续不确定时只允许一次停止作为保守处置，停止不确定时不得再发控制命令或替换任务。上传完成但尚未启动时不得发送 `wayline.stop`，因为飞机端执行器此时仍是未开始。`starting` 期间允许停止，以便中止已接受但尚未进入执行回报的航线。`ROUTE_EXECUTION_STARTED` 可在启动命令仍在等待结果时把任务从 `starting` 转入 `running`；此后迟到的启动失败不得把已在执行的任务写成失败。
 
 ## 6. 断线和遥测
 
@@ -117,7 +117,7 @@ type DispatchResult =
   | { readonly ok: false; readonly operation: DispatchOperation; readonly code: DispatchErrorCode; readonly state: MissionDispatchSnapshot | null; readonly blockers?: readonly PreflightBlocker[] };
 ```
 
-错误码固定为：`INVALID_DEVICE_ID`、`INVALID_ROUTE_ID`、`ROUTE_UNAVAILABLE`、`MISSION_ID_UNAVAILABLE`、`ILLEGAL_PHASE`、`OPERATION_IN_PROGRESS`、`DEPENDENCY_FAILURE`、`MISSION_TRANSFER_FAILED`、`WAYLINE_UPLOAD_FAILED`、`PREFLIGHT_BLOCKED`、`WAYLINE_START_FAILED`、`WAYLINE_START_UNCONFIRMED`、`WAYLINE_PAUSE_FAILED`、`WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_FAILED`、`WAYLINE_RESUME_UNCONFIRMED`、`WAYLINE_STOP_FAILED`、`WAYLINE_STOP_UNCONFIRMED`。
+错误码固定为：`INVALID_DEVICE_ID`、`INVALID_ROUTE_ID`、`ROUTE_UNAVAILABLE`、`MISSION_ID_UNAVAILABLE`、`ILLEGAL_PHASE`、`OPERATION_IN_PROGRESS`、`DEPENDENCY_FAILURE`、`MISSION_TRANSFER_FAILED`、`WAYLINE_UPLOAD_FAILED`、`PREFLIGHT_BLOCKED`、`WAYLINE_START_FAILED`、`WAYLINE_START_UNCONFIRMED`、`WAYLINE_PAUSE_FAILED`、`WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_FAILED`、`WAYLINE_RESUME_UNCONFIRMED`、`WAYLINE_STOP_FAILED`、`WAYLINE_STOP_UNCONFIRMED`、`WAYLINE_ACTION_REJECTED`、`WAYLINE_ACTION_INVOCATION_FAILED`。`platformError` 仅可出现于 `WAYLINE_ACTION_REJECTED`，固定为已验证且冻结的 `{ code, description }`；不得包含 DJI 对象、异常、路径或原始帧。上传的 DJI 明确拒绝恢复 `staged`，启动的 DJI 明确拒绝恢复 `uploaded`；暂停、继续和停止的 DJI 明确拒绝恢复各自请求前阶段。启动没有 DJI 错误的调用失败仍按未确认处理，不得借此允许重发。
 
 `blockers` 只出现在 `PREFLIGHT_BLOCKED`，以 `PreflightCheck` 给出的稳定顺序复制并冻结。任何拒绝都不自动重试；只有已经尝试出站效果且收到非成功结果时才进入 `failed`。
 

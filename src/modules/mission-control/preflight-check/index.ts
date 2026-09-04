@@ -227,10 +227,10 @@ function evaluateFlightAction(input: FlightActionPreflightInput, policy: Preflig
   const codes: PreflightBlockerCode[] = [];
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
   if (!sdkReady(normalized)) codes.push("SDK_NOT_READY");
-  if (!remoteConnected(normalized)) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
-  if (!flightConnected(normalized)) codes.push("AIRCRAFT_DISCONNECTED");
 
   if (action === "takeoff") {
+    if (!remoteConnected(normalized)) codes.push("REMOTE_CONTROLLER_DISCONNECTED");
+    if (!flightConnected(normalized)) codes.push("AIRCRAFT_DISCONNECTED");
     const battery = normalized.batteryPercent;
     if (typeof battery !== "number" || !Number.isFinite(battery) || battery < 0 || battery > 100) codes.push("BATTERY_UNKNOWN");
     else if (battery < policy.minimumBatteryPercent) codes.push("BATTERY_LOW");
@@ -238,15 +238,6 @@ function evaluateFlightAction(input: FlightActionPreflightInput, policy: Preflig
     else if (normalized.isFlying) codes.push("AIRCRAFT_ALREADY_FLYING");
     if (normalized.motorsOn !== false && normalized.motorsOn !== true) codes.push("MOTOR_STATE_UNKNOWN");
     else if (normalized.motorsOn) codes.push("MOTORS_RUNNING");
-  } else if (action === "stop-takeoff") {
-    if (normalized.flightMode !== "AUTO_TAKE_OFF") codes.push("TAKEOFF_NOT_ACTIVE");
-  } else if (action === "stop-auto-landing") {
-    if (normalized.flightMode !== "AUTO_LANDING" && normalized.flightMode !== "CONFIRM_LANDING") codes.push("AUTO_LANDING_NOT_ACTIVE");
-  } else if (action === "confirm-landing") {
-    if (normalized.isFlying !== true) codes.push(normalized.isFlying === false ? "AIRCRAFT_ON_GROUND" : "FLIGHT_STATE_UNKNOWN");
-    if (normalized.landingConfirmationNeeded !== true) codes.push("LANDING_CONFIRMATION_NOT_REQUIRED");
-  } else if (normalized.isFlying !== true) {
-    codes.push(normalized.isFlying === false ? "AIRCRAFT_ON_GROUND" : "FLIGHT_STATE_UNKNOWN");
   }
   return result(codes);
 }

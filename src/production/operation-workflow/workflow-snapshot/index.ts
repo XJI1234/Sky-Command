@@ -98,7 +98,7 @@ const control = (payload: unknown) => freeze({
   flightController: linkState(read(payload, "flightController")),
 });
 
-function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
+function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly connectionEpoch: number; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
   const streams = read(input.media, "streams");
   const mediaStreams = Array.isArray(streams) ? streams : [];
   const devices = input.devices.map((device) => {
@@ -111,6 +111,8 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
     const connectionValue = connection(payload, read(telemetry, "receivedAtMs"));
     return freeze({
       deviceId: device.deviceId,
+      // This local counter differentiates reconnects without exposing a relay session ID.
+      connectionEpoch: Number.isSafeInteger(device.connectionEpoch) && device.connectionEpoch >= 0 ? device.connectionEpoch : 0,
       connection: connectionValue,
       control: control(read(record(device.controlTelemetry), "payload")),
       capabilities: freeze({ waypointMission: read(capabilities, "waypointMission") === true && read(capabilities, "waypointMissionSupport") === "supported" ? "supported" : read(capabilities, "waypointMission") === false || read(capabilities, "waypointMissionSupport") === "unsupported" ? "unsupported" : "unknown", liveVideo: read(capabilities, "liveVideo") === true ? "supported" : read(capabilities, "liveVideo") === false ? "unsupported" : "unknown" }),

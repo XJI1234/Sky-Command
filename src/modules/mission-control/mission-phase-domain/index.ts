@@ -25,14 +25,19 @@ export type MissionPhaseEvent =
   | Readonly<{ type: "stage-succeeded"; missionId: string }>
   | Readonly<{ type: "upload-requested" }>
   | Readonly<{ type: "upload-succeeded" }>
+  | Readonly<{ type: "upload-rejected" }>
   | Readonly<{ type: "start-requested" }>
   | Readonly<{ type: "start-succeeded" }>
+  | Readonly<{ type: "start-rejected" }>
   | Readonly<{ type: "pause-requested" }>
   | Readonly<{ type: "pause-succeeded" }>
+  | Readonly<{ type: "pause-rejected" }>
   | Readonly<{ type: "resume-requested" }>
   | Readonly<{ type: "resume-succeeded" }>
+  | Readonly<{ type: "resume-rejected" }>
   | Readonly<{ type: "stop-requested" }>
   | Readonly<{ type: "stop-succeeded" }>
+  | Readonly<{ type: "stop-rejected" }>
   | Readonly<{ type: "mission-completed" }>
   | Readonly<{ type: "operation-failed"; code: string }>
   | Readonly<{ type: "connection-lost" }>
@@ -59,7 +64,7 @@ const STAGEABLE: readonly MissionPhase[] = Object.freeze(["idle", "completed", "
 const DISCONNECTABLE: readonly MissionPhase[] = Object.freeze(["staging", "staged", "uploading", "uploaded", "starting", "running", "pausing", "paused", "resuming", "stopping"]);
 const FAILUREABLE: readonly MissionPhase[] = Object.freeze(["staging", "uploading", "starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"]);
 const STOPPABLE: readonly MissionPhase[] = Object.freeze(["starting", "running", "pausing", "paused", "resuming", "disconnected"]);
-const EVENT_TYPES: readonly string[] = Object.freeze(["stage-requested", "stage-succeeded", "upload-requested", "upload-succeeded", "start-requested", "start-succeeded", "pause-requested", "pause-succeeded", "resume-requested", "resume-succeeded", "stop-requested", "stop-succeeded", "mission-completed", "operation-failed", "connection-lost", "reset", "__invalid__"]);
+const EVENT_TYPES: readonly string[] = Object.freeze(["stage-requested", "stage-succeeded", "upload-requested", "upload-succeeded", "upload-rejected", "start-requested", "start-succeeded", "start-rejected", "pause-requested", "pause-succeeded", "pause-rejected", "resume-requested", "resume-succeeded", "resume-rejected", "stop-requested", "stop-succeeded", "stop-rejected", "mission-completed", "operation-failed", "connection-lost", "reset", "__invalid__"]);
 
 const idleState = (): MissionPhaseState => Object.freeze({ missionId: null, phase: "idle", failureCode: null });
 const validText = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
@@ -96,6 +101,7 @@ const includes = (values: readonly MissionPhase[], value: MissionPhase): boolean
 
 function create(initial?: MissionPhaseState): MissionPhaseMachine {
   let current = idleState();
+  let stoppedFrom: MissionPhase | null = null;
   try {
     if (validState(initial)) current = makeState(initial.missionId, initial.phase, initial.failureCode);
   } catch {
@@ -109,7 +115,7 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
     const type = parsedType.type;
 
     try {
-      if (type === "reset") { current = idleState(); return success(current); }
+      if (type === "reset") { stoppedFrom = null; current = idleState(); return success(current); }
       if (type === "stage-requested") {
         const missionId = (event as unknown as { missionId?: unknown }).missionId;
         if (!validText(missionId)) return error("INVALID_MISSION_ID", current.phase, "Mission ID is invalid");
@@ -132,6 +138,10 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         if (current.phase !== "uploading") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         current = makeState(current.missionId, "uploaded", null); return success(current);
       }
+      if (type === "upload-rejected") {
+        if (current.phase !== "uploading") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        current = makeState(current.missionId, "staged", null); return success(current);
+      }
       if (type === "start-requested") {
         if (current.phase !== "uploaded") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         current = makeState(current.missionId, "starting", null); return success(current);
@@ -139,6 +149,10 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
       if (type === "start-succeeded") {
         if (current.phase !== "starting") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         current = makeState(current.missionId, "running", null); return success(current);
+      }
+      if (type === "start-rejected") {
+        if (current.phase !== "starting") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        current = makeState(current.missionId, "uploaded", null); return success(current);
       }
       if (type === "pause-requested") {
         if (current.phase !== "running") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
@@ -148,6 +162,10 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         if (current.phase !== "pausing") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         current = makeState(current.missionId, "paused", null); return success(current);
       }
+      if (type === "pause-rejected") {
+        if (current.phase !== "pausing") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        current = makeState(current.missionId, "running", null); return success(current);
+      }
       if (type === "resume-requested") {
         if (current.phase !== "paused") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         current = makeState(current.missionId, "resuming", null); return success(current);
@@ -156,26 +174,41 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         if (current.phase !== "resuming") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         current = makeState(current.missionId, "running", null); return success(current);
       }
+      if (type === "resume-rejected") {
+        if (current.phase !== "resuming") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        current = makeState(current.missionId, "paused", null); return success(current);
+      }
       if (type === "stop-requested") {
         if (!includes(STOPPABLE, current.phase)) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        stoppedFrom = current.phase;
         current = makeState(current.missionId, "stopping", null); return success(current);
       }
       if (type === "stop-succeeded") {
         if (current.phase !== "stopping") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        stoppedFrom = null;
         current = idleState(); return success(current);
+      }
+      if (type === "stop-rejected") {
+        if (current.phase !== "stopping" || stoppedFrom === null) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        const previous = stoppedFrom;
+        stoppedFrom = null;
+        current = makeState(current.missionId, previous, null); return success(current);
       }
       if (type === "mission-completed") {
         if (current.phase !== "starting" && current.phase !== "running" && current.phase !== "disconnected") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        stoppedFrom = null;
         current = makeState(current.missionId, "completed", null); return success(current);
       }
       if (type === "operation-failed") {
         const code = (event as unknown as { code?: unknown }).code;
         if (!validText(code)) return error("INVALID_EVENT", current.phase, "Mission event is invalid");
         if (!includes(FAILUREABLE, current.phase)) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        stoppedFrom = null;
         current = makeState(current.missionId, "failed", code); return success(current);
       }
       if (type === "connection-lost") {
         if (!includes(DISCONNECTABLE, current.phase)) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        stoppedFrom = null;
         current = makeState(current.missionId, "disconnected", null); return success(current);
       }
       return error("INVALID_EVENT", current.phase, "Mission event is invalid");

@@ -43,6 +43,29 @@ const snapshot = (devices: readonly unknown[], extra: Record<string, unknown> = 
 });
 
 describe("操作台投影", () => {
+  it.each(["flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"] as const)("收尾动作 %s 不由页面上的遥控器、飞控或飞行状态推断拦截", (action) => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        control: { sdk: "ready", remoteController: "disconnected", flightController: "unknown" },
+        connection: { ...device().connection, flightState: "unknown", flightMode: "GPS_NORMAL", landingConfirmationNeeded: false },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(OperatorConsole.evaluate(action, view)).toEqual({ ok: true });
+  });
+
+  it("收尾动作仍要求所选手机的 MSDK 已就绪", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({ control: { sdk: "not-ready", remoteController: "connected", flightController: "connected" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+
+    expect(OperatorConsole.evaluate("flight-land", view)).toEqual({ ok: false, reason: "手机尚未就绪" });
+  });
+
   it("设备页以独立标签显示精确 MSDK 生命周期", () => {
     const source = renderer();
     expect(source).toContain('case "ready": return { label: "MSDK 已就绪", ok: true }');
@@ -717,18 +740,9 @@ describe("操作台工作区", () => {
       reason: "尚未确认电机是否关闭，不能起飞",
     });
     expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "flying" }))).toEqual({ ok: true });
-    expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "unknown" }))).toEqual({
-      ok: false,
-      reason: "尚未确认飞机是否在空中",
-    });
-    expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "grounded" }))).toEqual({
-      ok: false,
-      reason: "飞机已在地面，无需降落",
-    });
-    expect(OperatorConsole.evaluate("flight-return-home", flight({ flightState: "grounded" }))).toEqual({
-      ok: false,
-      reason: "飞机已在地面，不能返航",
-    });
+    expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "unknown" }))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-land", flight({ flightState: "grounded" }))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-return-home", flight({ flightState: "grounded" }))).toEqual({ ok: true });
   });
 
   it("降落命令已被 DJI 接受后，在落地确认前禁止重复下发", () => {
@@ -746,7 +760,7 @@ describe("操作台工作区", () => {
     });
   });
 
-  it("停止自动起飞和自动降落只接受对应的原始 MSDK 飞行模式", () => {
+  it("停止自动起飞和自动降落不由页面上的飞行模式推断拦截", () => {
     const flight = (flightMode: string) => OperatorConsole.project({
       snapshot: snapshot([device({ connection: { ...device().connection, flightMode } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
@@ -755,11 +769,11 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("flight-stop-takeoff", flight("AUTO_TAKE_OFF"))).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("AUTO_LANDING"))).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("CONFIRM_LANDING"))).toEqual({ ok: true });
-    expect(OperatorConsole.evaluate("flight-stop-takeoff", flight("GPS_NORMAL"))).toMatchObject({ ok: false });
-    expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("GPS_NORMAL"))).toMatchObject({ ok: false });
+    expect(OperatorConsole.evaluate("flight-stop-takeoff", flight("GPS_NORMAL"))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("GPS_NORMAL"))).toEqual({ ok: true });
   });
 
-  it("只在飞控明确要求继续降落时允许发送确认降落", () => {
+  it("确认继续降落不由页面上的降落确认事实推断拦截", () => {
     const allowed = OperatorConsole.project({
       snapshot: snapshot([device({ connection: { ...device().connection, flightState: "flying", landingConfirmationNeeded: true } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" }, workspace: "flight",
@@ -769,7 +783,7 @@ describe("操作台工作区", () => {
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" }, workspace: "flight",
     });
     expect(OperatorConsole.evaluate("flight-confirm-landing", allowed)).toEqual({ ok: true });
-    expect(OperatorConsole.evaluate("flight-confirm-landing", blocked)).toEqual({ ok: false, reason: "MSDK 未要求确认继续降落" });
+    expect(OperatorConsole.evaluate("flight-confirm-landing", blocked)).toEqual({ ok: true });
   });
 });
 
@@ -796,6 +810,15 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain("中位 ");
     expect(source).toContain("最大 ");
     expect(source).toContain("抖动 ");
+  });
+
+  it("手机连接测量只显示当前连接代次的结果，且渲染异常不会永久锁住测量按钮", () => {
+    const source = renderer();
+    expect(source).toContain("connectionEpochOf(inspected)");
+    expect(source).toContain("probeForConnectionEpoch(inspectedDeviceId, inspectedEpoch)");
+    expect(source).toContain("phoneLinkProbes.set(deviceId, Object.freeze({ connectionEpoch, report }))");
+    expect(source).toContain("phoneLinkProbeInFlightDeviceId = deviceId;\n  try {\n    await render();");
+    expect(source).toContain("phoneLinkProbeInFlightDeviceId = null;\n    try { await render(); }");
   });
 
   it("由任务投影禁用不合法按钮，并在执行前重新确认已上传任务身份", () => {

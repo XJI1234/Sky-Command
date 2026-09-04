@@ -288,9 +288,9 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 ## 10. 直接飞控规则
 
-1. `requestFlightAction` 在委托 `flightControl.request` 前必须取得当前同会话控制遥测，再通过基于该事实的 `flight-control` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且不得创建确认或向手机发送飞控请求。预检未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`。通过后只委托 `flightControl.request`，从不直接发送命令。
-2. `confirmFlightAction` 在消费确认、可能发送飞控命令之前，必须再次取得当前同会话控制遥测；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且必须保留原待确认动作，以便操作者在恢复控制状态后重试或显式取消。只有已实际委托确认或确认本身被下游拒绝、过期时才可清除该待确认动作。`cancelFlightAction` 不需要控制遥测或实机预检。确认不可跨设备、跨动作、重复或过期复用。
-3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 只能在下游预检读取的原始 `FlightControllerKey.KeyIsLandingConfirmationNeeded=true` 且 `KeyIsFlying=true` 时请求，映射 `KeyConfirmLanding`；它永不由降落命令自动触发。停止自动起飞/降落只能在下游预检读取的原始 `FlightControllerKey.KeyFCFlightMode` 分别为 `AUTO_TAKE_OFF`、`AUTO_LANDING|CONFIRM_LANDING` 时请求；它们分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`，不表示停机、立即落地或已经悬停。
+1. `requestFlightAction` 对 `takeoff` 必须取得当前同会话控制遥测，并通过基于该事实的 `flight-control` 实机预检；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且不得创建确认或向手机发送飞控请求。预检未通过时返回 `{ ok: false, code: "HARDWARE_NOT_READY", value }`。对 `land`、`confirm-landing`、`return-home`、`stop-takeoff`、`stop-auto-landing`，工作流只确认目标手机仍在线，然后直接委托 `flightControl.request`；下游会以同一会话的 `MSDK READY` 事实执行最小可达性检查。工作流不得以飞控、遥控器、飞行模式、电量或其它遥测替 DJI 预先拒绝收尾动作。
+2. `confirmFlightAction` 对 `takeoff` 在消费确认、可能发送飞控命令之前，必须再次取得当前同会话控制遥测；事实缺失、畸形或会话变化返回 `CONTROL_STATE_UNAVAILABLE`，且必须保留原待确认动作，以便操作者在恢复控制状态后重试或显式取消。收尾型动作直接委托确认，由下游在发送前重读最小可达性；只有已实际委托确认或确认本身被下游拒绝、过期时才可清除该待确认动作。`cancelFlightAction` 不需要控制遥测或实机预检。确认不可跨设备、跨动作、重复或过期复用。
+3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 对应 `KeyConfirmLanding`，停止自动起飞/降落分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`，不表示停机、立即落地或已经悬停。它们的实际适用状态由 MSDK Action 回调裁决，不由工作流使用页面快照推断。
 4. `flight.land` 的 DJI Action 成功只使该设备的 `landing.phase` 进入 `awaiting-msdk`。在该意图仍为 `requested` 且尚未观察到 `confirmed-grounded` 之前，新的 `land` 请求必须返回 `LANDING_IN_PROGRESS`，不得重复创建确认或再次调用 DJI。其后只能由同一会话的持续 MSDK 遥测改变：`KeyIsLandingConfirmationNeeded=true` 为 `confirmation-required`，`KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 为 `confirmed-grounded`，任一所需事实未知或飞控断开为 `state-unknown`。它绝不因时间流逝、命令回调、页面刷新或旧缓存显示为已落地。`flight.stop-auto-landing` 成功才进入 `stopped`；其它成功的直接飞行动作重置为 `idle`。
 5. 工作流只保存由 `requestFlightAction` 返回的待确认 ID 和上述已接受降落的最小意图。设备断连或会话替换时，如动作仍未确认，工作流只能调用既有 `flightControl.cancel(deviceId, confirmationId)` 取消确认，并丢弃该会话的降落意图；它绝不补发飞控命令。已经发送中的 DJI 调用不可由本模块撤销，其迟到结果也不得让离线设备重新出现在工作流快照中。
 
@@ -308,7 +308,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道；不得让旧确认对话框在新会话上继续可点。
 
-设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示与禁用明显不满足前置条件的操作；它不是后端授权。图传启动、直接飞控、设备设置、航线上传或航线启动分别只接受当前同会话的完整控制遥测；事实缺失、会话变化、明确 `false` 或 `unknown` 都必须拒绝新操作。
+设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示与禁用明显不满足前置条件的操作；它不是后端授权。图传启动、设备设置、航线上传、航线启动与 `takeoff` 分别只接受当前同会话的完整控制遥测；事实缺失、会话变化、明确 `false` 或 `unknown` 都必须拒绝新操作。收尾型直接飞行动作只读取下游所需的中继可达性和 `MSDK READY`，不得被其它缺失或旧遥测阻断。
 
 同 ID 的新手机会话后续重新出现时被视为新在线设备：旧任务和旧图传都不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。
 

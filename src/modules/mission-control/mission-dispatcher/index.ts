@@ -31,7 +31,7 @@ export interface MissionSendOutcome {
 }
 
 export interface WaylineCommand { readonly name: "wayline.upload" | "wayline.start" | "wayline.pause" | "wayline.resume" | "wayline.stop"; readonly fields: Readonly<{ readonly confirm: true }>; }
-export interface CommandSendOutcome { readonly deviceId: string; readonly commandId: string; readonly status: "succeeded" | "rejected" | "timed-out" | "disconnected" | "transport-failed"; readonly detail: string; }
+export interface CommandSendOutcome { readonly deviceId: string; readonly commandId: string; readonly status: "succeeded" | "rejected" | "timed-out" | "disconnected" | "transport-failed"; readonly detail: string; readonly result?: unknown; }
 export interface RelayTelemetry { readonly deviceId: string; readonly payload: Record<string, unknown>; readonly capabilities: Record<string, unknown>; }
 export interface MissionRelayGateway {
   readonly sendMission: (deviceId: string, payload: RelayMissionPayload) => Promise<MissionSendOutcome>;
@@ -42,10 +42,11 @@ export interface MissionRelayGateway {
 export interface MissionDispatcherDependencies { readonly routeSource: MissionRouteSource; readonly relay: MissionRelayGateway; }
 export interface MissionDispatcherOptions { readonly createMissionId: (deviceId: string, routeId: string) => string; }
 export type DispatchOperation = "stage" | "upload" | "start" | "pause" | "resume" | "stop";
-export type DispatchErrorCode = "INVALID_DEVICE_ID" | "INVALID_ROUTE_ID" | "ROUTE_UNAVAILABLE" | "MISSION_ID_UNAVAILABLE" | "ILLEGAL_PHASE" | "OPERATION_IN_PROGRESS" | "DEPENDENCY_FAILURE" | "MISSION_TRANSFER_FAILED" | "WAYLINE_UPLOAD_FAILED" | "PREFLIGHT_BLOCKED" | "WAYLINE_START_FAILED" | "WAYLINE_START_UNCONFIRMED" | "WAYLINE_PAUSE_FAILED" | "WAYLINE_PAUSE_UNCONFIRMED" | "WAYLINE_RESUME_FAILED" | "WAYLINE_RESUME_UNCONFIRMED" | "WAYLINE_STOP_FAILED" | "WAYLINE_STOP_UNCONFIRMED";
+export type DispatchErrorCode = "INVALID_DEVICE_ID" | "INVALID_ROUTE_ID" | "ROUTE_UNAVAILABLE" | "MISSION_ID_UNAVAILABLE" | "ILLEGAL_PHASE" | "OPERATION_IN_PROGRESS" | "DEPENDENCY_FAILURE" | "MISSION_TRANSFER_FAILED" | "WAYLINE_UPLOAD_FAILED" | "PREFLIGHT_BLOCKED" | "WAYLINE_START_FAILED" | "WAYLINE_START_UNCONFIRMED" | "WAYLINE_PAUSE_FAILED" | "WAYLINE_PAUSE_UNCONFIRMED" | "WAYLINE_RESUME_FAILED" | "WAYLINE_RESUME_UNCONFIRMED" | "WAYLINE_STOP_FAILED" | "WAYLINE_STOP_UNCONFIRMED" | "WAYLINE_ACTION_REJECTED" | "WAYLINE_ACTION_INVOCATION_FAILED";
 export interface LastDispatchResult { readonly operation: DispatchOperation; readonly ok: boolean; readonly code: DispatchErrorCode | null; }
 export interface MissionDispatchSnapshot { readonly deviceId: string; readonly routeId: string | null; readonly missionId: string | null; readonly phase: MissionPhase; readonly failureCode: string | null; readonly lastResult: LastDispatchResult | null; }
-export type DispatchResult = Readonly<{ readonly ok: true; readonly operation: DispatchOperation; readonly state: MissionDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: DispatchOperation; readonly code: DispatchErrorCode; readonly state: MissionDispatchSnapshot | null; readonly blockers?: readonly PreflightBlocker[] }>;
+export interface WaylinePlatformError { readonly code: string; readonly description: string; }
+export type DispatchResult = Readonly<{ readonly ok: true; readonly operation: DispatchOperation; readonly state: MissionDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: DispatchOperation; readonly code: DispatchErrorCode; readonly state: MissionDispatchSnapshot | null; readonly blockers?: readonly PreflightBlocker[]; readonly platformError?: WaylinePlatformError }>;
 export interface MissionDispatcherInstance {
   readonly stage: (deviceId: string, routeId: string) => Promise<DispatchResult>;
   readonly upload: (deviceId: string) => Promise<DispatchResult>;
@@ -83,6 +84,28 @@ const succeeded = (value: unknown): boolean => {
   });
   return status.ok && status.value === "succeeded";
 };
+const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
+const validText = (value: unknown, maxCodePoints: number): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maxCodePoints && !/[\p{Cc}]/u.test(value);
+type WaylineTerminalResult =
+  | Readonly<{ readonly outcome: "ACTION_REJECTED"; readonly platformError: WaylinePlatformError }>
+  | Readonly<{ readonly outcome: "INVOCATION_FAILED" | "RESULT_UNCONFIRMED" }>;
+const readWaylineTerminalResult = (value: unknown): WaylineTerminalResult | null => {
+  try {
+    if (!isRecord(value) || !isRecord(value.result) || value.result.kind !== "object" || !isRecord(value.result.fields)) return null;
+    const fields = value.result.fields;
+    const readText = (name: string, maxCodePoints: number): string | null => {
+      const field = fields[name];
+      return isRecord(field) && field.kind === "string" && validText(field.value, maxCodePoints) ? field.value : null;
+    };
+    if (readText("domain", 32) !== "wayline") return null;
+    const outcome = readText("outcome", 64);
+    if (outcome === "INVOCATION_FAILED" || outcome === "RESULT_UNCONFIRMED") return freeze({ outcome });
+    if (outcome !== "ACTION_REJECTED") return null;
+    const code = readText("errorCode", 128);
+    const description = readText("errorDescription", 512);
+    return code === null || description === null ? null : freeze({ outcome, platformError: freeze({ code, description }) });
+  } catch { return null; }
+};
 const attemptAsync = async <T>(operation: () => Promise<T>): Promise<Attempt<T>> => {
   try { return freeze({ ok: true as const, value: await operation() }); } catch { return freeze({ ok: false as const }); }
 };
@@ -119,11 +142,11 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
   };
   const list = (): readonly MissionDispatchSnapshot[] => freeze([...lanes.values()].map(snapshot));
   const publish = (): void => { const current = list(); for (const listener of [...listeners]) { try { listener(current); } catch { /* listener isolation */ } } };
-  const result = (lane: Lane, operation: DispatchOperation, ok: boolean, code: DispatchErrorCode | null): DispatchResult => {
+  const result = (lane: Lane, operation: DispatchOperation, ok: boolean, code: DispatchErrorCode | null, extra: Partial<Pick<Extract<DispatchResult, { readonly ok: false }>, "platformError">> = {}): DispatchResult => {
     lane.lastResult = freeze({ operation, ok, code });
     const state = snapshot(lane);
     publish();
-    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state });
+    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state, ...extra });
   };
   const blocked = (lane: Lane, operation: "upload" | "start", blockers: readonly PreflightBlocker[]): DispatchResult => {
     lane.lastResult = freeze({ operation, ok: false, code: "PREFLIGHT_BLOCKED" });
@@ -197,11 +220,32 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
       completeCommand[operation](lane.machine);
       return result(lane, operation, true, null);
     }
+    const terminal = sent.ok ? readWaylineTerminalResult(sent.value) : null;
+    if (operation === "upload" && terminal?.outcome === "ACTION_REJECTED") {
+      lane.machine.transition({ type: "upload-rejected" });
+      return result(lane, operation, false, "WAYLINE_ACTION_REJECTED", { platformError: terminal.platformError });
+    }
+    if (operation === "upload" && terminal?.outcome === "INVOCATION_FAILED") {
+      lane.machine.transition({ type: "upload-rejected" });
+      return result(lane, operation, false, "WAYLINE_ACTION_INVOCATION_FAILED");
+    }
     if (operation === "start") {
       if (lane.machine.state().phase !== "starting") return result(lane, operation, true, null);
+      if (terminal?.outcome === "ACTION_REJECTED") {
+        lane.machine.transition({ type: "start-rejected" });
+        return result(lane, operation, false, "WAYLINE_ACTION_REJECTED", { platformError: terminal.platformError });
+      }
       return result(lane, operation, false, "WAYLINE_START_UNCONFIRMED");
     }
     if (operation === "pause" || operation === "resume" || operation === "stop") {
+      if (terminal?.outcome === "ACTION_REJECTED") {
+        lane.machine.transition({ type: `${operation}-rejected` as "pause-rejected" | "resume-rejected" | "stop-rejected" });
+        return result(lane, operation, false, "WAYLINE_ACTION_REJECTED", { platformError: terminal.platformError });
+      }
+      if (terminal?.outcome === "INVOCATION_FAILED") {
+        lane.machine.transition({ type: `${operation}-rejected` as "pause-rejected" | "resume-rejected" | "stop-rejected" });
+        return result(lane, operation, false, "WAYLINE_ACTION_INVOCATION_FAILED");
+      }
       return result(lane, operation, false, unconfirmedCommandFailure[operation]);
     }
     lane.machine.transition({ type: "operation-failed", code: failureCode });

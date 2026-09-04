@@ -87,7 +87,11 @@ function adapt(socket: WebSocketLike, openState: number, localAddress: string | 
     const probe = activeProbe;
     if (probe === null) return;
     activeProbe = null;
-    if (probe.timeout !== null) ping.timeout.clear(probe.timeout);
+    if (probe.timeout !== null) {
+      // Probe scheduling is diagnostic-only. A broken timer implementation must
+      // not strand the transport's probe state or escape a WebSocket callback.
+      try { ping.timeout.clear(probe.timeout); } catch { /* best-effort cleanup */ }
+    }
     probe.resolve(result);
   };
   const notifyClose = (reason: string): void => {
@@ -121,9 +125,15 @@ function adapt(socket: WebSocketLike, openState: number, localAddress: string | 
       const operation = new Promise<RelayConnectionProbeResult>((resolve) => { resolveProbe = resolve; });
       const payload = nextPingPayload(0x44);
       activeProbe = Object.freeze({ startedAtMs: now(), payload, timeout: null, resolve: resolveProbe, operation });
-      const timeout = ping.timeout.set(() => {
-        if (activeProbe?.operation === operation) finishProbe(Object.freeze({ status: "timed-out" }));
-      }, ping.probeTimeoutMs);
+      let timeout: unknown;
+      try {
+        timeout = ping.timeout.set(() => {
+          if (activeProbe?.operation === operation) finishProbe(Object.freeze({ status: "timed-out" }));
+        }, ping.probeTimeoutMs);
+      } catch {
+        finishProbe(Object.freeze({ status: "unavailable" }));
+        return operation;
+      }
       if (activeProbe?.operation === operation) activeProbe = Object.freeze({ ...activeProbe, timeout });
       try { socket.ping(payload.slice()); }
       catch { finishProbe(Object.freeze({ status: "unavailable" })); }

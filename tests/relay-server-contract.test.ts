@@ -20,6 +20,7 @@ class FakeConnection implements RelayConnection {
   controlledSends = false;
   failSends = false;
   readonly probeResults: RelayConnectionProbeResult[] = [];
+  malformedProbeResult: unknown = undefined;
   probeCalls = 0;
 
   send(bytesToSend: Uint8Array): Promise<void> {
@@ -50,6 +51,7 @@ class FakeConnection implements RelayConnection {
   onError(listener: () => void): () => void { this.errorListeners.add(listener); return () => this.errorListeners.delete(listener); }
   async probeLink(): Promise<RelayConnectionProbeResult> {
     this.probeCalls += 1;
+    if (this.malformedProbeResult !== undefined) return this.malformedProbeResult as RelayConnectionProbeResult;
     return this.probeResults.shift() ?? Object.freeze({ status: "unavailable" });
   }
   emitMessage(value: Uint8Array): void { for (const listener of this.messageListeners) listener(value.slice()); }
@@ -132,6 +134,20 @@ describe("relay-server contract", () => {
     });
     expect(connection.probeCalls).toBe(10);
     expect(connection.sent).toHaveLength(1);
+    await server.stop();
+  });
+
+  it("converts a malformed adapter probe result into a stable unavailable report", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    await server.start();
+    const connection = transport.connect();
+    connection.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+    connection.malformedProbeResult = null;
+
+    await expect(server.measureLink("connection-1")).resolves.toEqual({ status: "unavailable", sampleCount: 0 });
+    expect(connection.probeCalls).toBe(1);
     await server.stop();
   });
 
@@ -275,6 +291,39 @@ describe("relay-server contract", () => {
     });
   });
 
+  it("keeps only the newest same-device handshake when paired replies overlap", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    const paired: string[] = [];
+    const closed: string[] = [];
+    server.subscribe((event) => {
+      if (event.kind === "connection-paired") paired.push(event.connection.connectionId);
+      if (event.kind === "connection-closed") closed.push(`${event.connectionId}:${event.reason}`);
+    });
+    await server.start();
+
+    const first = transport.connect();
+    first.controlledSends = true;
+    first.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+    expect(server.snapshot().connections[0]).toMatchObject({ phase: "awaiting-hello", deviceId: null });
+
+    const replacement = transport.connect();
+    replacement.controlledSends = true;
+    replacement.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+    first.releaseNextSend();
+    replacement.releaseNextSend();
+    await flush();
+
+    expect(first.closed).toBe(true);
+    expect(closed).toEqual(["connection-1:session-replaced"]);
+    expect(paired).toEqual(["connection-2"]);
+    expect(server.snapshot().connections).toEqual([
+      expect.objectContaining({ connectionId: "connection-2", phase: "paired", deviceId: "phone-1", sessionId: "session-phone-1-2" }),
+    ]);
+  });
+
   it("emits paired application frames in order and rejects a second handshake", async () => {
     const transport = new FakeTransport();
     const server = createServer({ transport });
@@ -361,6 +410,25 @@ describe("relay-server contract", () => {
     closing.emitClose("peer-closed");
     await flush();
     expect(server.snapshot().connections).toHaveLength(1);
+  });
+
+  it("does not pair a connection that closes while its handshake reply is pending", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    const events: string[] = [];
+    server.subscribe((event) => events.push(event.kind));
+    await server.start();
+    const connection = transport.connect();
+    connection.controlledSends = true;
+
+    connection.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+    connection.emitClose("peer-closed");
+    connection.releaseNextSend();
+    await flush();
+
+    expect(server.snapshot().connections).toEqual([]);
+    expect(events).toEqual(["state-changed", "state-changed", "connection-opened", "connection-closed"]);
   });
 
   it("closes active connections during stop and normalizes missing close reasons", async () => {

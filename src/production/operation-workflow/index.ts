@@ -14,10 +14,12 @@ const record = (value: unknown): RecordValue | null => value !== null && typeof 
 const read = (value: unknown, key: string): unknown => { try { return record(value)?.[key]; } catch { return undefined; } };
 const success = (value?: unknown): WorkflowResult => freeze({ ok: true as const, ...(value === undefined ? {} : { value }) });
 const failure = (code: string, value?: unknown): WorkflowResult => freeze({ ok: false as const, code, ...(value === undefined ? {} : { value }) });
+const recoveryFlightAction = (value: unknown): boolean => value === "land" || value === "confirm-landing" || value === "return-home" || value === "stop-takeoff" || value === "stop-auto-landing";
 
 function create(dependencies: OperationWorkflowDependencies) {
   const assignments = AssignmentRegistry.create();
   const pending = new Map<string, string>();
+  const pendingFlightActions = new Map<string, string>();
   const landingIntents = new Map<string, "requested" | "stopped">();
   const unavailableVideoSources = new Set<string>();
   const listeners = new Set<(snapshot: unknown) => void>();
@@ -41,6 +43,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   const sessionMap = (): Map<string, string | undefined> => new Map(deviceRecords().map((item) => [item.deviceId, item.sessionId]));
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
+  const connectionEpochs = new Map<string, number>();
   const online = (deviceId: string): boolean => {
     try {
       const values = dependencies.relayOperations.devices();
@@ -61,18 +64,19 @@ function create(dependencies: OperationWorkflowDependencies) {
   const settings = (deviceId: string): unknown => { try { return dependencies.deviceSettings.snapshot(deviceId); } catch { return freeze({}); } };
   const media = (): unknown => { try { return dependencies.mediaPipeline.snapshot(); } catch { return freeze({ streams: [] }); } };
   const clearFlightConfirm = (deviceId: string): void => {
-    const confirmationId = pending.get(deviceId);
-    if (confirmationId !== undefined) {
-      pending.delete(deviceId);
-      try { void dependencies.flightControl.cancel(deviceId, confirmationId); } catch { /* disconnect still clears local state */ }
-    }
+      const confirmationId = pending.get(deviceId);
+      if (confirmationId !== undefined) {
+        pending.delete(deviceId);
+        pendingFlightActions.delete(deviceId);
+        try { void dependencies.flightControl.cancel(deviceId, confirmationId); } catch { /* disconnect still clears local state */ }
+      }
     try { dependencies.flightControl.clear(deviceId); } catch { /* leftover confirmations must not survive reconnect */ }
   };
   const pendingFlightAction = (deviceId: string): unknown => { try { return dependencies.flightControl.get(deviceId); } catch { return null; } };
   const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
-  const snapshot = () => WorkflowSnapshot.create({ devices: onlineIds().map((deviceId) => {
+  const snapshot = () => WorkflowSnapshot.create({ devices: deviceRecords().map(({ deviceId }) => {
     const rawTelemetry = telemetryRaw(deviceId);
-    return freeze({ deviceId, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: controlTelemetryRaw(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId), landingIntent: landingIntents.get(deviceId) });
+    return freeze({ deviceId, connectionEpoch: connectionEpochs.get(deviceId) ?? 0, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: controlTelemetryRaw(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId), landingIntent: landingIntents.get(deviceId) });
   }), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
   const publish = (): void => {
     revision += 1;
@@ -114,6 +118,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       const nextSession = sessions.get(deviceId);
       const replaced = !gone && previousSession !== undefined && nextSession !== undefined && previousSession !== nextSession;
       if (!gone && !replaced) continue;
+      connectionEpochs.set(deviceId, (connectionEpochs.get(deviceId) ?? 0) + 1);
       // 设备消失或会话替换：危险确认与图传车道都必须作废，避免重连后点到旧确认。
       clearFlightConfirm(deviceId);
       landingIntents.delete(deviceId);
@@ -292,24 +297,32 @@ function create(dependencies: OperationWorkflowDependencies) {
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
       if (action === "land" && landingIntents.get(deviceId) === "requested") return failure("LANDING_IN_PROGRESS");
-      const control = validId(deviceId) && online(deviceId) ? currentControl(deviceId) : null;
+      const startAction = !recoveryFlightAction(action);
+      const control = startAction && validId(deviceId) && online(deviceId) ? currentControl(deviceId) : null;
       const decision = control === null ? null : readiness(deviceId, "flight-control", control);
-      const result = validId(deviceId) && online(deviceId) && control === null
+      const result = startAction && validId(deviceId) && online(deviceId) && control === null
         ? failure("CONTROL_STATE_UNAVAILABLE")
-        : decision !== null && !decision.ok
+        : startAction && decision !== null && !decision.ok
           ? failure("HARDWARE_NOT_READY", decision)
           : actions.requestFlight(deviceId, action);
       const outcome = read(result, "value");
       const confirmationId = read(read(outcome, "confirmation"), "confirmationId");
-      if (result.ok && read(outcome, "ok") === true && validId(confirmationId)) pending.set(deviceId, confirmationId);
+      if (result.ok && read(outcome, "ok") === true && validId(confirmationId)) {
+        pending.set(deviceId, confirmationId);
+        pendingFlightActions.set(deviceId, action);
+      }
       publish();
       return result;
     },
     confirmFlightAction: async (deviceId: string, confirmationId: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
-      const result = await withCurrentControl(deviceId, () => actions.confirmFlight(deviceId, confirmationId));
+      const recoveryAction = recoveryFlightAction(pendingFlightActions.get(deviceId));
+      const result = recoveryAction
+        ? await actions.confirmFlight(deviceId, confirmationId)
+        : await withCurrentControl(deviceId, () => actions.confirmFlight(deviceId, confirmationId));
       if (result.ok) {
         pending.delete(deviceId);
+        pendingFlightActions.delete(deviceId);
         const inner = read(result, "value");
         if (read(inner, "ok") === true && read(inner, "code") === "SUCCEEDED") {
           const action = read(inner, "action");
@@ -326,7 +339,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); landingIntents.clear(); unavailableVideoSources.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); pendingFlightActions.clear(); landingIntents.clear(); unavailableVideoSources.clear(); connectionEpochs.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
   });
 }
 

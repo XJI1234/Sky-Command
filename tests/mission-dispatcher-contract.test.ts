@@ -13,16 +13,17 @@ const makeFixture = () => {
   const commands: Array<{ deviceId: string; name: string; fields: unknown }> = [];
   const missions: unknown[] = [];
   let commandStatus: "succeeded" | "rejected" | "timed-out" = "succeeded";
+  let commandResult: unknown = undefined;
   let telemetry: unknown = { deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } };
   const dispatcher = MissionDispatcher.create({
     routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
     relay: {
       sendMission: async (_deviceId: string, payload: unknown) => { missions.push(payload); return { deviceId: "phone-1", missionId: "mission-1", status: "succeeded" as const, detail: "accepted" }; },
-      sendCommand: async (deviceId: string, request: { name: string; fields: unknown }) => { commands.push({ deviceId, ...request }); return { deviceId, commandId: "command-1", status: commandStatus, detail: "result" }; },
+      sendCommand: async (deviceId: string, request: { name: string; fields: unknown }) => { commands.push({ deviceId, ...request }); return { deviceId, commandId: "command-1", status: commandStatus, detail: "result", ...(commandResult === undefined ? {} : { result: commandResult }) }; },
       latestTelemetry: () => telemetry as never
     }
   }, { createMissionId: () => "mission-1" });
-  return { dispatcher, commands, missions, setCommandStatus: (status: "succeeded" | "rejected" | "timed-out") => { commandStatus = status; }, setTelemetry: (value: unknown) => { telemetry = value; } };
+  return { dispatcher, commands, missions, setCommandStatus: (status: "succeeded" | "rejected" | "timed-out") => { commandStatus = status; }, setCommandResult: (value: unknown) => { commandResult = value; }, setTelemetry: (value: unknown) => { telemetry = value; } };
 };
 
 const stage = async (dispatcher: ReturnType<typeof MissionDispatcher.create>) => {
@@ -61,6 +62,42 @@ describe("mission dispatcher contract", () => {
     expect(result).toMatchObject({ ok: true, operation: "upload", state: { phase: "uploaded" } });
     expect(fixture.commands).toEqual([{ deviceId: "phone-1", name: "wayline.upload", fields: { confirm: true } }]);
     expect(fixture.dispatcher.get("phone-1").lastResult).toEqual({ operation: "upload", ok: true, code: null });
+  });
+
+  it("preserves an explicit DJI upload rejection and restores the staged phase", async () => {
+    const dispatcher = MissionDispatcher.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async () => ({
+          deviceId: "phone-1",
+          commandId: "command-1",
+          status: "rejected" as const,
+          detail: "DJI rejected the upload",
+          result: {
+            kind: "object",
+            fields: {
+              domain: { kind: "string", value: "wayline" },
+              outcome: { kind: "string", value: "ACTION_REJECTED" },
+              errorCode: { kind: "string", value: "WAYPOINT_MISSION_BUSY" },
+              errorDescription: { kind: "string", value: "The mission manager is busy" },
+            },
+          },
+        } as never),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } }),
+      },
+    }, { createMissionId: () => "mission-1" });
+
+    await stage(dispatcher);
+    const result = await dispatcher.upload("phone-1");
+
+    expect(result).toMatchObject({
+      ok: false,
+      operation: "upload",
+      code: "WAYLINE_ACTION_REJECTED",
+      state: { phase: "staged" },
+      platformError: { code: "WAYPOINT_MISSION_BUSY", description: "The mission manager is busy" },
+    });
   });
 
   it("blocks upload before sending when the current control telemetry lacks hardware readiness", async () => {
@@ -108,6 +145,63 @@ describe("mission dispatcher contract", () => {
     expect(fixture.dispatcher.recordExecutionStarted("phone-1", "other.kmz", 1, 0)).toBeNull();
     expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toMatchObject({ phase: "running" });
     expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toBeNull();
+  });
+
+  it("preserves an explicit DJI start rejection and restores the uploaded phase", async () => {
+    const commands: unknown[] = [];
+    const dispatcher = MissionDispatcher.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async (_deviceId, request) => {
+          commands.push(request);
+          if (request.name === "wayline.upload") return { deviceId: "phone-1", commandId: "upload-1", status: "succeeded" as const, detail: "accepted" };
+          return {
+            deviceId: "phone-1",
+            commandId: "command-1",
+            status: "rejected" as const,
+            detail: "DJI rejected the start",
+            result: {
+              kind: "object",
+              fields: {
+                domain: { kind: "string", value: "wayline" },
+                outcome: { kind: "string", value: "ACTION_REJECTED" },
+                errorCode: { kind: "string", value: "WAYPOINT_MISSION_BUSY" },
+                errorDescription: { kind: "string", value: "The mission manager is busy" },
+              },
+            },
+          } as never;
+        },
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } }),
+      },
+    }, { createMissionId: () => "mission-1" });
+
+    await stage(dispatcher);
+    await dispatcher.upload("phone-1");
+    const result = await dispatcher.start("phone-1");
+
+    expect(result).toMatchObject({
+      ok: false,
+      operation: "start",
+      code: "WAYLINE_ACTION_REJECTED",
+      state: { phase: "uploaded" },
+      platformError: { code: "WAYPOINT_MISSION_BUSY", description: "The mission manager is busy" },
+    });
+    expect(commands).toHaveLength(2);
+    expect(await dispatcher.start("phone-1")).toMatchObject({ code: "WAYLINE_ACTION_REJECTED", state: { phase: "uploaded" } });
+  });
+
+  it("keeps a start without a DJI error unconfirmed instead of allowing a retry", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    fixture.setCommandStatus("rejected");
+    fixture.setCommandResult({ kind: "object", fields: { domain: { kind: "string", value: "wayline" }, outcome: { kind: "string", value: "INVOCATION_FAILED" } } });
+
+    const result = await fixture.dispatcher.start("phone-1");
+
+    expect(result).toMatchObject({ ok: false, operation: "start", code: "WAYLINE_START_UNCONFIRMED", state: { phase: "starting" } });
+    expect(await fixture.dispatcher.start("phone-1")).toMatchObject({ ok: false, code: "ILLEGAL_PHASE", state: { phase: "starting" } });
   });
 
   it("keeps an unconfirmed start stoppable and forbids a retry after transport uncertainty", async () => {
@@ -160,6 +254,34 @@ describe("mission dispatcher contract", () => {
     expect((await fixture.dispatcher.resume("phone-1"))).toMatchObject({ ok: true, state: { phase: "running" } });
     expect((await fixture.dispatcher.stop("phone-1"))).toMatchObject({ ok: true, state: { phase: "idle" } });
     expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload", "wayline.start", "wayline.pause", "wayline.resume", "wayline.stop"]);
+  });
+
+  it.each(["pause", "resume", "stop"] as const)("preserves DJI rejection details for %s instead of reporting an unconfirmed result", async (operation) => {
+    let rejectWithDjiError = false;
+    const dispatcher = MissionDispatcher.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async (_deviceId, request) => rejectWithDjiError
+          ? ({ deviceId: "phone-1", commandId: "command-1", status: "rejected", detail: "DJI rejected the action", result: { kind: "object", fields: { domain: { kind: "string", value: "wayline" }, outcome: { kind: "string", value: "ACTION_REJECTED" }, errorCode: { kind: "string", value: "WAYPOINT_MISSION_BUSY" }, errorDescription: { kind: "string", value: "The mission manager is busy" } } } } as never)
+          : ({ deviceId: "phone-1", commandId: request.name, status: "succeeded" as const, detail: "accepted" }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "CONNECTED", isFlying: false, motorsOn: false, batteryPercent: 80 }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } }),
+      }
+    }, { createMissionId: () => "mission-1" });
+    await stage(dispatcher);
+    await dispatcher.upload("phone-1");
+    await dispatcher.start("phone-1");
+    dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+    if (operation === "resume") await dispatcher.pause("phone-1");
+    rejectWithDjiError = true;
+
+    await expect(dispatcher[operation]("phone-1")).resolves.toMatchObject({
+      ok: false,
+      operation,
+      code: "WAYLINE_ACTION_REJECTED",
+      state: { phase: operation === "pause" || operation === "stop" ? "running" : "paused" },
+      platformError: { code: "WAYPOINT_MISSION_BUSY", description: "The mission manager is busy" },
+    });
   });
 
   it("在手机端尚未确认时保留暂停和继续的请求中状态", async () => {

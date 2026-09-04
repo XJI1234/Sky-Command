@@ -46,6 +46,49 @@ describe("mission phase domain contract", () => {
     }
   });
 
+  it.each([
+    { request: "pause-requested", rejected: "pause-rejected", before: "running", pending: "pausing", after: "running" },
+    { request: "resume-requested", rejected: "resume-rejected", before: "paused", pending: "resuming", after: "paused" },
+    { request: "stop-requested", rejected: "stop-rejected", before: "running", pending: "stopping", after: "running" },
+  ])("returns a known rejected $request operation to its prior $after phase", ({ request, rejected, before, pending, after }) => {
+    const machine = MissionPhaseDomain.create();
+    stageAndUpload(machine);
+    transition(machine, { type: "start-requested" });
+    transition(machine, { type: "start-succeeded" });
+    if (before === "paused") {
+      transition(machine, { type: "pause-requested" });
+      transition(machine, { type: "pause-succeeded" });
+    }
+
+    expect(transition(machine, { type: request } as never).phase).toBe(pending);
+    expect(transition(machine, { type: rejected } as never).phase).toBe(after);
+  });
+
+  it("returns an explicitly rejected upload to staged without inventing a failed mission", () => {
+    const machine = MissionPhaseDomain.create();
+    transition(machine, { type: "stage-requested", missionId: "mission-1" });
+    transition(machine, { type: "stage-succeeded", missionId: "mission-1" });
+
+    expect(transition(machine, { type: "upload-requested" }).phase).toBe("uploading");
+    expect(transition(machine, { type: "upload-rejected" } as never)).toEqual({
+      missionId: "mission-1",
+      phase: "staged",
+      failureCode: null,
+    });
+  });
+
+  it("returns an explicitly rejected start to uploaded so it can be retried", () => {
+    const machine = MissionPhaseDomain.create();
+    stageAndUpload(machine);
+    transition(machine, { type: "start-requested" });
+
+    expect(transition(machine, { type: "start-rejected" } as never)).toEqual({
+      missionId: "mission-1",
+      phase: "uploaded",
+      failureCode: null,
+    });
+  });
+
   it("allows one explicit stop after the desktop loses and regains session knowledge", () => {
     const machine = MissionPhaseDomain.create();
     stageAndUpload(machine);
