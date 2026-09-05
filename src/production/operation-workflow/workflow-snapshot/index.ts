@@ -19,6 +19,10 @@ const pairingStates = ["UNKNOWN", "IDLE", "PAIRING", "PAIRED", "STOPPING", "FAIL
 const pairingState = (value: unknown): string => typeof value === "string" && pairingStates.includes(value as typeof pairingStates[number]) ? value : "unknown";
 const lowBatteryRthStates = ["IDLE", "COUNTING_DOWN", "EXECUTED", "CANCELLED", "UNKNOWN"] as const;
 const lowBatteryRthState = (value: unknown): typeof lowBatteryRthStates[number] | "unknown" => typeof value === "string" && lowBatteryRthStates.includes(value as typeof lowBatteryRthStates[number]) ? value as typeof lowBatteryRthStates[number] : "unknown";
+const missionExecutionStates = ["NOT_STARTED", "STARTING", "EXECUTING", "PAUSED", "STOPPING", "FINISHED", "FAILED"] as const;
+const missionDjiExecutionStates = ["IDLE", "READY", "UPLOADING", "PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "INTERRUPTED", "FINISHED", "RETURN_TO_START_POINT", "DISCONNECTED", "NOT_SUPPORTED", "UNKNOWN"] as const;
+const missionExecutionState = (value: unknown): typeof missionExecutionStates[number] | null => typeof value === "string" && missionExecutionStates.includes(value as typeof missionExecutionStates[number]) ? value as typeof missionExecutionStates[number] : null;
+const missionDjiExecutionState = (value: unknown): typeof missionDjiExecutionStates[number] | null => typeof value === "string" && missionDjiExecutionStates.includes(value as typeof missionDjiExecutionStates[number]) ? value as typeof missionDjiExecutionStates[number] : null;
 const landingPhase = (intent: unknown, connection: RecordValue): "idle" | "awaiting-msdk" | "confirmation-required" | "confirmed-grounded" | "state-unknown" | "stopped" => {
   if (intent !== "requested" && intent !== "stopped") return "idle";
   if (intent === "stopped") return "stopped";
@@ -96,6 +100,12 @@ const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
     lowBatteryRthState: rthState,
     remainingFlightTimeSeconds: rthState === "unknown" || rthState === "UNKNOWN" ? null : boundedInteger(read(payload, "remainingFlightTimeSeconds"), 1, 86_400),
     pairingState: pairingState(read(payload, "pairing")),
+    missionRevision: boundedInteger(read(payload, "missionRevision"), 1, Number.MAX_SAFE_INTEGER),
+    missionDeviceGeneration: boundedInteger(read(payload, "missionDeviceGeneration"), 0, Number.MAX_SAFE_INTEGER),
+    missionExecution: missionExecutionState(read(payload, "missionExecution")),
+    missionDjiExecutionState: missionDjiExecutionState(read(payload, "missionDjiExecutionState")),
+    missionUploadProgress: boundedInteger(read(payload, "missionUploadProgress"), 0, 100),
+    missionFileName: safeText(read(payload, "missionFileName")),
     pose: flightFactsAvailable ? pose(payload) : null,
     live: live(payload),
   });

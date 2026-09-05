@@ -21,6 +21,7 @@ export interface TelemetryRefreshResult {
 }
 type MsdkLinkState = "UNKNOWN" | "DISCONNECTED" | "CONNECTED";
 type MsdkPairingState = "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED";
+type MissionDjiExecutionState = "IDLE" | "READY" | "UPLOADING" | "PREPARING" | "RECOVERING" | "ENTER_WAYLINE" | "EXECUTING" | "PAUSED" | "INTERRUPTED" | "FINISHED" | "RETURN_TO_START_POINT" | "DISCONNECTED" | "NOT_SUPPORTED" | "UNKNOWN";
 
 export interface DesktopRelayTelemetryPayload {
   readonly [key: string]: unknown;
@@ -97,6 +98,10 @@ export interface DesktopRelayTelemetryPayload {
   readonly missionRevision?: number;
   readonly missionDeviceGeneration?: number;
   readonly missionExecution?: "NOT_STARTED" | "STARTING" | "EXECUTING" | "PAUSED" | "STOPPING" | "FINISHED" | "FAILED";
+  /** Last identity-matched raw WaypointMissionExecuteStateListener enum name from Android MSDK. */
+  readonly missionDjiExecutionState?: MissionDjiExecutionState;
+  /** Raw Android MissionSnapshot upload progress, bounded to 0..100. */
+  readonly missionUploadProgress?: number;
   readonly missionFileName?: string;
 }
 
@@ -360,6 +365,9 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   const motorStartFailureError = safeText(string(payload.motorStartFailureError)); if (motorStartFailureError !== undefined) outputPayload.motorStartFailureError = motorStartFailureError;
   const missionExecution = string(payload.missionExecution);
   if (missionExecution === "NOT_STARTED" || missionExecution === "STARTING" || missionExecution === "EXECUTING" || missionExecution === "PAUSED" || missionExecution === "STOPPING" || missionExecution === "FINISHED" || missionExecution === "FAILED") outputPayload.missionExecution = missionExecution;
+  const missionDjiExecutionState = string(payload.missionDjiExecutionState);
+  if (missionDjiExecutionState === "IDLE" || missionDjiExecutionState === "READY" || missionDjiExecutionState === "UPLOADING" || missionDjiExecutionState === "PREPARING" || missionDjiExecutionState === "RECOVERING" || missionDjiExecutionState === "ENTER_WAYLINE" || missionDjiExecutionState === "EXECUTING" || missionDjiExecutionState === "PAUSED" || missionDjiExecutionState === "INTERRUPTED" || missionDjiExecutionState === "FINISHED" || missionDjiExecutionState === "RETURN_TO_START_POINT" || missionDjiExecutionState === "DISCONNECTED" || missionDjiExecutionState === "NOT_SUPPORTED" || missionDjiExecutionState === "UNKNOWN") outputPayload.missionDjiExecutionState = missionDjiExecutionState;
+  const missionUploadProgress = boundedInteger(payload.missionUploadProgress, 0, 100); if (missionUploadProgress !== undefined) outputPayload.missionUploadProgress = missionUploadProgress;
   const missionFileName = string(payload.missionFileName); if (validMissionFileName(missionFileName)) outputPayload.missionFileName = missionFileName;
   const missionRevision = positiveIntegerValue(payload.missionRevision); if (missionRevision !== undefined) outputPayload.missionRevision = missionRevision;
   const missionDeviceGeneration = nonNegativeIntegerValue(payload.missionDeviceGeneration); if (missionDeviceGeneration !== undefined) outputPayload.missionDeviceGeneration = missionDeviceGeneration;

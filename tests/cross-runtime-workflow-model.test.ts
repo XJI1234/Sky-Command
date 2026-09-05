@@ -17,6 +17,13 @@ const event = (type: typeof WorkflowModel.mission.events[number]): MissionPhaseE
 };
 
 describe("跨运行时独立工作流模型", () => {
+  it("allows a replacement stop only after the prior stop has left the serial dispatcher lane", () => {
+    expect(WorkflowModel.mission.evaluate("stopping", "stop-requested")).toEqual({
+      accepted: true,
+      next: "stopping",
+    });
+  });
+
   it("逐项比较航线生产状态机的全部状态与事件组合", () => {
     const audit = WorkflowModel.mission.audit();
     expect(audit.total).toBe(14 * 16);
@@ -59,8 +66,8 @@ describe("跨运行时独立工作流模型", () => {
   it("审计精确报告合法和非法转换数量", () => {
     expect(WorkflowModel.mission.audit()).toMatchObject({
       total: 224,
-      accepted: 56,
-      rejected: 168,
+      accepted: 57,
+      rejected: 167,
       reachableStates: 14,
     });
   });

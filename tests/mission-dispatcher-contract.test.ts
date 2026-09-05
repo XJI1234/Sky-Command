@@ -165,6 +165,45 @@ describe("mission dispatcher contract", () => {
     expect(fixture.dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toBeNull();
   });
 
+  it("keeps both accepted DJI mission milestones without letting an older event overwrite them", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+
+    expect(fixture.dispatcher.recordMissionPhase("phone-1", "survey.kmz", 7, 3, 1, "START_POINT_REACHED")).toMatchObject({
+      phase: "starting",
+      startPointReached: true,
+      routeExecutionStarted: false,
+    });
+    expect(fixture.dispatcher.recordMissionPhase("phone-1", "survey.kmz", 7, 3, 2, "ROUTE_EXECUTION_STARTED")).toMatchObject({
+      phase: "running",
+      startPointReached: true,
+      routeExecutionStarted: true,
+    });
+    expect(fixture.dispatcher.recordMissionPhase("phone-1", "survey.kmz", 7, 3, 1, "START_POINT_REACHED")).toBeNull();
+    expect(fixture.dispatcher.get("phone-1")).toMatchObject({
+      phase: "running",
+      startPointReached: true,
+      routeExecutionStarted: true,
+    });
+  });
+
+  it("clears displayed DJI mission milestones when the relay session disappears", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    fixture.dispatcher.recordMissionPhase("phone-1", "survey.kmz", 7, 3, 1, "START_POINT_REACHED");
+    fixture.dispatcher.recordMissionPhase("phone-1", "survey.kmz", 7, 3, 2, "ROUTE_EXECUTION_STARTED");
+
+    expect(fixture.dispatcher.recordDisconnected("phone-1")).toMatchObject({
+      phase: "disconnected",
+      startPointReached: false,
+      routeExecutionStarted: false,
+    });
+  });
+
   it("preserves an explicit DJI start rejection and restores the uploaded phase", async () => {
     const commands: unknown[] = [];
     const dispatcher = MissionDispatcher.create({

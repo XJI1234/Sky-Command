@@ -882,6 +882,41 @@ describe("航线操作台渲染契约", () => {
     expect(source).not.toContain('>开始<');
   });
 
+  it("将飞行工作区按图传、航线和直接飞行拆成保留独立状态的子页", () => {
+    const pageSource = page();
+    const rendererSource = renderer();
+    for (const panel of ["stream", "mission", "direct-flight"]) {
+      expect(pageSource).toContain(`data-flight-panel="${panel}"`);
+      expect(pageSource).toContain(`data-flight-panel-view="${panel}"`);
+    }
+    for (const status of [
+      "stream-relay", "stream-msdk", "stream-air-link", "stream-camera",
+      "mission-relay", "mission-msdk", "mission-phase", "mission-phone-execution",
+      "direct-relay", "direct-msdk", "direct-remote-controller", "direct-flight-controller",
+      "direct-flight-state", "direct-motors", "direct-battery", "direct-landing-protection",
+    ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
+    expect(rendererSource).toContain('flightPanel: FlightPanelName');
+    expect(rendererSource).toContain('renderFlightPanelStatus');
+    expect(rendererSource).toContain('renderFlightPanelVisibility');
+  });
+
+  it("将航线事实按来源分开显示，不把上传、DJI 原始状态、里程碑和桌面工作流混为一谈", () => {
+    const pageSource = page();
+    const rendererSource = renderer();
+    for (const heading of [
+      "命令可达性", "DJI 设备事实", "任务对象与手机暂存", "上传至飞机",
+      "DJI 航线执行观测", "DJI 可信里程碑", "桌面任务工作流",
+    ]) expect(pageSource).toContain(`<h4>${heading}</h4>`);
+    for (const status of [
+      "mission-selected-route", "mission-phone-file", "mission-phone-execution", "mission-revision",
+      "mission-device-generation", "mission-upload-progress", "mission-dji-execution-state",
+      "mission-start-point-reached", "mission-route-execution-started",
+    ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
+    expect(rendererSource).toContain("missionUploadProgressStatus");
+    expect(rendererSource).toContain("missionDjiExecutionStatus");
+    expect(rendererSource).toContain("missionMilestoneStatus");
+  });
+
   it("为每个具体操作保留就地的 MSDK 回调结果", () => {
     const source = renderer();
     const pageSource = page();

@@ -44,7 +44,8 @@ export interface MissionDispatcherOptions { readonly createMissionId: (deviceId:
 export type DispatchOperation = "stage" | "upload" | "start" | "pause" | "resume" | "stop";
 export type DispatchErrorCode = "INVALID_DEVICE_ID" | "INVALID_ROUTE_ID" | "ROUTE_UNAVAILABLE" | "MISSION_ID_UNAVAILABLE" | "ILLEGAL_PHASE" | "OPERATION_IN_PROGRESS" | "DEPENDENCY_FAILURE" | "MISSION_TRANSFER_FAILED" | "WAYLINE_UPLOAD_FAILED" | "PREFLIGHT_BLOCKED" | "WAYLINE_START_FAILED" | "WAYLINE_START_UNCONFIRMED" | "WAYLINE_PAUSE_FAILED" | "WAYLINE_PAUSE_UNCONFIRMED" | "WAYLINE_RESUME_FAILED" | "WAYLINE_RESUME_UNCONFIRMED" | "WAYLINE_STOP_FAILED" | "WAYLINE_STOP_UNCONFIRMED" | "WAYLINE_ACTION_REJECTED" | "WAYLINE_ACTION_INVOCATION_FAILED";
 export interface LastDispatchResult { readonly operation: DispatchOperation; readonly ok: boolean; readonly code: DispatchErrorCode | null; }
-export interface MissionDispatchSnapshot { readonly deviceId: string; readonly routeId: string | null; readonly missionId: string | null; readonly phase: MissionPhase; readonly failureCode: string | null; readonly lastResult: LastDispatchResult | null; }
+export type MissionExecutionMilestone = "START_POINT_REACHED" | "ROUTE_EXECUTION_STARTED";
+export interface MissionDispatchSnapshot { readonly deviceId: string; readonly routeId: string | null; readonly missionId: string | null; readonly phase: MissionPhase; readonly failureCode: string | null; readonly lastResult: LastDispatchResult | null; readonly startPointReached: boolean; readonly routeExecutionStarted: boolean; }
 export interface WaylinePlatformError { readonly code: string; readonly description: string; }
 export type DispatchResult = Readonly<{ readonly ok: true; readonly operation: DispatchOperation; readonly state: MissionDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: DispatchOperation; readonly code: DispatchErrorCode; readonly state: MissionDispatchSnapshot | null; readonly blockers?: readonly PreflightBlocker[]; readonly platformError?: WaylinePlatformError }>;
 export interface MissionDispatcherInstance {
@@ -54,6 +55,7 @@ export interface MissionDispatcherInstance {
   readonly pause: (deviceId: string) => Promise<DispatchResult>;
   readonly resume: (deviceId: string) => Promise<DispatchResult>;
   readonly stop: (deviceId: string) => Promise<DispatchResult>;
+  readonly recordMissionPhase: (deviceId: string, fileName: string, missionRevision: number, deviceGeneration: number, sequence: number, phase: MissionExecutionMilestone) => MissionDispatchSnapshot | null;
   readonly recordExecutionStarted: (deviceId: string, fileName: string, missionRevision: number, deviceGeneration: number) => MissionDispatchSnapshot | null;
   readonly recordExecutionTerminal: (deviceId: string, fileName: string, outcome: "completed" | "failed", missionRevision: number, deviceGeneration: number) => MissionDispatchSnapshot | null;
   readonly recordDisconnected: (deviceId: string) => MissionDispatchSnapshot | null;
@@ -64,15 +66,16 @@ export interface MissionDispatcherInstance {
 }
 
 interface MissionIdentity { readonly missionRevision: number; readonly deviceGeneration: number; }
-interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; missionIdentity: MissionIdentity | null; busy: boolean; lastResult: LastDispatchResult | null; }
+interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; missionIdentity: MissionIdentity | null; missionPhaseSequence: number | null; startPointReached: boolean; routeExecutionStarted: boolean; busy: boolean; lastResult: LastDispatchResult | null; }
 
 const COMMANDS = Object.freeze({ confirm: true as const });
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const validFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && value.toLowerCase().endsWith(".kmz") && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value);
 const validPositiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const validGeneration = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const validMissionPhase = (value: unknown): value is MissionExecutionMilestone => value === "START_POINT_REACHED" || value === "ROUTE_EXECUTION_STARTED";
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
-const idleSnapshot = (deviceId: string): MissionDispatchSnapshot => freeze({ deviceId, routeId: null, missionId: null, phase: "idle", failureCode: null, lastResult: null });
+const idleSnapshot = (deviceId: string): MissionDispatchSnapshot => freeze({ deviceId, routeId: null, missionId: null, phase: "idle", failureCode: null, lastResult: null, startPointReached: false, routeExecutionStarted: false });
 type Attempt<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false }>;
 const attempt = <T>(operation: () => T): Attempt<T> => {
   try { return freeze({ ok: true as const, value: operation() }); } catch { return freeze({ ok: false as const }); }
@@ -138,7 +141,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
   const listeners = new Set<(snapshot: readonly MissionDispatchSnapshot[]) => void>();
   const snapshot = (lane: Lane): MissionDispatchSnapshot => {
     const state = lane.machine.state();
-    return freeze({ deviceId: lane.deviceId, routeId: lane.routeId, missionId: state.missionId, phase: state.phase, failureCode: state.failureCode, lastResult: lane.lastResult === null ? null : freeze({ ...lane.lastResult }) });
+    return freeze({ deviceId: lane.deviceId, routeId: lane.routeId, missionId: state.missionId, phase: state.phase, failureCode: state.failureCode, lastResult: lane.lastResult === null ? null : freeze({ ...lane.lastResult }), startPointReached: lane.startPointReached, routeExecutionStarted: lane.routeExecutionStarted });
   };
   const list = (): readonly MissionDispatchSnapshot[] => freeze([...lanes.values()].map(snapshot));
   const publish = (): void => { const current = list(); for (const listener of [...listeners]) { try { listener(current); } catch { /* listener isolation */ } } };
@@ -177,12 +180,15 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const missionId = missionIdAttempt.value;
     if (!validId(missionId)) return rejected("stage", "MISSION_ID_UNAVAILABLE", existing ?? null);
 
-    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, missionIdentity: null, lastResult: null } as Lane;
+    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, missionIdentity: null, missionPhaseSequence: null, startPointReached: false, routeExecutionStarted: false, lastResult: null } as Lane;
     const requested = lane.machine.transition({ type: "stage-requested", missionId });
     if (!requested.ok) return rejected("stage", "ILLEGAL_PHASE", lane);
     lane.routeId = routeId;
     lane.fileName = routePayload.fileName;
     lane.missionIdentity = null;
+    lane.missionPhaseSequence = null;
+    lane.startPointReached = false;
+    lane.routeExecutionStarted = false;
     lanes.set(deviceId, lane);
     lane.busy = true;
     publish();
@@ -283,6 +289,37 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const changed = lane.machine.transition({ type: "connection-lost" });
     if (!changed.ok) return null;
     lane.busy = false;
+    lane.missionPhaseSequence = null;
+    lane.startPointReached = false;
+    lane.routeExecutionStarted = false;
+    const state = snapshot(lane);
+    publish();
+    return state;
+  };
+  const matchingIdentity = (lane: Lane, missionRevision: number, deviceGeneration: number): boolean => {
+    const identity = lane.missionIdentity;
+    return identity === null || (identity.missionRevision === missionRevision && identity.deviceGeneration === deviceGeneration);
+  };
+  const recordMissionPhase = (deviceId: string, fileName: string, missionRevision: number, deviceGeneration: number, sequence: number, phase: MissionExecutionMilestone): MissionDispatchSnapshot | null => {
+    if (!validId(deviceId) || !validFileName(fileName) || !validPositiveInteger(missionRevision) || !validGeneration(deviceGeneration) || !validPositiveInteger(sequence) || !validMissionPhase(phase)) return null;
+    const lane = lanes.get(deviceId);
+    const current = lane?.machine.state().phase;
+    if (!lane || lane.fileName !== fileName || !matchingIdentity(lane, missionRevision, deviceGeneration) || (current !== "starting" && current !== "running")) return null;
+    if (lane.missionPhaseSequence !== null && sequence <= lane.missionPhaseSequence) return null;
+    lane.missionIdentity ??= freeze({ missionRevision, deviceGeneration });
+    lane.missionPhaseSequence = sequence;
+    if (phase === "START_POINT_REACHED") {
+      if (lane.startPointReached) return snapshot(lane);
+      lane.startPointReached = true;
+      const state = snapshot(lane);
+      publish();
+      return state;
+    }
+    if (current !== "starting") return snapshot(lane);
+    const changed = lane.machine.transition({ type: "start-succeeded" });
+    /* c8 ignore next -- this transition is guarded by the immediately preceding phase check. */
+    if (!changed.ok) return null;
+    lane.routeExecutionStarted = true;
     const state = snapshot(lane);
     publish();
     return state;
@@ -290,11 +327,12 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
   const recordExecutionStarted = (deviceId: string, fileName: string, missionRevision: number, deviceGeneration: number): MissionDispatchSnapshot | null => {
     if (!validId(deviceId) || !validFileName(fileName) || !validPositiveInteger(missionRevision) || !validGeneration(deviceGeneration)) return null;
     const lane = lanes.get(deviceId);
-    if (!lane || lane.fileName !== fileName || lane.machine.state().phase !== "starting") return null;
+    if (!lane || lane.fileName !== fileName || !matchingIdentity(lane, missionRevision, deviceGeneration) || lane.machine.state().phase !== "starting") return null;
     const changed = lane.machine.transition({ type: "start-succeeded" });
     /* c8 ignore next -- this transition is guarded by the immediately preceding phase check. */
     if (!changed.ok) return null;
-    lane.missionIdentity = freeze({ missionRevision, deviceGeneration });
+    lane.missionIdentity ??= freeze({ missionRevision, deviceGeneration });
+    lane.routeExecutionStarted = true;
     const state = snapshot(lane);
     publish();
     return state;
@@ -320,7 +358,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     pause: (deviceId) => performCommand("pause", deviceId, "pause-requested", "wayline.pause", "WAYLINE_PAUSE_FAILED"),
     resume: (deviceId) => performCommand("resume", deviceId, "resume-requested", "wayline.resume", "WAYLINE_RESUME_FAILED"),
     stop: (deviceId) => performCommand("stop", deviceId, "stop-requested", "wayline.stop", "WAYLINE_STOP_FAILED"),
-    get, list, forget, recordDisconnected, recordExecutionStarted, recordExecutionTerminal,
+    get, list, forget, recordDisconnected, recordMissionPhase, recordExecutionStarted, recordExecutionTerminal,
     subscribe: (listener) => { listeners.add(listener); let active = true; return () => { if (active) { active = false; listeners.delete(listener); } }; }
   });
 }

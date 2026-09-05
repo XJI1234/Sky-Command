@@ -2,21 +2,28 @@ import { describe, expect, it } from "vitest";
 import { operationFeedback } from "../src/production/operator-console/renderer/operation-feedback.js";
 
 describe("操作回调展示", () => {
-  it("保留 DJI 飞行动作拒绝的原始错误码和说明", () => {
-    const feedback = operationFeedback("flight-land", {
+  it("将 DJI onFailure 原样显示为逐行回执", () => {
+    const feedback = operationFeedback("mission-upload", {
       ok: true,
       value: {
         ok: false,
-        action: "land",
-        code: "FLIGHT_ACTION_REJECTED",
-        platformError: { code: "COMMON_SYSTEM_BUSY", description: "The aircraft is busy" },
+        operation: "upload",
+        code: "WAYLINE_ACTION_REJECTED",
+        platformError: {
+          code: "REQUEST_HANDLER_NOT_FOUND",
+          description: "DJI did not provide an error description",
+        },
       },
     });
 
     expect(feedback.source).toBe("dji");
     expect(feedback.outcome).toBe("rejected");
-    expect(feedback.message).toContain("COMMON_SYSTEM_BUSY");
-    expect(feedback.message).toContain("The aircraft is busy");
+    expect(feedback.message).toBe([
+      "MSDK 回调：失败",
+      "原始类型：onFailure",
+      "错误码：REQUEST_HANDLER_NOT_FOUND",
+      "错误说明：DJI did not provide an error description",
+    ].join("\n"));
   });
 
   it("保留 DJI 图传动作拒绝的原始错误码和说明", () => {
@@ -29,12 +36,15 @@ describe("操作回调展示", () => {
 
     expect(feedback.source).toBe("dji");
     expect(feedback.outcome).toBe("rejected");
-    expect(feedback.message).toContain("启动图传");
-    expect(feedback.message).toContain("COMMON_SYSTEM_BUSY");
-    expect(feedback.message).toContain("The live stream manager is busy");
+    expect(feedback.message).toBe([
+      "MSDK 回调：失败",
+      "原始类型：onFailure",
+      "错误码：COMMON_SYSTEM_BUSY",
+      "错误说明：The live stream manager is busy",
+    ].join("\n"));
   });
 
-  it("将 DJI 成功回调与物理动作完成明确分开", () => {
+  it("将 DJI onSuccess 原样显示为逐行回执", () => {
     const feedback = operationFeedback("flight-land", {
       ok: true,
       value: { ok: true, action: "land", code: "SUCCEEDED" },
@@ -42,8 +52,10 @@ describe("操作回调展示", () => {
 
     expect(feedback.source).toBe("dji");
     expect(feedback.outcome).toBe("accepted");
-    expect(feedback.message).toContain("SUCCEEDED");
-    expect(feedback.message).toContain("不代表飞机已经完成降落");
+    expect(feedback.message).toBe([
+      "MSDK 回调：成功",
+      "原始类型：onSuccess",
+    ].join("\n"));
   });
 
   it("本地门禁拒绝时明确说明没有调用 DJI MSDK", () => {
@@ -101,7 +113,7 @@ describe("操作回调展示", () => {
     expect(feedback.message).toContain("未调用 DJI MSDK");
   });
 
-  it("航线命令只得到中继失败时不虚构为本地没有调用 DJI", () => {
+  it("未收到 DJI 最终回调时如实显示未确认", () => {
     const feedback = operationFeedback("mission-upload", {
       ok: true,
       value: { ok: false, operation: "upload", code: "WAYLINE_UPLOAD_FAILED" },
@@ -109,8 +121,11 @@ describe("操作回调展示", () => {
 
     expect(feedback.source).toBe("relay");
     expect(feedback.outcome).toBe("unconfirmed");
-    expect(feedback.message).toContain("结果未确认");
-    expect(feedback.message).not.toContain("未调用 DJI MSDK");
+    expect(feedback.message).toBe([
+      "MSDK 回调：未确认",
+      "原始类型：无最终回调",
+      "说明：未收到 DJI MSDK 上传至飞机的可判定结果",
+    ].join("\n"));
   });
 
   it("依赖调用异常时不把 DJI 调用状态伪装成确定未发出", () => {
@@ -121,6 +136,7 @@ describe("操作回调展示", () => {
 
     expect(feedback.source).toBe("relay");
     expect(feedback.outcome).toBe("unconfirmed");
-    expect(feedback.message).toContain("结果未确认");
+    expect(feedback.message).toContain("MSDK 回调：未确认");
+    expect(feedback.message).toContain("原始类型：无最终回调");
   });
 });

@@ -870,6 +870,8 @@ describe("RelayOperationsAdapter", () => {
         flightController: text("CONNECTED"),
         aircraft: text("CONNECTED"),
         missionExecution: text("FINISHED"),
+        missionDjiExecutionState: text("RETURN_TO_START_POINT"),
+        missionUploadProgress: numeric("100"),
         missionFileName: text("survey.kmz"),
         missionRevision: numeric("7"),
         missionDeviceGeneration: numeric("3"),
@@ -880,6 +882,8 @@ describe("RelayOperationsAdapter", () => {
     expect(adapter.telemetry("relay-1")).toMatchObject({
       payload: {
         missionExecution: "FINISHED",
+        missionDjiExecutionState: "RETURN_TO_START_POINT",
+        missionUploadProgress: 100,
         missionFileName: "survey.kmz",
         missionRevision: 7,
         missionDeviceGeneration: 3,

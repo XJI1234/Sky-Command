@@ -40,7 +40,7 @@ instance.dispose() -> void
 
 本模块订阅一次中继设备快照，并比较前后两次的在线 `deviceId` 与 `sessionId`。一个持有活动任务的设备从已确认在线列表中消失、或同一 `deviceId` 的 `sessionId` 发生替换时，调用调度器的 `recordDisconnected(deviceId)` 并清除该设备旧会话的阶段去重水位：任务进入 `disconnected`，不发送停止命令、不重传、不自动恢复，也不自动删除。桌面进入 `disconnected` 只结束本端等待；它不表示飞机上的 DJI 航线已经停下。新会话的阶段代际可能从较小值重新开始，清除水位只允许新会话的后续事实被重新校验，不恢复旧任务。
 
-同一快照中的 `missionPhases` 只允许有效的 `ROUTE_EXECUTION_STARTED` 把当前匹配文件与两项任务身份的任务从 `starting` 转为 `running`。同一快照中的已校验 `missionExecution` 终态只允许 `FINISHED -> completed`、`FAILED -> failed`；它们必须同时匹配设备、当前文件名、`missionRevision`、`deviceGeneration` 与此前可信执行事实，绝不把“手机接受启动请求”或任意自由文本当作执行完成。终态遥测遗漏正向阶段帧时可从 `starting` 直接变为 `completed`，也可在断线后收敛匹配终态，但不得伪造 `running`。设备重连后，`disconnected` 任务不自动恢复；操作者只能显式停止，或重新暂存。
+同一快照中的 `missionPhases` 只允许经过 `relay-mission-phase-snapshot` 校验的 `START_POINT_REACHED` 与 `ROUTE_EXECUTION_STARTED` 进入调度器。前者只记录当前匹配任务“已进入首航点”的独立事实；后者在保留前者的同时才可把 `starting` 任务变为 `running`。两个事实都必须同时匹配设备、当前文件名、`missionRevision`、`deviceGeneration` 与严格递增的 `sequence`；本模块只转交，不自行解释或补造里程碑。同一快照中的已校验 `missionExecution` 终态只允许 `FINISHED -> completed`、`FAILED -> failed`；它们必须同时匹配设备、当前文件名、`missionRevision`、`deviceGeneration` 与此前可信执行事实，绝不把“手机接受启动请求”或任意自由文本当作执行完成。终态遥测遗漏正向阶段帧时可从 `starting` 直接变为 `completed`，也可在断线后收敛匹配终态，但不得伪造 `running`。设备重连后，`disconnected` 任务不自动恢复；操作者只能显式停止，或重新暂存。
 
 首次收到的中继快照不视为断线；同一设备重新出现也不恢复旧任务，操作者必须重新暂存。遥测缺失只是启动前检查的失败条件，不等价于手机断线。`dispose()` 会取消中继订阅，且可重复调用；释放后所有迟到事件都必须被忽略。
 

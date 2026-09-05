@@ -148,10 +148,18 @@ describe("飞行任务控制模块契约", () => {
     expect(control.get("phone-1").phase).toBe("starting");
 
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }], missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 0, sequence: 1, phase: "START_POINT_REACHED", fileName: "survey.kmz" }] });
-    expect(control.get("phone-1")).toMatchObject({ phase: "starting" });
+    expect(control.get("phone-1")).toMatchObject({
+      phase: "starting",
+      startPointReached: true,
+      routeExecutionStarted: false,
+    });
 
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }], missionPhases: [{ deviceId: "phone-1", missionRevision: 1, deviceGeneration: 0, sequence: 2, phase: "ROUTE_EXECUTION_STARTED", fileName: "survey.kmz" }] });
-    expect(control.get("phone-1")).toMatchObject({ phase: "running" });
+    expect(control.get("phone-1")).toMatchObject({
+      phase: "running",
+      startPointReached: true,
+      routeExecutionStarted: true,
+    });
   });
 
   it("会话替换视为断线，并忽略更老代际的航线开始事件", async () => {

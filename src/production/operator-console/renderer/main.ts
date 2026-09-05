@@ -4,6 +4,7 @@ import { operationFeedback, type OperationFeedback } from "./operation-feedback.
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight";
+type FlightPanelName = "stream" | "mission" | "direct-flight";
 type MissionStartIntent = Readonly<{ deviceId: string; missionId: string; routeId: string; routeName: string }>;
 type PhoneLinkProbeReport =
   | Readonly<{ readonly status: "measured"; readonly sampleCount: 10; readonly currentRttMs: number; readonly medianRttMs: number; readonly maximumRttMs: number; readonly jitterMs: number }>
@@ -19,8 +20,9 @@ type RendererBridge = {
   readonly selectRouteFile?: () => Promise<{ ok?: boolean; fileName?: string; bytes?: Uint8Array }>;
 };
 
-const state: { workspace: WorkspaceName; missionDeviceId: string | null; streamDeviceId: string | null } = {
+const state: { workspace: WorkspaceName; flightPanel: FlightPanelName; missionDeviceId: string | null; streamDeviceId: string | null } = {
   workspace: "devices",
+  flightPanel: "stream",
   missionDeviceId: null,
   streamDeviceId: null,
 };
@@ -38,6 +40,157 @@ const unwrap = (result: unknown): unknown => {
 
 const read = (value: unknown, key: string): unknown => value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
 const text = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 ? value : null;
+const selectedFlightDevice = (view: ReturnType<typeof OperatorConsole.project>, deviceId: string | null): Record<string, unknown> | undefined =>
+  (view.devices as readonly unknown[]).find((device): device is Record<string, unknown> =>
+    device !== null && typeof device === "object" && !Array.isArray(device) && read(device, "deviceId") === deviceId,
+  );
+const connectionOf = (device: Record<string, unknown> | undefined): unknown => device === undefined ? null : read(device, "connection");
+const relayStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), "relay");
+  return value === "online" ? "在线" : value === "offline" ? "离线" : "状态未知";
+};
+const msdkStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), "msdk");
+  if (value === "ready") return "已就绪";
+  if (value === "starting") return "初始化中";
+  if (value === "failed") return "初始化失败";
+  if (value === "stopped") return "已停止";
+  return "状态未知";
+};
+const linkStatus = (device: Record<string, unknown> | undefined, field: string): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), field);
+  return value === "connected" ? "已连接" : value === "disconnected" ? "已断开" : "状态未知";
+};
+const flightStateStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), "flightState");
+  return value === "flying" ? "飞行中" : value === "grounded" ? "地面" : value === "unknown" ? "状态未知" : "尚未取得";
+};
+const booleanStatus = (device: Record<string, unknown> | undefined, field: string, positive: string, negative: string): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), field);
+  return value === true ? positive : value === false ? negative : "尚未取得";
+};
+const batteryStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), "batteryPercent");
+  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)}%` : "尚未取得";
+};
+const enumStatus = (device: Record<string, unknown> | undefined, field: string): string => {
+  if (device === undefined) return "未选择手机";
+  return text(read(connectionOf(device), field)) ?? "尚未取得";
+};
+const missionIntegerStatus = (device: Record<string, unknown> | undefined, field: string): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), field);
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : "尚未取得";
+};
+const selectedRouteStatus = (view: ReturnType<typeof OperatorConsole.project>): string =>
+  text(read(read(view, "selectedRoute"), "displayName")) ?? "尚未选择";
+const assignedMissionRouteStatus = (view: ReturnType<typeof OperatorConsole.project>): string =>
+  text(read(read(view, "missionRoute"), "displayName")) ?? "当前没有桌面任务";
+const missionExecutionLabels: Readonly<Record<string, string>> = Object.freeze({
+  NOT_STARTED: "手机已暂存，尚未启动",
+  STARTING: "手机任务正在启动",
+  EXECUTING: "手机报告执行中",
+  PAUSED: "手机报告已暂停",
+  STOPPING: "手机任务正在停止",
+  FINISHED: "手机报告已结束",
+  FAILED: "手机报告执行失败",
+});
+const missionPhoneExecutionStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = text(read(connectionOf(device), "missionExecution"));
+  if (value === null) return "尚未取得";
+  return missionExecutionLabels[value] === undefined ? `手机返回未知任务状态（${value}）` : `${missionExecutionLabels[value]}（${value}）`;
+};
+const missionUploadProgressStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const progress = read(connectionOf(device), "missionUploadProgress");
+  if (typeof progress !== "number" || !Number.isSafeInteger(progress) || progress < 0 || progress > 100) return "未报告上传";
+  return progress === 100 ? "已报告 100%（不代表已执行）" : `上传中 ${progress}%`;
+};
+const missionDjiExecutionLabels: Readonly<Record<string, string>> = Object.freeze({
+  IDLE: "DJI 报告空闲",
+  READY: "DJI 报告就绪",
+  UPLOADING: "DJI 正在上传航线",
+  PREPARING: "DJI 正在准备航线",
+  RECOVERING: "DJI 正在恢复任务",
+  ENTER_WAYLINE: "DJI 报告进入首航点",
+  EXECUTING: "DJI 报告执行中",
+  PAUSED: "DJI 报告已暂停",
+  INTERRUPTED: "DJI 报告已中断",
+  FINISHED: "DJI 报告已完成",
+  RETURN_TO_START_POINT: "DJI 正在返回起点",
+  DISCONNECTED: "DJI 报告执行链路断开",
+  NOT_SUPPORTED: "当前设备不支持航线执行",
+  UNKNOWN: "DJI 返回未知执行状态",
+});
+const missionDjiExecutionStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = text(read(connectionOf(device), "missionDjiExecutionState"));
+  if (value === null) return "当前任务暂无 DJI 执行观察";
+  return missionDjiExecutionLabels[value] === undefined ? `DJI 返回未识别执行状态（${value}）` : `${missionDjiExecutionLabels[value]}（${value}）`;
+};
+const missionMilestoneStatus = (view: ReturnType<typeof OperatorConsole.project>, field: "startPointReached" | "routeExecutionStarted"): string => {
+  if (view.missionDeviceId === null) return "未选择手机";
+  const mission = read(view, "mission");
+  if (mission === null || typeof mission !== "object") return "当前没有桌面任务";
+  return read(mission, field) === true ? "DJI 已确认" : "尚未确认";
+};
+const renderFlightStatus = (name: string, value: string): void => {
+  const node = document.querySelector(`[data-flight-status="${name}"]`);
+  if (node instanceof HTMLElement) node.textContent = value;
+};
+function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project>): void {
+  const streamDevice = selectedFlightDevice(view, view.streamDeviceId);
+  const missionDevice = selectedFlightDevice(view, view.missionDeviceId);
+  renderFlightStatus("stream-relay", relayStatus(streamDevice));
+  renderFlightStatus("stream-msdk", msdkStatus(streamDevice));
+  renderFlightStatus("stream-air-link", linkStatus(streamDevice, "airLink"));
+  renderFlightStatus("stream-camera", linkStatus(streamDevice, "camera"));
+  renderFlightStatus("stream-runtime", streamDevice === undefined ? "未选择手机" : view.streamLabel);
+
+  renderFlightStatus("mission-relay", relayStatus(missionDevice));
+  renderFlightStatus("mission-msdk", msdkStatus(missionDevice));
+  renderFlightStatus("mission-remote-controller", linkStatus(missionDevice, "remoteController"));
+  renderFlightStatus("mission-flight-controller", linkStatus(missionDevice, "flightController"));
+  renderFlightStatus("mission-selected-route", selectedRouteStatus(view));
+  renderFlightStatus("mission-assigned-route", assignedMissionRouteStatus(view));
+  renderFlightStatus("mission-phone-file", enumStatus(missionDevice, "missionFileName"));
+  renderFlightStatus("mission-phone-execution", missionPhoneExecutionStatus(missionDevice));
+  renderFlightStatus("mission-revision", missionIntegerStatus(missionDevice, "missionRevision"));
+  renderFlightStatus("mission-device-generation", missionIntegerStatus(missionDevice, "missionDeviceGeneration"));
+  renderFlightStatus("mission-upload-progress", missionUploadProgressStatus(missionDevice));
+  renderFlightStatus("mission-dji-execution-state", missionDjiExecutionStatus(missionDevice));
+  renderFlightStatus("mission-start-point-reached", missionMilestoneStatus(view, "startPointReached"));
+  renderFlightStatus("mission-route-execution-started", missionMilestoneStatus(view, "routeExecutionStarted"));
+  renderFlightStatus("mission-phase", missionDevice === undefined ? "未选择手机" : view.missionLabel);
+
+  renderFlightStatus("direct-relay", relayStatus(missionDevice));
+  renderFlightStatus("direct-msdk", msdkStatus(missionDevice));
+  renderFlightStatus("direct-remote-controller", linkStatus(missionDevice, "remoteController"));
+  renderFlightStatus("direct-flight-controller", linkStatus(missionDevice, "flightController"));
+  renderFlightStatus("direct-flight-state", flightStateStatus(missionDevice));
+  renderFlightStatus("direct-motors", booleanStatus(missionDevice, "motorsOn", "已启动", "未启动"));
+  renderFlightStatus("direct-battery", batteryStatus(missionDevice));
+  renderFlightStatus("direct-landing-protection", enumStatus(missionDevice, "landingProtectionState"));
+  renderFlightStatus("direct-landing-confirmation", booleanStatus(missionDevice, "landingConfirmationNeeded", "需要确认", "不需要确认"));
+}
+
+function renderFlightPanelVisibility(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-flight-panel]").forEach((button) => {
+    const active = button.dataset.flightPanel === state.flightPanel;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll<HTMLElement>("[data-flight-panel-view]").forEach((panel) => {
+    panel.hidden = panel.dataset.flightPanelView !== state.flightPanel;
+  });
+}
 type OperationFeedbackRecord = Readonly<{
   readonly deviceId: string | null;
   readonly connectionEpoch: number | null;
@@ -810,7 +963,10 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     select.onchange = () => { onChange(select.value || ""); void render(); };
   };
   fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
+  fill("direct-flight-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
+  renderFlightPanelStatus(view);
+  renderFlightPanelVisibility();
   el("mission-label").textContent = view.missionDeviceId === null ? "未选择任务机" : `${view.missionDeviceId} · ${view.missionLabel}`;
   const activeRoute = view.missionRoute;
   el("flight-route").textContent = activeRoute === null
@@ -1000,6 +1156,14 @@ document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
     const workspace = (button as HTMLButtonElement).dataset.workspace;
     if (workspace === "devices" || workspace === "routes" || workspace === "flight") state.workspace = workspace;
+    void render();
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-flight-panel]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const panel = button.dataset.flightPanel;
+    if (panel === "stream" || panel === "mission" || panel === "direct-flight") state.flightPanel = panel;
     void render();
   });
 });

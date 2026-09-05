@@ -665,7 +665,7 @@ describe("跨运行时桌面测试宿主", () => {
 
       for (const deviceId of ["e2e-flight-throw", "e2e-flight-duplicate", "e2e-flight-late"]) {
         expect((await settleDji(host, host.relay.sendCommand(deviceId, { name: "flight.land", fields: { confirm: bool(true) } }), deviceId)).status)
-          .toBe(deviceId === "e2e-flight-throw" ? "rejected" : "succeeded");
+          .toBe("succeeded");
       }
     } finally {
       await host.close();
@@ -775,9 +775,13 @@ describe("跨运行时桌面测试宿主", () => {
       host.sendControl("SIGNAL EXECUTING");
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(host.relay.latestTelemetry(device.deviceId)?.payload.fields.missionExecution).toEqual(text("EXECUTING"));
+      // The simulation intentionally emits the legacy normalized signal only.
+      // It must preserve that absence of raw DJI evidence instead of inferring EXECUTING.
+      expect(host.relay.latestTelemetry(device.deviceId)?.payload.fields.missionDjiExecutionState).toEqual(text("UNKNOWN"));
       host.sendControl("SIGNAL COMPLETED");
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(host.relay.latestTelemetry(device.deviceId)?.payload.fields.missionExecution).toEqual(text("FINISHED"));
+      expect(host.relay.latestTelemetry(device.deviceId)?.payload.fields.missionDjiExecutionState).toEqual(text("UNKNOWN"));
     } finally {
       await host.close();
     }

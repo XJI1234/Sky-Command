@@ -102,10 +102,8 @@ function create(dependencies: MissionControlDependencies, options: MissionDispat
     if (missionPhases === null) return;
     for (const phase of missionPhases) {
       if (stalePhase(phase.deviceId, phase)) continue;
-      if (phase.phase === "ROUTE_EXECUTION_STARTED") {
-        const applied = dispatcher.recordExecutionStarted(phase.deviceId, phase.fileName, phase.missionRevision, phase.deviceGeneration);
-        if (applied !== null) appliedPhases.set(phase.deviceId, freeze({ deviceGeneration: phase.deviceGeneration, missionRevision: phase.missionRevision, sequence: phase.sequence }));
-      }
+      const applied = dispatcher.recordMissionPhase(phase.deviceId, phase.fileName, phase.missionRevision, phase.deviceGeneration, phase.sequence, phase.phase);
+      if (applied !== null) appliedPhases.set(phase.deviceId, freeze({ deviceGeneration: phase.deviceGeneration, missionRevision: phase.missionRevision, sequence: phase.sequence }));
     }
     const terminals = RelayMissionPhaseSnapshotReader.readTerminalStates(snapshot);
     if (terminals === null) return;

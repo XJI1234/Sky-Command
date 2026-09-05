@@ -71,22 +71,31 @@ const confirmationAction = (inner: unknown): string | null => {
   return text(read(read(inner, "confirmation"), "action"), 64);
 };
 
-const djiFailure = (label: string, inner: unknown): OperationFeedback => {
+const msdkCallback = (
+  source: OperationFeedbackSource,
+  outcome: OperationFeedbackOutcome,
+  status: "成功" | "失败" | "未确认",
+  rawType: "onSuccess" | "onFailure" | "无最终回调",
+  details: readonly string[] = [],
+): OperationFeedback => ({
+  source,
+  outcome,
+  message: [`MSDK 回调：${status}`, `原始类型：${rawType}`, ...details].join("\n"),
+});
+
+const djiFailure = (inner: unknown): OperationFeedback => {
   const platformError = read(inner, "platformError");
   const code = text(read(platformError, "code"));
   const description = text(read(platformError, "description"));
-  return {
-    source: "dji",
-    outcome: "rejected",
-    message: `DJI MSDK 回调：拒绝${label}；错误码：${code ?? "未提供"}；错误说明：${description ?? "未提供"}`,
-  };
+  const details = [
+    ...(code === null ? [] : [`错误码：${code}`]),
+    ...(description === null ? [] : [`错误说明：${description}`]),
+  ];
+  return msdkCallback("dji", "rejected", "失败", "onFailure", details);
 };
 
-const unconfirmed = (label: string): OperationFeedback => ({
-  source: "relay",
-  outcome: "unconfirmed",
-  message: `结果未确认：没有收到 DJI MSDK ${label} 的最终回调；不能据此判断命令是否执行`,
-});
+const unconfirmed = (label: string, explanation = `未收到 DJI MSDK ${label} 的最终回调；不能据此判断命令是否执行`): OperationFeedback =>
+  msdkCallback("relay", "unconfirmed", "未确认", "无最终回调", [`说明：${explanation}`]);
 
 const operationLabel = (action: string, flightAction: string): string =>
   action.startsWith("flight-") ? flightAction : action.startsWith("mission-") ? missionLabel(action) : streamLabel(action);
@@ -97,12 +106,12 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
   const confirmedAction = confirmationAction(inner);
   const platformAction = flightLabel(confirmedAction);
 
-  if (code === "FLIGHT_ACTION_REJECTED") return djiFailure(platformAction, inner);
-  if (code === "WAYLINE_ACTION_REJECTED") return djiFailure(missionLabel(action), inner);
-  if (code === "STREAM_ACTION_REJECTED") return djiFailure(streamLabel(action), inner);
+  if (code === "FLIGHT_ACTION_REJECTED") return djiFailure(inner);
+  if (code === "WAYLINE_ACTION_REJECTED") return djiFailure(inner);
+  if (code === "STREAM_ACTION_REJECTED") return djiFailure(inner);
   if (code === "RESULT_UNCONFIRMED" || (code !== null && code.endsWith("_UNCONFIRMED"))) return unconfirmed(operationLabel(action, platformAction));
   if (code === "FLIGHT_ACTION_INVOCATION_FAILED" || code === "WAYLINE_ACTION_INVOCATION_FAILED" || code === "STREAM_ACTION_INVOCATION_FAILED") {
-    return { source: "relay", outcome: "unconfirmed", message: `结果未确认：手机未取得 DJI MSDK ${operationLabel(action, platformAction)} 的可用结果` };
+    return unconfirmed(operationLabel(action, platformAction), `手机未取得 DJI MSDK ${operationLabel(action, platformAction)} 的可用结果`);
   }
   if (
     code === "DEPENDENCY_FAILURE" ||
@@ -111,7 +120,7 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
     code === "WAYLINE_PAUSE_FAILED" ||
     code === "WAYLINE_RESUME_FAILED" ||
     code === "WAYLINE_STOP_FAILED"
-  ) return { source: "relay", outcome: "unconfirmed", message: `结果未确认：未收到 DJI MSDK ${operationLabel(action, platformAction)} 的可判定结果` };
+  ) return unconfirmed(operationLabel(action, platformAction), `未收到 DJI MSDK ${operationLabel(action, platformAction)}的可判定结果`);
   if (code === "RELAY_REJECTED") {
     const reason = text(read(inner, "reason")) ?? text(read(value, "reason"));
     return { source: "relay", outcome: "rejected", message: `手机/中继回调：拒绝${action.startsWith("flight-") ? platformAction : action.startsWith("mission-") ? missionLabel(action) : streamLabel(action)}${reason === null ? "" : `；原因：${reason}`}` };
@@ -128,9 +137,9 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
 
   if (record(inner)?.confirmation !== undefined) return { source: "desktop", outcome: "pending", message: `等待人工确认：${flightLabel(confirmedAction)} 尚未调用 DJI MSDK` };
   if (action === "mission-stage") return { source: "relay", outcome: "completed", message: "手机中继回调：航线文件已传输并校验（此步骤未调用 DJI MSDK）" };
-  if (action.startsWith("flight-")) return { source: "dji", outcome: "accepted", message: `DJI MSDK 回调：已接受${platformAction}（SUCCEEDED；不代表飞机已经完成${platformAction}）` };
-  if (action.startsWith("mission-")) return { source: "dji", outcome: "accepted", message: `DJI MSDK 回调：已接受${missionLabel(action)}（SUCCEEDED；任务实际阶段以持续状态为准）` };
-  if (action.startsWith("stream-")) return { source: "dji", outcome: "accepted", message: `DJI MSDK 图传命令回调：已接受${streamLabel(action)}（手机推流和桌面播放另行显示）` };
+  if (code === "SUCCEEDED" && action.startsWith("flight-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
+  if (code === "SUCCEEDED" && action.startsWith("mission-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
+  if (code === "SUCCEEDED" && action.startsWith("stream-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (read(inner, "ok") === true || read(value, "ok") === true) return { source: "relay", outcome: "completed", message: "手机中继回调：已完成" };
   return { source: "desktop", outcome: "not-called", message: "未调用 DJI MSDK：没有获得可识别的操作结果" };
 };
