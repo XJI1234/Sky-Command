@@ -88,6 +88,8 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
       const facts: Record<string, unknown> = { operation: "live-stream", relayConnected: telemetry !== null };
       if (record(payload.value)) {
         facts.sdkAvailability = payload.value.sdkAvailability;
+        facts.airLink = payload.value.airLink;
+        facts.camera = payload.value.camera;
       }
       return dependencies.capabilityGate.evaluate(facts);
     });

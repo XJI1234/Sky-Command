@@ -127,6 +127,10 @@ const operatorNotice = (value: unknown): string => {
   if (code === "CAPABILITY_BLOCKED") {
     if (reason === "RELAY_OFFLINE") return "手机已离线，无法发送图传命令";
     if (reason === "SDK_NOT_READY") return "手机端 DJI 尚未就绪，无法启动图传";
+    if (reason === "AIRLINK_OFFLINE") return "AirLink 未连接，未调用 DJI MSDK 启动图传";
+    if (reason === "AIRLINK_CONNECTION_UNKNOWN") return "AirLink 状态未知，未调用 DJI MSDK 启动图传";
+    if (reason === "CAMERA_OFFLINE") return "主相机未连接，未调用 DJI MSDK 启动图传";
+    if (reason === "CAMERA_CONNECTION_UNKNOWN") return "主相机状态未知，未调用 DJI MSDK 启动图传";
     return "图传命令此刻不可达，请确认手机中继与 MSDK 状态后重试";
   }
   if (code === "OPERATION_IN_PROGRESS") return "上一条命令还在处理，请稍候";
@@ -849,7 +853,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
       : `${view.streamLabel}。要结束请点「停止图传」`;
     streamReady.classList.add("ok");
   } else if (view.streamCanStart) {
-    streamReady.textContent = "图传可请求启动：已选择手机且 MSDK 已就绪；发送前会检查电脑接收端和中继，图传源是否可用以 DJI 回调和实际画面为准";
+    streamReady.textContent = "图传可请求启动：手机中继、MSDK、AirLink 和主相机均已就绪；发送前会检查电脑接收端，实际推流和出画仍分别确认";
     streamReady.classList.add("ok");
   } else {
     streamReady.textContent = view.streamLabel.startsWith("图传未就绪")

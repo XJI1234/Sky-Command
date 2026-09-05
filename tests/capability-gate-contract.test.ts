@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CapabilityGate } from "../src/modules/device-console/capability-gate/index.js";
 
-const base = { relayConnected: true, sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, capabilities: { liveVideo: true, waypointMission: true, waypointMissionSupport: "supported" as const, virtualStick: false } };
+const base = { relayConnected: true, sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, airLink: "CONNECTED" as const, camera: "CONNECTED" as const, capabilities: { liveVideo: true, waypointMission: true, waypointMissionSupport: "supported" as const, virtualStick: false } };
 
 describe("设备操作能力门禁契约", () => {
   it("在完整链路上允许直接飞行安全指令", () => {
@@ -36,7 +36,7 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: input.operation, enabled: false, reason } });
   });
 
-  it("图传只确认 Relay 与 MSDK 可达，不以图传源观测预先拒绝", () => {
+  it("图传只依赖图传源 Key，不把飞控、遥控器或兼容能力投影当作门禁", () => {
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, remoteControllerConnected: false, flightControllerConnected: false, aircraftConnected: false })).toEqual({
       ok: true,
       value: { operation: "live-stream", enabled: true, reason: null },
@@ -53,6 +53,16 @@ describe("设备操作能力门禁契约", () => {
       ok: true,
       value: { operation: "live-stream", enabled: true, reason: null },
     });
+  });
+
+  it.each([
+    [{ operation: "live-stream", ...base, airLink: "DISCONNECTED" }, "AIRLINK_OFFLINE"],
+    [{ operation: "live-stream", ...base, airLink: "UNKNOWN" }, "AIRLINK_CONNECTION_UNKNOWN"],
+    [{ operation: "live-stream", ...base, camera: "DISCONNECTED" }, "CAMERA_OFFLINE"],
+    [{ operation: "live-stream", ...base, camera: "UNKNOWN" }, "CAMERA_CONNECTION_UNKNOWN"],
+    [{ operation: "live-stream", relayConnected: true, sdkAvailability: "READY" }, "AIRLINK_CONNECTION_UNKNOWN"],
+  ])("图传源没有明确连接时，在调用 MSDK 前以精确原因拒绝", (input, reason) => {
+    expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: "live-stream", enabled: false, reason } });
   });
 
   it.each(["transmission-settings", "camera-settings"] as const)("%s 只要求手机中继和 MSDK 可达，不以遥控器或飞控遥测提前拒绝", (operation) => {
@@ -93,9 +103,9 @@ describe("设备操作能力门禁契约", () => {
     });
   });
 
-  it("图传门禁不读取 AirLink/主相机的组合观测", () => {
-    const input = Object.defineProperties({ operation: "live-stream", relayConnected: true, sdkAvailability: "READY" }, {
-      capabilities: { get: () => { throw new Error("source observation is not a start gate"); } },
+  it("图传门禁读取原始源 Key，但不读取兼容能力投影", () => {
+    const input = Object.defineProperties({ operation: "live-stream", relayConnected: true, sdkAvailability: "READY", airLink: "CONNECTED", camera: "CONNECTED" }, {
+      capabilities: { get: () => { throw new Error("compatibility capability is not a start gate"); } },
     });
 
     expect(CapabilityGate.evaluate(input)).toEqual({
@@ -119,11 +129,14 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate(hostile)).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "input", reason: "unreadable" } } });
   });
 
-  it("图传门禁忽略非对象、非法或不可读取的源观测", () => {
+  it("图传门禁忽略兼容能力投影，但校验原始源 Key", () => {
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: true })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: { liveVideo: "pending" } })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
     const hostileCapabilities = new Proxy({}, { get() { throw new Error("secret"); } });
     expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, capabilities: hostileCapabilities })).toEqual({ ok: true, value: { operation: "live-stream", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ operation: "live-stream", ...base, airLink: "not-a-link" })).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "airLink", reason: "invalid-value" } } });
+    const hostileAirLink = Object.defineProperty({ operation: "live-stream", ...base }, "airLink", { get: () => { throw new Error("source unavailable"); } });
+    expect(CapabilityGate.evaluate(hostileAirLink)).toEqual({ ok: false, error: { code: "INVALID_INPUT", details: { field: "airLink", reason: "unreadable" } } });
   });
 
   it("独立校验每个能力字段和每一段飞行连接事实", () => {

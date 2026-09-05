@@ -45,7 +45,7 @@ rtmp://{电脑局域网接收主机}:{RTMP端口}/live/{encodeURIComponent(devic
 
 端口来自已经运行的 `media-pipeline` 公开接收端点。若中继为该设备提供了合法私网入站本端 IPv4，主机必须使用该地址；否则使用媒体管线当前端点。该入站地址不进入设备或 UI 快照，且地址选择不得重启媒体服务或改变已发布流。媒体服务未运行、端点不完整、设备标识非法或地址不能通过 RTMP 规则时，开始请求必须在桌面端被拒绝，绝不发送命令。停止不需要媒体服务端点，但仍需要设备可连接并且不允许与同设备的其他直播命令并发。
 
-手机端遥测中的 `capabilities.liveVideo` 仍表示由 `AirLinkKey.KeyConnection` 和主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 推导的当前图传源观测。它用于设备页显示与运行中的断源清理，不是图传开始门禁：中继和 MSDK 可达时，即使它为 false 或未知，也必须允许人工发出一次 `live-stream.start`，由 DJI `startStream` 回调裁决硬件是否可用。停止不复用启动门禁或媒体端点检查：在同设备命令未并发且手机仍可达时必须允许尝试停止，以处理启动半成功和恢复情形。调度器允许下发不表示 DJI 直播或本地画面一定成功。
+手机端遥测中的 `airLink` 与 `camera` 分别是一对一投影的 `AirLinkKey.KeyConnection` 和主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)`；`capabilities.liveVideo` 是同一快照的兼容能力投影。生产 RTMP 开始门禁必须读取原始 `airLink` 与 `camera`：它们与 Relay 在线、MSDK `READY` 一起必须明确为 `CONNECTED`，否则桌面不得发送 `live-stream.start`。这是图传源存在性门禁，不能由飞控、遥控器、产品、电量、航线或对频替代；手机端将在真正调用 MSDK 前以同一语义再次检查。停止不复用启动门禁或媒体端点检查：在同设备命令未并发且手机仍可达时必须允许尝试停止，以处理启动半成功和恢复情形。调度器允许下发、DJI `startStream` 成功、DJI `isStreaming`、RTMP 有效视频和桌面出画仍是彼此独立的事实。
 
 ## 状态、并发和断线
 

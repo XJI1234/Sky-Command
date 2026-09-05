@@ -33,7 +33,7 @@ instance.subscribe(listener) -> unsubscribe
 1. 校验设备标识和同设备互斥；
 2. 读取 `media-pipeline` 快照，只有 `phase === "running"` 且存在有效 `endpoint.host`、`endpoint.port` 时继续；
 3. 调用 `stream-protocol-config.createRtmpTarget`，获得唯一的 RTMP 目标；
-4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。开始仅要求中继与 MSDK 可达；不读取、不依赖 `capabilities.liveVideo`、AirLink、主相机、飞控或遥控器遥测来拒绝人工启动。它们的硬件可用性必须交给 DJI `startStream` 回调裁决；
+4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。开始要求中继在线、MSDK `READY`、原始 `AirLinkKey.KeyConnection` 为 `CONNECTED`、原始 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 为 `CONNECTED`；不得读取或依赖 `capabilities.liveVideo`、飞控、遥控器、产品、电量、航线或对频。源 Key 的未知或断开必须在桌面拒绝，并由手机端在调用 MSDK 前再次检查；
 5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。
 
 当同一设备正处于 `stopping` 时，`start(deviceId)` 不是并发命令：它登记一次“停止后重启”意图，并等待现有停止命令的终态。停止成功后，调度器必须重新执行上述全部启动检查，再发送唯一一条 `live-stream.start`；停止失败、设备断线或图传源失效时，不得发送启动命令，所有已登记调用必须得到该终态失败。处于 `starting` 的同设备 `start`、以及所有其他忙碌冲突，仍返回 `OPERATION_IN_PROGRESS`。多个停止期间的启动请求可以合并为一次实际启动，但每个调用都必须收到该次启动的最终结果。

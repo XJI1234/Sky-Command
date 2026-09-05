@@ -256,6 +256,16 @@ const streamStartIssueOf = (device: Record<string, unknown> | undefined): Stream
   const msdk = read(connection, "msdk");
   const sdkReady = msdk === undefined ? read(connection, "sdk") === "ready" : msdk === "ready";
   if (!sdkReady) return freeze({ label: "等待手机就绪", reason: "手机尚未就绪，无法启动图传" });
+  const airLink = read(connection, "airLink");
+  if (airLink !== "connected") return freeze({
+    label: airLink === "disconnected" ? "AirLink 未连接" : "AirLink 状态未知",
+    reason: airLink === "disconnected" ? "AirLink 未连接，无法启动图传" : "AirLink 状态未知，无法启动图传",
+  });
+  const camera = read(connection, "camera");
+  if (camera !== "connected") return freeze({
+    label: camera === "disconnected" ? "主相机未连接" : "主相机状态未知",
+    reason: camera === "disconnected" ? "主相机未连接，无法启动图传" : "主相机状态未知，无法启动图传",
+  });
   return null;
 };
 const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean => {

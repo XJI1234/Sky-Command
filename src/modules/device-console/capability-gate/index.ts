@@ -1,11 +1,11 @@
 export type DeviceOperation = "pairing" | "live-stream" | "waypoint-mission" | "transmission-settings" | "camera-settings" | "direct-flight";
-export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "FLIGHT_CONTROLLER_OFFLINE" | "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN" | "PAIRING_NOT_NEEDED";
+export type CapabilityReason = "RELAY_OFFLINE" | "SDK_NOT_READY" | "REMOTE_CONTROLLER_OFFLINE" | "FLIGHT_CONTROLLER_OFFLINE" | "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN" | "PAIRING_NOT_NEEDED" | "AIRLINK_CONNECTION_UNKNOWN" | "AIRLINK_OFFLINE" | "CAMERA_CONNECTION_UNKNOWN" | "CAMERA_OFFLINE";
 export interface CapabilityDecision { readonly operation: DeviceOperation; readonly enabled: boolean; readonly reason: CapabilityReason | null; }
 export type CapabilityDecisionResult<T> = Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false; readonly error: Readonly<{ readonly code: "INVALID_INPUT"; readonly details: Readonly<{ readonly field: string; readonly reason: "invalid-value" | "unreadable" }> }> }>;
 type MsdkSdkAvailability = "STOPPED" | "STARTING" | "READY" | "FAILED" | "UNKNOWN";
 type MsdkLinkState = "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
 
-interface CapabilityInput { readonly operation: unknown; readonly relayConnected: unknown; readonly sdkAvailability: unknown; readonly remoteController: unknown; readonly flightController: unknown; readonly sdkRegistered: unknown; readonly remoteControllerConnected: unknown; readonly flightControllerConnected: unknown; }
+interface CapabilityInput { readonly operation: unknown; readonly relayConnected: unknown; readonly sdkAvailability: unknown; readonly remoteController: unknown; readonly flightController: unknown; readonly airLink: unknown; readonly camera: unknown; readonly sdkRegistered: unknown; readonly remoteControllerConnected: unknown; readonly flightControllerConnected: unknown; }
 interface CapabilityBaseInput { readonly source: CapabilityInput; readonly operation: unknown; readonly relayConnected: unknown; readonly sdkAvailability: unknown; }
 
 // Stryker disable next-line ArrowFunction: static helper replacement is not re-observable after ESM transform caching; public result immutability is covered.
@@ -46,7 +46,20 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
   if (sdkRegistered !== null && optionalBoolean(sdkRegistered.value) === null) return failure("sdkRegistered", "invalid-value");
   if (input.relayConnected !== true) return decision(operation, false, "RELAY_OFFLINE");
   if (sdk !== "READY" && !(sdk === undefined && sdkRegistered !== null && sdkRegistered.value === true)) return decision(operation, false, "SDK_NOT_READY");
-  if (operation === "transmission-settings" || operation === "camera-settings" || operation === "direct-flight" || operation === "waypoint-mission" || operation === "live-stream") return decision(operation, true, null);
+  if (operation === "transmission-settings" || operation === "camera-settings" || operation === "direct-flight" || operation === "waypoint-mission") return decision(operation, true, null);
+  if (operation === "live-stream") {
+    const airLinkField = readField(input.source, "airLink");
+    if (!airLinkField.ok) return failure("airLink", "unreadable");
+    const airLink = linkState(airLinkField.value);
+    if (airLink === null) return failure("airLink", "invalid-value");
+    if (airLink !== "CONNECTED") return decision(operation, false, airLink === "DISCONNECTED" ? "AIRLINK_OFFLINE" : "AIRLINK_CONNECTION_UNKNOWN");
+    const cameraField = readField(input.source, "camera");
+    if (!cameraField.ok) return failure("camera", "unreadable");
+    const camera = linkState(cameraField.value);
+    if (camera === null) return failure("camera", "invalid-value");
+    if (camera !== "CONNECTED") return decision(operation, false, camera === "DISCONNECTED" ? "CAMERA_OFFLINE" : "CAMERA_CONNECTION_UNKNOWN");
+    return decision(operation, true, null);
+  }
   const remoteField = readField(input.source, "remoteController");
   if (!remoteField.ok) return failure("remoteController", "unreadable");
   const flightField = readField(input.source, "flightController");

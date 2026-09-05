@@ -89,22 +89,22 @@ describe("StreamDispatcher", () => {
     expect(blocked.sent).toEqual([]);
   });
 
-  it("不以手机端图传源当前报告为 false 而拦住已可达的 DJI 启动命令", async () => {
+  it("手机端图传源未明确连接时不发送启动命令", async () => {
     const value = fixture({
       telemetry: () => ({
-        payload: { sdkAvailability: "READY" },
-        capabilities: { liveVideo: false },
+        payload: { sdkAvailability: "READY", airLink: "DISCONNECTED", camera: "CONNECTED" },
+        capabilities: { liveVideo: true },
       }),
       gate: CapabilityGate.evaluate,
     });
 
-    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start" });
-    expect(value.sent).toEqual([{ deviceId: "phone-1", request: { name: "live-stream.start", fields: { rtmpUrl: "rtmp://192.168.1.20:1935/live/phone-1" } } }]);
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "AIRLINK_OFFLINE" });
+    expect(value.sent).toEqual([]);
   });
 
-  it("不读取手机端图传源观测，以免其异常拦住启动命令", async () => {
-    const telemetry = Object.defineProperty({ payload: { sdkAvailability: "READY" } }, "capabilities", {
-      get: () => { throw new Error("source state is display-only before start"); },
+  it("使用原始图传源 Key 而不读取兼容能力投影", async () => {
+    const telemetry = Object.defineProperty({ payload: { sdkAvailability: "READY", airLink: "CONNECTED", camera: "CONNECTED" } }, "capabilities", {
+      get: () => { throw new Error("compatibility capability is not a start gate"); },
     });
     const value = fixture({ telemetry: () => telemetry, gate: CapabilityGate.evaluate });
 
@@ -229,10 +229,10 @@ describe("StreamDispatcher", () => {
     await expect(value.dispatcher.stop("phone\n1")).resolves.toMatchObject({ ok: false, code: "INVALID_INPUT" });
   });
 
-  it("图传启动门禁只传递 Relay 与 MSDK 生命周期事实", () => {
+  it("图传启动门禁只传递 Relay、MSDK 与原始图传源事实", () => {
     const onlineInputs: unknown[] = [];
     const online = fixture({
-      telemetry: () => ({ payload: { sdkAvailability: "READY", remoteControllerConnected: false, flightControllerConnected: false, connected: false }, capabilities: { liveVideo: true, custom: "retained" } }),
+      telemetry: () => ({ payload: { sdkAvailability: "READY", airLink: "CONNECTED", camera: "CONNECTED", remoteControllerConnected: false, flightControllerConnected: false, connected: false }, capabilities: { liveVideo: true, custom: "retained" } }),
       gate: (input) => { onlineInputs.push(input); return { ok: true, value: { enabled: true } }; }
     });
     expect(online.dispatcher.check("phone-1")).toEqual({ ok: true });
@@ -240,6 +240,8 @@ describe("StreamDispatcher", () => {
       operation: "live-stream",
       relayConnected: true,
       sdkAvailability: "READY",
+      airLink: "CONNECTED",
+      camera: "CONNECTED",
     }]);
 
     const offlineInputs: unknown[] = [];
@@ -249,6 +251,7 @@ describe("StreamDispatcher", () => {
     expect(onlineInputs[0]).not.toHaveProperty("capabilities");
     expect(onlineInputs[0]).not.toHaveProperty("remoteControllerConnected");
     expect(onlineInputs[0]).not.toHaveProperty("flightControllerConnected");
+    expect(onlineInputs[0]).not.toHaveProperty("capabilities");
   });
 
   it("treats malformed telemetry and gate contracts as start dependency failures without blocking stop", async () => {

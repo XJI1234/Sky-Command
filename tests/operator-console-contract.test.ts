@@ -4,6 +4,7 @@ import { OperatorConsole } from "../src/production/operator-console/index.js";
 
 const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8");
 const page = () => readFileSync(new URL("../src/production/operator-console/renderer/index.html", import.meta.url), "utf8");
+const operatorConsole = () => readFileSync(new URL("../src/production/operator-console/index.ts", import.meta.url), "utf8");
 
 const device = (overrides: Record<string, unknown> = {}) => ({
   deviceId: "phone-1",
@@ -230,6 +231,8 @@ describe("操作台投影", () => {
           remoteController: "disconnected",
           flightController: "disconnected",
           aircraft: "disconnected",
+          airLink: "connected",
+          camera: "connected",
         },
         mission: { phase: "uploaded", routeId: "route-1" },
       })]),
@@ -680,23 +683,23 @@ describe("操作台工作区", () => {
     expect(noSdk.streamCanStart).toBe(false);
     expect(OperatorConsole.evaluate("stream-start", noSdk)).toEqual({ ok: false, reason: "手机尚未就绪，无法启动图传" });
 
-    const unknownCapability = OperatorConsole.project({
-      snapshot: snapshot([device({ capabilities: { waypointMission: "supported", liveVideo: "unknown" } })]),
+    const unknownAirLink = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, airLink: "unknown" } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(unknownCapability.streamLabel).toBe("图传可尝试启动（图传源状态未知）");
-    expect(unknownCapability.streamCanStart).toBe(true);
-    expect(OperatorConsole.evaluate("stream-start", unknownCapability)).toEqual({ ok: true });
+    expect(unknownAirLink.streamLabel).toBe("图传未就绪：AirLink 状态未知");
+    expect(unknownAirLink.streamCanStart).toBe(false);
+    expect(OperatorConsole.evaluate("stream-start", unknownAirLink)).toEqual({ ok: false, reason: "AirLink 状态未知，无法启动图传" });
 
-    const unavailableCapability = OperatorConsole.project({
-      snapshot: snapshot([device({ capabilities: { waypointMission: "supported", liveVideo: "unsupported" } })]),
+    const disconnectedCamera = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, camera: "disconnected" } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
     });
-    expect(unavailableCapability.streamLabel).toBe("图传可尝试启动（图传源当前报告未就绪）");
-    expect(unavailableCapability.streamCanStart).toBe(true);
-    expect(OperatorConsole.evaluate("stream-start", unavailableCapability)).toEqual({ ok: true });
+    expect(disconnectedCamera.streamLabel).toBe("图传未就绪：主相机未连接");
+    expect(disconnectedCamera.streamCanStart).toBe(false);
+    expect(OperatorConsole.evaluate("stream-start", disconnectedCamera)).toEqual({ ok: false, reason: "主相机未连接，无法启动图传" });
 
     const noAircraft = OperatorConsole.project({
       snapshot: snapshot([device({ connection: { ...device().connection, aircraft: "disconnected" } })]),
@@ -812,10 +815,12 @@ describe("操作台工作区", () => {
 });
 
 describe("航线操作台渲染契约", () => {
-  it("图传启动提示不把 AirLink 或主相机观测写成按钮前置", () => {
+  it("图传启动提示明确显示 AirLink 和主相机是图传源前置", () => {
     const source = renderer();
-    expect(page()).not.toContain("未就绪时「启动图传」不可点。");
-    expect(source).toContain("图传可请求启动：已选择手机且 MSDK 已就绪；发送前会检查电脑接收端和中继");
+    const consoleSource = operatorConsole();
+    expect(source).toContain("图传可请求启动：手机中继、MSDK、AirLink 和主相机均已就绪");
+    expect(consoleSource).toContain('if (airLink !== "connected")');
+    expect(consoleSource).toContain('if (camera !== "connected")');
     expect(source).not.toContain("DJI 产品、AirLink 和主相机均已就绪");
   });
 

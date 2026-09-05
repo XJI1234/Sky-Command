@@ -55,18 +55,18 @@
 
 ## 图传启动门禁（以本节为准）
 
-`evaluate("stream-start")` 只拦截未选择图传手机或 MSDK 未就绪的情形。桌面图传调度器在发送前还必须确认媒体接收端点正在运行、RTMP 目标合法、手机 Relay 在线，并避免同设备的启动/停止命令并发。
+`evaluate("stream-start")` 必须拦截未选择图传手机、MSDK 未就绪、AirLink 未明确连接或主相机未明确连接的情形，并分别给出对应 Key 的中文原因。桌面图传调度器在发送前还必须确认媒体接收端点正在运行、RTMP 目标合法、手机 Relay 在线，并以同一组原始 Key 重新检查，避免同设备的启动/停止命令并发。
 
-由 `AirLinkKey.KeyConnection` 和 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 推导的 `liveVideo` 只是当前图传源观测：为 false 或未知时，操作台必须如实显示提示，但不得禁用「启动图传」、拒绝 `live-stream.start` 或代替 DJI 判定硬件不可用。命令已可达时，必须交给 DJI `startStream` 回调裁决；回调成功只表示 MSDK 已接受，只有 `LiveStreamStatus.isStreaming` 和桌面端实际收流/播放分别能表示正在推流与正在播放。
+`AirLinkKey.KeyConnection` 和 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 是生产 RTMP 图传源的必要事实：任一为 `DISCONNECTED` 或 `UNKNOWN` 时，操作台必须如实显示、禁用「启动图传」且不下发 `live-stream.start`。这是已验证的必要门禁，而不是重复推断 DJI 的飞行安全规则：断源时 DJI `startStream` 仍可能返回成功、`LiveStreamStatus.isStreaming` 仍可能为 true，但电脑端没有有效画面。飞控、遥控器、产品、电量、航线与对频不参与。源 Key 已明确连接后，DJI 调用回调、`LiveStreamStatus.isStreaming`、RTMP 有效视频和桌面端实际收流/播放仍分别确认不同阶段。
 在图传已活动时，AirLink 或主相机的明确失效仍是断源清理规则：禁止自动重启，清理本地播放器，并以 MSDK 运行回调和流状态继续确认终态。它与开始时是否允许人工请求是两个独立问题。
 
 ## 证据
 
 - `staging` 必须说明手机仍在传输和校验；`staged` 必须说明航线只准备到手机且下一步是上传至飞机；`uploaded` 必须说明下一步是执行航线。任一阶段都不得把手机暂存写成飞机已收到。
 - `starting` 必须说明仅启动调用已受理、仍等待飞机实际进入航线；只有 `running` 才是「正在执行航线」。暂停、恢复或停止待确认时必须说明不能重复同一命令；暂停/恢复待确认时仍必须允许停止作为唯一保守处置。断线必须说明飞机状态未知，不能写成已停止。
-- 图传只有 `video.phase === ready` 才是可播放；手机接受推流不是实时图传。生产只保留经典 RTMP/HTTP-FLV；低延迟 WHIP 已封存，`evaluate("webrtc-*")` 必须拒绝并引导使用「启动图传」。空闲时 `streamLabel` 必须写明是否具备本地命令可达性，并将 AirLink/主相机的未就绪或未知如实表述为非阻断提示；不得笼统写成「空闲」，也不得将遥控器、飞控或图传源观测写成图传启动阻塞原因。
+- 图传只有 `video.phase === ready` 才是可播放；手机接受推流不是实时图传。生产只保留经典 RTMP/HTTP-FLV；低延迟 WHIP 已封存，`evaluate("webrtc-*")` 必须拒绝并引导使用「启动图传」。空闲时 `streamLabel` 必须写明是否具备本地命令可达性，并将 AirLink/主相机的未就绪或未知如实表述为图传源启动阻塞原因；不得笼统写成「空闲」，也不得将遥控器、飞控或产品连接观测写成图传启动阻塞原因。
 - 旧图传由飞行页 `flv.js` 播放本机 HTTP-FLV。媒体管线 `ready` 只表示 RTMP 已到达且 HTTP-FLV 可取；渲染器成功附着当前图传机时必须同步播放器选择，只有同一渲染器观察到 `video` 正持续出帧才可显示「正在播放」。其他设备必须显示未被当前播放器选择，不能把另一台手机的播放状态投射过来。播放抖动时优先 `unload/load` 软恢复，连续失败才退避重挂；已附着但长时间未出画或画面停住必须看门狗恢复。面向操作员的状态栏不得展示 `readyState`、错误码或英文动作名。
-- `evaluate("stream-start")` 仅要求已选图传机与 MSDK 已就绪；桌面图传调度器在发送前还会验证媒体服务、有效 RTMP 目标、在线中继与同设备命令顺序。`liveVideo` 由手机端的 MSDK 就绪状态、AirLink Key 和主相机 Key 当前三态推导，只作为图传源观测：未知或 false 可显示提示，不得禁用按钮、拒绝命令或代替 DJI 裁决。飞控与遥控器不参与。真实推流与收流结果仍由 DJI `startStream` 回调、`LiveStreamStatus.isStreaming` 和既有图传状态机明确呈现。`streamCanStart` 与该最小可达性门槛对齐。`streamPhase === "stopping"` 时必须优先显示「正在停止图传」，不得被遗留的播放器 `ready` 状态写成「图传播放中」；若启动门禁已满足，启动按钮必须表示“停止后重启”，其请求只会在手机确认停止后由控制调度器重新预检并下发。`streamPhase` 已是 starting/streaming 但 `video.phase` 尚非 ready 时，文案须写成「电脑还没收到画面」，不得暗示已有实时图传。所有 `evaluate("flight-*")` 只检查已选在线手机与 MSDK 已就绪，不使用飞行状态、飞行模式、降落确认需求、电量、电机、遥控器或飞控状态替 DJI Action 拒绝；MSDK 拒绝和未确认结果必须如实展示。`KeyStartAutoLanding` 成功后状态必须写为「等待 MSDK 确认落地」；只有 `KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 才写为「已确认落地」。飞行页不展示低延迟按钮。
+- `evaluate("stream-start")` 要求已选图传机、MSDK 已就绪、AirLink 已连接和主相机已连接；桌面图传调度器在发送前还会验证媒体服务、有效 RTMP 目标、在线中继与同设备命令顺序，手机端会在调用 DJI 前最后重检同一源状态。飞控、遥控器、产品、电量、航线与对频不参与。真实推流与收流结果仍由 DJI `startStream` 回调、`LiveStreamStatus.isStreaming`、RTMP 有效视频和既有图传状态机明确呈现。`streamCanStart` 与该门槛对齐。`streamPhase === "stopping"` 时必须优先显示「正在停止图传」，不得被遗留的播放器 `ready` 状态写成「图传播放中」；若启动门禁已满足，启动按钮必须表示“停止后重启”，其请求只会在手机确认停止后由控制调度器重新预检并下发。`streamPhase` 已是 starting/streaming 但 `video.phase` 尚非 ready 时，文案须写成「电脑还没收到画面」，不得暗示已有实时图传。所有 `evaluate("flight-*")` 只检查已选在线手机与 MSDK 已就绪，不使用飞行状态、飞行模式、降落确认需求、电量、电机、遥控器或飞控状态替 DJI Action 拒绝；MSDK 拒绝和未确认结果必须如实展示。`KeyStartAutoLanding` 成功后状态必须写为「等待 MSDK 确认落地」；只有 `KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 才写为「已确认落地」。飞行页不展示低延迟按钮。
 - 手机因 AirLink 或主相机失效报告 `failed/SOURCE_UNAVAILABLE` 时，手机已排队恢复性停止；操作台必须清理本地播放器和重试，不得让旧播放器 URL 重新启用停止键，`streamCanStop` 与 `evaluate("stream-stop")` 必须拒绝重复停止。普通 `failed` 状态仍允许人工停止一次，以处理启动半成功等不确定结果。
 - 对频由手机完成。`evaluate("pairing-start")` / `evaluate("pairing-stop")` 必须说明该事实，不得假装桌面已经发出对频命令。
 - `mission-stage` 只要求已选可执行航线和在线手机，且任务阶段为 `idle`、`completed`、`failed` 或 `disconnected`；KMZ 传到手机不依赖飞机已连接。`mission-upload` 仅在阶段为 `staged` 且 MSDK 已就绪时允许；后端在发送前用同一会话的当前遥测复核 Relay/MSDK 可达性。六个航线按钮均须直接使用 `evaluate` 的结果禁用和显示原因，渲染层不得自行增加设备安全门禁。

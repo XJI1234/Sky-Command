@@ -50,6 +50,10 @@ const streamLabel = (action: string): string => action === "stream-stop" ? "停�
 const localReason = (code: string | null): string => {
   if (code === "DEVICE_OFFLINE" || code === "RELAY_OFFLINE") return "手机中继离线";
   if (code === "SDK_NOT_READY") return "手机端 MSDK 尚未就绪";
+  if (code === "AIRLINK_OFFLINE") return "AirLink 未连接";
+  if (code === "AIRLINK_CONNECTION_UNKNOWN") return "AirLink 状态未知";
+  if (code === "CAMERA_OFFLINE") return "主相机未连接";
+  if (code === "CAMERA_CONNECTION_UNKNOWN") return "主相机状态未知";
   if (code === "CAPABILITY_BLOCKED") return "必要的可达性条件未满足";
   if (code === "OPERATION_IN_PROGRESS") return "上一条命令仍在处理";
   if (code === "INVALID_INPUT") return "输入无效";
@@ -120,7 +124,7 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
     return { source: "desktop", outcome: "completed", message: `已取消${flightLabel(confirmedAction)}，未调用 DJI MSDK` };
   }
   const reason = text(read(inner, "reason")) ?? text(read(value, "reason"));
-  if (code !== null && code !== "SUCCEEDED") return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${reason ?? localReason(code)}` };
+  if (code !== null && code !== "SUCCEEDED") return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${localReason(reason ?? code)}` };
 
   if (record(inner)?.confirmation !== undefined) return { source: "desktop", outcome: "pending", message: `等待人工确认：${flightLabel(confirmedAction)} 尚未调用 DJI MSDK` };
   if (action === "mission-stage") return { source: "relay", outcome: "completed", message: "手机中继回调：航线文件已传输并校验（此步骤未调用 DJI MSDK）" };

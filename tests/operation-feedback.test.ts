@@ -57,6 +57,18 @@ describe("操作回调展示", () => {
     expect(feedback.message).toContain("未调用 DJI MSDK");
   });
 
+  it("图传源门禁拒绝时明确显示原始 MSDK Key 的原因", () => {
+    const feedback = operationFeedback("stream-start", {
+      ok: false,
+      code: "CAPABILITY_BLOCKED",
+      reason: "CAMERA_OFFLINE",
+    });
+
+    expect(feedback.source).toBe("desktop");
+    expect(feedback.outcome).toBe("not-called");
+    expect(feedback.message).toBe("未调用 DJI MSDK：主相机未连接");
+  });
+
   it("飞行动作等待人工确认时明确说明尚未调用 DJI MSDK", () => {
     const feedback = operationFeedback("flight-land", {
       ok: true,
