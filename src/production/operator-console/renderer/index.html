@@ -506,6 +506,7 @@
             <div class="operation-state-list">
               <div class="operation-state-row"><span>起飞效果<small>[KeyIsFlying + KeyAreMotorsOn]</small></span><strong data-flight-status="direct-takeoff-observation">尚未取得</strong></div>
               <div class="operation-state-row"><span>降落效果<small>[KeyIsFlying + KeyAreMotorsOn]</small></span><strong data-flight-status="direct-landing-observation">尚未取得</strong></div>
+              <div class="operation-state-row"><span>降落过程<small>[本次命令 + MSDK 持续状态]</small></span><strong id="landing-status">未请求降落</strong></div>
               <div class="operation-state-row"><span>返航效果<small>[KeyFCFlightMode + KeyAircraftLocation]</small></span><strong data-flight-status="direct-return-home-observation">尚未取得</strong></div>
             </div>
           </div>
@@ -545,7 +546,6 @@
               <button id="confirm-no">取消</button>
             </div>
           </div>
-          <p id="landing-status" class="notice" aria-live="polite">未请求降落</p>
           <p id="guidance" class="notice" style="margin: 12px 0 0;"></p>
         </div>
          </div>

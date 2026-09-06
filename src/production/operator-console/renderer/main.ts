@@ -154,6 +154,27 @@ const directFlightObservationStatus = (device: Record<string, unknown> | undefin
   const mode = optionalText(read(connection, "flightMode"));
   return mode === null ? "尚未取得飞行模式或位置" : `当前飞行模式：${mode}；返航实际过程仍需持续观察`;
 };
+const landingProgressStatus = (landingPhase: string | null, device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const connection = connectionOf(device);
+  const flying = read(connection, "flightState");
+  const motorsOn = read(connection, "motorsOn");
+  if (landingPhase === "idle" || landingPhase === null) return "未请求降落";
+  if (landingPhase === "stopped") return "自动降落已停止；请持续观察飞行状态";
+  if (landingPhase === "state-unknown") return "降落命令已被接受，但飞行状态当前未知";
+  if (landingPhase === "confirmed-grounded" || (flying === "grounded" && motorsOn === false)) {
+    return "已确认落地（MSDK 持续状态：未飞行且电机关闭）";
+  }
+  const protection = text(read(connection, "landingProtectionState"));
+  const mode = text(read(connection, "flightMode"));
+  if (protection === "NOT_SAFE_TO_LAND") return "DJI 降落保护报告当前不适合降落，自动降落已暂停";
+  if (read(connection, "landingConfirmationNeeded") === true) {
+    return "DJI 要求确认继续降落，等待持续飞行状态确认";
+  }
+  if (mode === "CONFIRM_LANDING") return "DJI 正在确认继续降落，等待持续飞行状态确认";
+  if (mode === "AUTO_LANDING") return "DJI 正在自动降落，等待持续飞行状态确认";
+  return "DJI 已接受降落命令，等待持续飞行状态确认";
+};
 const missionIntegerStatus = (device: Record<string, unknown> | undefined, field: string): string => {
   if (device === undefined) return "未选择手机";
   const value = read(connectionOf(device), field);
@@ -1224,9 +1245,8 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   const landingDevice = devices.find((device) => device.deviceId === view.missionDeviceId);
   const landing = read(landingDevice, "landing");
   const landingPhase = text(read(landing, "phase"));
-  const landingLabel = landingPhase === "awaiting-msdk" ? "降落已请求，等待 MSDK 确认" : landingPhase === "confirmation-required" ? "MSDK 要求确认继续降落" : landingPhase === "confirmed-grounded" ? "已确认落地（飞行关闭，电机关闭）" : landingPhase === "state-unknown" ? "降落状态未知" : landingPhase === "stopped" ? "自动降落已停止" : "未请求降落";
   const landingStatus = document.getElementById("landing-status");
-  if (landingStatus !== null) landingStatus.textContent = landingLabel;
+  if (landingStatus !== null) landingStatus.textContent = landingProgressStatus(landingPhase, missionDevice);
   const confirm = el("confirm");
   if (view.confirmation !== null) {
     confirm.hidden = false;

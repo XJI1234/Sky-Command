@@ -156,6 +156,24 @@ describe("操作台投影", () => {
     expect(source).toContain("上次更新于");
   });
 
+  it("直接飞行在不重复原始 Key 的前提下汇总本次降落的持续结果", () => {
+    const source = renderer();
+    const html = page();
+
+    expect(html).toContain('id="landing-status"');
+    expect(html).toContain("降落过程");
+    expect(source).toContain("const landingProgressStatus");
+    expect(source).toContain('protection === "NOT_SAFE_TO_LAND"');
+    expect(source).toContain("DJI 降落保护报告当前不适合降落，自动降落已暂停");
+    expect(source).toContain('mode === "AUTO_LANDING"');
+    expect(source).toContain("DJI 正在自动降落，等待持续飞行状态确认");
+    expect(source).toContain('mode === "CONFIRM_LANDING"');
+    expect(source).toContain("DJI 正在确认继续降落，等待持续飞行状态确认");
+    expect(source).toContain('flying === "grounded" && motorsOn === false');
+    expect(source).toContain("已确认落地（MSDK 持续状态：未飞行且电机关闭）");
+    expect(source).toContain("landingProgressStatus(landingPhase, missionDevice)");
+  });
+
   it("图传源失效优先于旧播放器的 ready 记录显示，并且不允许重复停止", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
