@@ -91,6 +91,7 @@ instance.dispose() -> void
 | `livePacketLoss` | 同名字段 | 仅在 `liveStreaming=true` 时保留 DJI `LiveStreamStatus.packetLoss` 的非负安全整数原值；不解释为百分比 |
 | `livePacketCacheLength` | 同名字段 | 仅在 `liveStreaming=true` 时保留 DJI `LiveStreamStatus.packetCacheLen` 的非负安全整数原值；不解释为时长或字节数 |
 | `liveRttMillis` | 同名字段 | 仅在 `liveStreaming=true` 时保留 `0..60,000` 的非负安全整数 |
+| `cameraFrameGeneration`、`cameraFrameState`、`cameraFrameCount`、`cameraFrameLastAgeMillis`、`cameraFrameCodec`、`cameraFrameWidth`、`cameraFrameHeight`、`cameraFrameRate` | `connection.cameraFrames` | 仅保留当前生产 RTMP 代次的手机端相机编码帧观察。状态只能是 `UNAVAILABLE`、`UNOBSERVED`、`RECEIVING`、`STALLED`；代次、数量和年龄为非负安全整数；编码仅为 `H264`、`H265`、`UNKNOWN`；分辨率和帧率仅保留合理非负数值。缺失或畸形值不能借用上一帧。它是只读旁路，不参与图传、航线或飞控门禁，也不代表设备连接。 |
 | `missionExecution` | 同名封闭枚举 | 仅保留 `NOT_STARTED`、`STARTING`、`EXECUTING`、`PAUSED`、`STOPPING`、`FINISHED`、`FAILED` |
 | `missionFileName` | 同名字段 | 仅保留安全 `.kmz` 基名；缺失或 null 为 `undefined` |
 | `missionRevision` | 同名字段 | 仅保留正安全整数；它与文件名共同标识任务代际 |

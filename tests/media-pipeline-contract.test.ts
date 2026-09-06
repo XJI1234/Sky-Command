@@ -29,6 +29,29 @@ function fixture(options: {
 }
 
 describe("media-pipeline 一级组合根契约", () => {
+  it("分别公开共享 RTMP、HTTP-FLV 服务与某台设备实际入流", () => {
+    const { pipeline, events } = fixture();
+    expect(pipeline.snapshot()).toMatchObject({
+      rtmpIngest: { phase: "idle" },
+      httpFlv: { phase: "idle" },
+      streams: [],
+    });
+
+    pipeline.start(input);
+    expect(pipeline.snapshot()).toMatchObject({
+      rtmpIngest: { phase: "listening" },
+      httpFlv: { phase: "listening" },
+      streams: [],
+    });
+
+    events().onPublished("/live/phone-a");
+    expect(pipeline.snapshot()).toMatchObject({
+      rtmpIngest: { phase: "listening" },
+      httpFlv: { phase: "listening" },
+      streams: [expect.objectContaining({ deviceId: "phone-a", phase: "ready" })],
+    });
+  });
+
   it("按固定顺序启动并暴露脱敏端点，不依赖 FFmpeg", () => {
     const calls: string[] = [];
     const { pipeline } = fixture({ httpFlvStart: () => calls.push("http-flv"), rtmpStart: () => calls.push("rtmp") });

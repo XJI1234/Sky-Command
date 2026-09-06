@@ -36,6 +36,10 @@ export interface MediaSnapshot {
   readonly phase: "idle" | "starting" | "running" | "stopping" | "failed" | "disposed";
   readonly revision: number;
   readonly endpoint: Readonly<{ readonly host: string; readonly port: number; readonly source: "manual" | "automatic" }> | null;
+  /** Shared desktop RTMP listener state. It is not a statement about any device's stream. */
+  readonly rtmpIngest: Readonly<{ readonly phase: "idle" | "listening" | "failed" }>;
+  /** Shared desktop HTTP-FLV listener state. It is not a statement about any device's stream. */
+  readonly httpFlv: Readonly<{ readonly phase: "idle" | "listening" | "failed" }>;
   readonly streams: readonly MediaStreamSnapshot[];
   readonly player: VideoPlayerSnapshot;
   readonly diagnostic: string | null;
@@ -121,7 +125,7 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
       ? freeze({ host, port: endpoint.port, source: "automatic" as const })
       : freeze({ ...endpoint });
   };
-  const current = (): MediaSnapshot => freeze({ phase, revision, endpoint: currentEndpoint(), streams: freeze([...streams].map(([deviceId, record]) => {
+  const current = (): MediaSnapshot => freeze({ phase, revision, endpoint: currentEndpoint(), rtmpIngest: freeze({ phase: rtmpIngest.snapshot().phase }), httpFlv: freeze({ phase: httpFlv.snapshot().phase }), streams: freeze([...streams].map(([deviceId, record]) => {
     const state = record.health.snapshot(record.streamId)!;
     return freeze({ deviceId, streamId: record.streamId, phase: state.state, playbackUrl: record.playbackUrl, diagnostic: state.diagnostic });
   }).sort((a, b) => a.deviceId.localeCompare(b.deviceId))), player: player.snapshot(), diagnostic });

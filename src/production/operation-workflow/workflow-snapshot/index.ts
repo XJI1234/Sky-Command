@@ -23,6 +23,13 @@ const missionExecutionStates = ["NOT_STARTED", "STARTING", "EXECUTING", "PAUSED"
 const missionDjiExecutionStates = ["IDLE", "READY", "UPLOADING", "PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "INTERRUPTED", "FINISHED", "RETURN_TO_START_POINT", "DISCONNECTED", "NOT_SUPPORTED", "UNKNOWN"] as const;
 const missionExecutionState = (value: unknown): typeof missionExecutionStates[number] | null => typeof value === "string" && missionExecutionStates.includes(value as typeof missionExecutionStates[number]) ? value as typeof missionExecutionStates[number] : null;
 const missionDjiExecutionState = (value: unknown): typeof missionDjiExecutionStates[number] | null => typeof value === "string" && missionDjiExecutionStates.includes(value as typeof missionDjiExecutionStates[number]) ? value as typeof missionDjiExecutionStates[number] : null;
+const cameraFrameStates = ["UNAVAILABLE", "UNOBSERVED", "RECEIVING", "STALLED"] as const;
+const cameraFrameState = (value: unknown): "unavailable" | "unobserved" | "receiving" | "stalled" | "unknown" => {
+  if (typeof value !== "string" || !cameraFrameStates.includes(value as typeof cameraFrameStates[number])) return "unknown";
+  return value.toLowerCase() as "unavailable" | "unobserved" | "receiving" | "stalled";
+};
+const cameraFrameCodec = (value: unknown): "H264" | "H265" | "UNKNOWN" | null =>
+  value === "H264" || value === "H265" || value === "UNKNOWN" ? value : null;
 const landingPhase = (intent: unknown, connection: RecordValue): "idle" | "awaiting-msdk" | "confirmation-required" | "confirmed-grounded" | "state-unknown" | "stopped" => {
   if (intent !== "requested" && intent !== "stopped") return "idle";
   if (intent === "stopped") return "stopped";
@@ -67,6 +74,32 @@ const live = (payload: unknown) => {
     packetCacheLength: boundedInteger(read(payload, "livePacketCacheLength"), 0, 2_147_483_647),
   });
 };
+const cameraFrames = (payload: unknown) => {
+  const receivedFrameCount = boundedInteger(read(payload, "cameraFrameCount"), 0, Number.MAX_SAFE_INTEGER) ?? 0;
+  const observed = receivedFrameCount > 0;
+  return freeze({
+    generation: boundedInteger(read(payload, "cameraFrameGeneration"), 0, Number.MAX_SAFE_INTEGER) ?? 0,
+    state: cameraFrameState(read(payload, "cameraFrameState")),
+    receivedFrameCount,
+    lastFrameAgeMillis: observed ? boundedInteger(read(payload, "cameraFrameLastAgeMillis"), 0, Number.MAX_SAFE_INTEGER) : null,
+    codec: observed ? cameraFrameCodec(read(payload, "cameraFrameCodec")) : null,
+    width: observed ? boundedInteger(read(payload, "cameraFrameWidth"), 1, 16_384) : null,
+    height: observed ? boundedInteger(read(payload, "cameraFrameHeight"), 1, 16_384) : null,
+    frameRate: observed ? boundedInteger(read(payload, "cameraFrameRate"), 1, 240) : null,
+  });
+};
+const mediaService = (media: unknown, name: "rtmpIngest" | "httpFlv") => {
+  const phase = read(read(media, name), "phase");
+  return freeze({ phase: phase === "idle" || phase === "listening" || phase === "failed" ? phase : "unknown" as const });
+};
+const mediaPlayer = (media: unknown) => {
+  const player = read(media, "player");
+  const phase = read(player, "phase");
+  return freeze({
+    phase: phase === "idle" || phase === "playing" || phase === "failed" ? phase : "unknown" as const,
+    deviceId: safeText(read(player, "deviceId")),
+  });
+};
 const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
   const flightController = linkState(read(payload, "flightController"));
   const flightFactsAvailable = flightController !== "disconnected";
@@ -108,6 +141,7 @@ const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
     missionFileName: safeText(read(payload, "missionFileName")),
     pose: flightFactsAvailable ? pose(payload) : null,
     live: live(payload),
+    cameraFrames: cameraFrames(payload),
   });
 };
 const control = (payload: unknown) => freeze({
@@ -119,6 +153,7 @@ const control = (payload: unknown) => freeze({
 function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly connectionEpoch: number; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
   const streams = read(input.media, "streams");
   const mediaStreams = Array.isArray(streams) ? streams : [];
+  const player = mediaPlayer(input.media);
   const devices = input.devices.map((device) => {
     const telemetry = record(device.telemetry);
     const payload = read(telemetry, "payload");
@@ -137,13 +172,16 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
       assignment: device.assignment,
       mission: device.mission,
       stream: device.stream,
-      video: freeze({ phase: videoPhase, selected: input.selectedVideoDeviceId === device.deviceId }),
+      video: freeze({ phase: videoPhase, selected: input.selectedVideoDeviceId === device.deviceId, playerPhase: player.deviceId === device.deviceId ? player.phase : "idle" }),
       settings: device.settings,
       pendingFlightAction: device.pendingFlightAction
       ,landing: freeze({ phase: landingPhase(device.landingIntent, connectionValue) })
     });
   }).sort((left, right) => left.deviceId.localeCompare(right.deviceId));
   const media = freeze({
+    rtmpIngest: mediaService(input.media, "rtmpIngest"),
+    httpFlv: mediaService(input.media, "httpFlv"),
+    player,
     streams: freeze(mediaStreams.flatMap((item) => {
       const deviceId = read(item, "deviceId");
       const phase = read(item, "phase");

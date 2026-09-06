@@ -756,7 +756,7 @@ describe("飞行作业工作流模块契约", () => {
     expect(starts).toBe(0);
   });
 
-  it("工作流快照保留本机播放地址，供 video.playback 读取", () => {
+  it("工作流快照保留本机播放地址及独立媒体事实，供 video.playback 读取", () => {
     const workflow = workflowWith({
       mediaPipeline: {
         snapshot: () => ({
@@ -769,6 +769,9 @@ describe("飞行作业工作流模块契约", () => {
     });
     const snapshot = workflow.snapshot() as { media?: { streams?: readonly unknown[] } };
     expect(snapshot.media).toEqual({
+      rtmpIngest: { phase: "unknown" },
+      httpFlv: { phase: "unknown" },
+      player: { phase: "unknown", deviceId: null },
       streams: [{ deviceId: "relay-a", phase: "ready", playbackUrl: "http://127.0.0.1:18080/live/stream-1.flv" }],
     });
     expect(Object.isFrozen(snapshot.media)).toBe(true);

@@ -83,6 +83,56 @@ const enumStatus = (device: Record<string, unknown> | undefined, field: string):
   if (device === undefined) return "未选择手机";
   return text(read(connectionOf(device), field)) ?? "尚未取得";
 };
+const cameraFrameFact = (source: unknown): unknown => read(source, "cameraFrames");
+const cameraFrameStatus = (source: unknown): string => {
+  switch (read(cameraFrameFact(source), "state")) {
+    case "unavailable": return "当前未启用帧观察（UNAVAILABLE）";
+    case "unobserved": return "已监听，尚未收到相机编码帧（UNOBSERVED）";
+    case "receiving": return "正在收到相机编码帧（RECEIVING）";
+    case "stalled": return "曾收到帧，当前未见新帧（STALLED）";
+    default: return "手机端尚未提供帧观察";
+  }
+};
+const cameraFrameGenerationStatus = (source: unknown): string => {
+  const generation = finiteNumber(read(cameraFrameFact(source), "generation"));
+  return generation === null || !Number.isSafeInteger(generation) || generation < 0 ? "尚未取得" : String(generation);
+};
+const cameraFrameCountStatus = (source: unknown): string => {
+  const count = finiteNumber(read(cameraFrameFact(source), "receivedFrameCount"));
+  return count === null || !Number.isSafeInteger(count) || count < 0 ? "尚未收到有效帧" : `${count} 帧`;
+};
+const cameraFrameAgeStatus = (source: unknown): string => {
+  const age = finiteNumber(read(cameraFrameFact(source), "lastFrameAgeMillis"));
+  return age === null || !Number.isSafeInteger(age) || age < 0 ? "尚未取得" : `${age} ms`;
+};
+const cameraFrameFormatStatus = (source: unknown): string => {
+  const frames = cameraFrameFact(source);
+  const codec = optionalText(read(frames, "codec"));
+  const width = finiteNumber(read(frames, "width"));
+  const height = finiteNumber(read(frames, "height"));
+  const frameRate = finiteNumber(read(frames, "frameRate"));
+  const format = width === null || height === null ? null : `${width} x ${height}`;
+  const rate = frameRate === null ? null : `${frameRate} fps`;
+  const parts = [codec, format, rate].filter((part): part is string => part !== null);
+  return parts.length === 0 ? "尚未取得" : parts.join(" · ");
+};
+const directFlightObservationStatus = (device: Record<string, unknown> | undefined, operation: "takeoff" | "landing" | "return-home"): string => {
+  if (device === undefined) return "未选择手机";
+  const connection = connectionOf(device);
+  const flying = read(connection, "flightState");
+  const motorsOn = read(connection, "motorsOn");
+  if (operation === "takeoff") {
+    if (flying === "flying" && motorsOn === true) return "已观测到飞行中且电机已启动";
+    return "尚未观测到起飞完成";
+  }
+  if (operation === "landing") {
+    if (flying === "grounded" && motorsOn === false) return "已观测到未飞行且电机已关闭";
+    if (read(connection, "landingConfirmationNeeded") === true) return "MSDK 报告需要确认继续降落";
+    return "尚未观测到落地完成";
+  }
+  const mode = optionalText(read(connection, "flightMode"));
+  return mode === null ? "尚未取得飞行模式或位置" : `当前飞行模式：${mode}；返航实际过程仍需持续观察`;
+};
 const missionIntegerStatus = (device: Record<string, unknown> | undefined, field: string): string => {
   if (device === undefined) return "未选择手机";
   const value = read(connectionOf(device), field);
@@ -152,6 +202,25 @@ function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project
   renderFlightStatus("stream-msdk", msdkStatus(streamDevice));
   renderFlightStatus("stream-air-link", linkStatus(streamDevice, "airLink"));
   renderFlightStatus("stream-camera", linkStatus(streamDevice, "camera"));
+  const streamConnection = connectionOf(streamDevice);
+  renderFlightStatus("stream-camera-frame-state", streamDevice === undefined ? "未选择手机" : cameraFrameStatus(streamConnection));
+  renderFlightStatus("stream-camera-frame-generation", streamDevice === undefined ? "未选择手机" : cameraFrameGenerationStatus(streamConnection));
+  renderFlightStatus("stream-camera-frame-count", streamDevice === undefined ? "未选择手机" : cameraFrameCountStatus(streamConnection));
+  renderFlightStatus("stream-camera-frame-age", streamDevice === undefined ? "未选择手机" : cameraFrameAgeStatus(streamConnection));
+  renderFlightStatus("stream-camera-frame-format", streamDevice === undefined ? "未选择手机" : cameraFrameFormatStatus(streamConnection));
+  renderFlightStatus("stream-msdk-push", liveStreamingStatus(streamDevice));
+  renderFlightStatus("stream-msdk-resolution", liveMetricStatus(streamDevice, "resolution"));
+  renderFlightStatus("stream-msdk-fps", liveMetricStatus(streamDevice, "fps", " fps"));
+  renderFlightStatus("stream-msdk-bitrate", liveMetricStatus(streamDevice, "videoBitrateKbps", " Kbps"));
+  renderFlightStatus("stream-msdk-rtt", liveMetricStatus(streamDevice, "rttMillis", " ms"));
+  renderFlightStatus("stream-msdk-packet-loss", liveMetricStatus(streamDevice, "packetLoss"));
+  renderFlightStatus("stream-msdk-packet-cache", liveMetricStatus(streamDevice, "packetCacheLength"));
+  renderFlightStatus("stream-msdk-runtime-error", streamDevice === undefined ? "未选择手机" : liveRuntimeErrorStatus(streamConnection));
+  renderFlightStatus("stream-rtmp-service", desktopMediaServiceStatus(view, "rtmpIngest"));
+  renderFlightStatus("stream-http-flv-service", desktopMediaServiceStatus(view, "httpFlv"));
+  renderFlightStatus("stream-rtmp-arrival", rtmpArrivalStatus(streamDevice));
+  renderFlightStatus("stream-player-source", desktopPlayerSourceStatus(streamDevice));
+  renderFlightStatus("stream-player-rendering", streamDevice === undefined ? "未选择手机" : playbackRuntimeLabel(streamDevice, view.streamDeviceId));
   renderFlightStatus("stream-runtime", streamDevice === undefined ? "未选择手机" : view.streamLabel);
 
   renderFlightStatus("mission-relay", relayStatus(missionDevice));
@@ -176,9 +245,31 @@ function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project
   renderFlightStatus("direct-flight-controller", linkStatus(missionDevice, "flightController"));
   renderFlightStatus("direct-flight-state", flightStateStatus(missionDevice));
   renderFlightStatus("direct-motors", booleanStatus(missionDevice, "motorsOn", "已启动", "未启动"));
+  renderFlightStatus("direct-battery-link", linkStatus(missionDevice, "battery"));
   renderFlightStatus("direct-battery", batteryStatus(missionDevice));
   renderFlightStatus("direct-landing-protection", enumStatus(missionDevice, "landingProtectionState"));
   renderFlightStatus("direct-landing-confirmation", booleanStatus(missionDevice, "landingConfirmationNeeded", "需要确认", "不需要确认"));
+  renderFlightStatus("direct-flight-mode", enumStatus(missionDevice, "flightMode"));
+  const directConnection = connectionOf(missionDevice);
+  const directPose = read(directConnection, "pose");
+  const directAltitude = finiteNumber(read(directPose, "altitudeMeters"));
+  const directLatitude = finiteNumber(read(directPose, "latitude"));
+  const directLongitude = finiteNumber(read(directPose, "longitude"));
+  const directRthState = read(directConnection, "lowBatteryRthState");
+  renderFlightStatus("direct-altitude", directAltitude === null ? "尚未取得" : `${directAltitude.toFixed(1)} 米`);
+  renderFlightStatus("direct-position", directLatitude === null || directLongitude === null ? "尚未取得" : `${directLatitude.toFixed(5)}, ${directLongitude.toFixed(5)}`);
+  renderFlightStatus("direct-gps-signal", enumStatus(missionDevice, "gpsSignalLevel"));
+  renderFlightStatus("direct-gps-satellites", missionIntegerStatus(missionDevice, "gpsSatelliteCount"));
+  renderFlightStatus("direct-vision-sensor", booleanStatus(missionDevice, "visionSensorUsed", "正在使用", "未使用"));
+  renderFlightStatus("direct-vision-warning", enumStatus(missionDevice, "visionSystemWarning"));
+  renderFlightStatus("direct-vision-positioning", booleanStatus(missionDevice, "visionPositioningEnabled", "已启用", "未启用"));
+  renderFlightStatus("direct-low-battery-rth", directRthState === "UNKNOWN" ? "未知（MSDK 返回 UNKNOWN）" : lowBatteryRthLabel(directRthState) ?? "尚未取得");
+  renderFlightStatus("direct-remaining-flight-time", directRthState === "UNKNOWN" ? "不适用（返航状态未知）" : durationLabel(read(directConnection, "remainingFlightTimeSeconds")) ?? "尚未取得");
+  renderFlightStatus("direct-takeoff-failure", enumStatus(missionDevice, "takeoffFailureError"));
+  renderFlightStatus("direct-motor-start-failure", enumStatus(missionDevice, "motorStartFailureError"));
+  renderFlightStatus("direct-takeoff-observation", directFlightObservationStatus(missionDevice, "takeoff"));
+  renderFlightStatus("direct-landing-observation", directFlightObservationStatus(missionDevice, "landing"));
+  renderFlightStatus("direct-return-home-observation", directFlightObservationStatus(missionDevice, "return-home"));
 }
 
 function renderFlightPanelVisibility(): void {
@@ -697,8 +788,9 @@ const videoTransportStatusRows = (connection: unknown): string => {
     statusRow("图传码率 [手机 MSDK 图传运行观测]", bitrate === null ? "尚未取得" : `${bitrate} Kbps`, bitrate !== null),
     statusRow("图传丢包 [LiveStreamStatus.packetLoss]", packetLoss === null ? "尚未取得" : String(packetLoss), packetLoss !== null),
     statusRow("图传缓存长度 [LiveStreamStatus.packetCacheLen]", packetCacheLength === null ? "尚未取得" : String(packetCacheLength), packetCacheLength !== null),
+    statusRow("MSDK 运行期错误 [LiveStreamStatusListener.onError]", liveRuntimeErrorStatus(connection), false),
     statusRow("图传往返时间 [手机 MSDK 图传运行观测]", rtt === null ? "尚未取得" : `${rtt} ms`, rtt !== null),
-  ].join("");
+  ].join("") + cameraFrameStatusRows(connection);
 };
 
 const batteryStatusRows = (connection: unknown): string => {
@@ -766,18 +858,85 @@ const playbackRuntimeLabel = (device: unknown, streamDeviceId: string | null): s
     case "ready": {
       if (read(video, "selected") !== true) return "等待播放器";
       const player = document.getElementById("video");
-      return player instanceof HTMLVideoElement && isPainting(player) ? "正在播放" : "等待播放器出画";
+      if (!(player instanceof HTMLVideoElement)) return "播放器未就绪";
+      if (player.error !== null) return "播放器报告错误";
+      if (isPainting(player)) return "正在解码并出画";
+      if (player.buffered.length > 0 || player.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        return "已收到媒体数据，等待解码或出画";
+      }
+      return "等待媒体数据";
     }
     case "unavailable": return "未开始";
     default: return "状态未知";
   }
 };
 
-const runtimeStatusRows = (device: unknown, streamDeviceId: string | null): string => [
+const liveStreamingStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const streaming = read(read(connectionOf(device), "live"), "streaming");
+  return streaming === true ? "MSDK 报告正在推流" : streaming === false ? "MSDK 报告未推流" : "尚未取得";
+};
+const liveMetricStatus = (device: Record<string, unknown> | undefined, field: string, unit = ""): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(read(connectionOf(device), "live"), field);
+  const number = finiteNumber(value);
+  if (number !== null) return `${number}${unit}`;
+  return optionalText(value) ?? "尚未取得";
+};
+const liveRuntimeErrorStatus = (connection: unknown): string => {
+  const runtimeError = read(read(connection, "live"), "runtimeError");
+  const code = optionalText(read(runtimeError, "code"));
+  const description = optionalText(read(runtimeError, "description"));
+  return code !== null && description !== null
+    ? `错误码：${code}；错误说明：${description}`
+    : "未收到运行期错误";
+};
+const desktopMediaServiceStatus = (view: ReturnType<typeof OperatorConsole.project>, service: "rtmpIngest" | "httpFlv"): string => {
+  switch (read(read(view, "media"), service)) {
+    case "listening": return "正在监听";
+    case "idle": return "未启动";
+    case "failed": return "服务失败";
+    default: return "尚未取得";
+  }
+};
+const rtmpArrivalStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  switch (read(read(device, "video"), "phase")) {
+    case "ready": return "已观测到当前设备 RTMP 流";
+    case "awaiting-ingest": return "尚未观测到当前设备 RTMP 流";
+    case "awaiting-playback": return "已接收流，等待播放器";
+    case "failed": return "流接收或健康检查失败";
+    default: return "当前设备尚无媒体流";
+  }
+};
+const desktopPlayerSourceStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  switch (read(read(device, "video"), "playerPhase")) {
+    case "playing": return "已选择当前 HTTP-FLV 数据源";
+    case "failed": return "播放器数据源失败";
+    case "idle": return "当前设备未被播放器选择";
+    default: return "尚未取得";
+  }
+};
+const cameraFrameStatusRows = (connection: unknown): string => [
+  statusRow("相机编码帧状态 [ICameraStreamManager.ReceiveStreamListener]", cameraFrameStatus(connection), read(cameraFrameFact(connection), "state") === "receiving"),
+  statusRow("帧观察代次 [生产 RTMP 会话代次]", cameraFrameGenerationStatus(connection), false),
+  statusRow("有效编码帧数量 [ReceiveStreamListener]", cameraFrameCountStatus(connection), read(cameraFrameFact(connection), "receivedFrameCount") !== 0),
+  statusRow("最新帧年龄 [手机本地单调时钟]", cameraFrameAgeStatus(connection), false),
+  statusRow("最新帧格式 [DJI StreamInfo]", cameraFrameFormatStatus(connection), false),
+].join("");
+const desktopMediaStatusRows = (view: ReturnType<typeof OperatorConsole.project>, device: Record<string, unknown>, streamDeviceId: string | null): string => [
+  statusRow("RTMP 接收服务 [桌面 media-pipeline]", desktopMediaServiceStatus(view, "rtmpIngest"), desktopMediaServiceStatus(view, "rtmpIngest") === "正在监听"),
+  statusRow("HTTP-FLV 服务 [桌面 media-pipeline]", desktopMediaServiceStatus(view, "httpFlv"), desktopMediaServiceStatus(view, "httpFlv") === "正在监听"),
+  statusRow("当前设备 RTMP 接收 [桌面 rtmp-ingest]", rtmpArrivalStatus(device), read(read(device, "video"), "phase") === "ready"),
+  statusRow("播放器数据源 [桌面 video-player]", desktopPlayerSourceStatus(device), read(read(device, "video"), "playerPhase") === "playing"),
+  statusRow("实际渲染 [HTMLVideoElement]", playbackRuntimeLabel(device, streamDeviceId), false),
+].join("");
+
+const runtimeStatusRows = (view: ReturnType<typeof OperatorConsole.project>, device: Record<string, unknown>, streamDeviceId: string | null): string => [
   statusRow("任务 [手机任务运行状态]", missionRuntimeLabel(read(device, "mission")), false),
   statusRow("手机推流 [手机图传运行状态]", streamRuntimeLabel(device), false),
-  statusRow("桌面播放 [桌面播放器运行状态]", playbackRuntimeLabel(device, streamDeviceId), false),
-].join("");
+].join("") + desktopMediaStatusRows(view, device, streamDeviceId);
 
 async function projectView(): Promise<ReturnType<typeof OperatorConsole.project>> {
   const snapshotResult = unwrap(await bridge().invoke("state-snapshot"));
@@ -910,7 +1069,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
       <h3 class="device-status-heading">设备信息</h3>
       <div class="connection-status-list" aria-label="设备信息">${deviceInformationRows(connection)}</div>
       <h3 class="device-status-heading">运行状态</h3>
-      <div class="connection-status-list" aria-label="运行状态">${runtimeStatusRows(inspected, view.streamDeviceId)}</div>
+      <div class="connection-status-list" aria-label="运行状态">${runtimeStatusRows(view, inspected, view.streamDeviceId)}</div>
       <p class="muted">对频仅用于新增飞机或更换遥控器。这里只显示手机回报的结果。</p>`;
   el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在手机上开始对频。电脑关掉后，需要在手机上重新连接。`;
 }

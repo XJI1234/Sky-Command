@@ -30,7 +30,8 @@ WorkflowSnapshot.create(input) -> OperationWorkflowSnapshot
 - `altitudeMeters` 是 `FlightControllerKey.KeyAltitude` 的相对起飞点高度；仅保留有限数值，否则为 `null`，不得当作海拔或下视测距高度
   - 坐标与高度都不可用时 `pose` 为 `null`
   - 不得把 JSON 空值或残缺坐标显示成 `0`
-- `live`：只读直播指标，固定为 `{ streaming, resolution, fps, videoBitrateKbps, rttMillis }`。`streaming` 仅保留布尔值；`resolution` 仅保留上述安全文本；`fps` 仅保留 `0..240` 的有限数值；`videoBitrateKbps` 仅保留 `0..100,000` 的有限数值；`rttMillis` 仅保留 `0..60,000` 的安全整数；其余均为 `null`。这些是手机已上报的观测值，不得改变图传状态机、触发播放器行为或替代 `stream` 的命令状态。
+- `live`：只读直播指标，固定为 `{ streaming, runtimeError, resolution, fps, videoBitrateKbps, rttMillis, packetLoss, packetCacheLength }`。`streaming` 仅保留 `LiveStreamStatus.isStreaming` 的布尔值；`runtimeError` 仅在错误码与说明同时为安全文本时保留，且只来自 `LiveStreamStatusListener.onError`；`resolution` 仅保留上述安全文本；`fps` 仅保留 `0..240` 的有限数值；`videoBitrateKbps` 仅保留 `0..100,000` 的有限数值；RTT、丢包与缓存长度只保留受限非负数值；其余均为 `null`。这些是手机已上报的观测值，不得改变图传状态机、触发播放器行为或替代 `stream` 的命令状态。
+- `cameraFrames`：只读相机编码帧旁路观察，固定为 `{ generation, state, receivedFrameCount, lastFrameAgeMillis, codec, width, height, frameRate }`。它只来自手机当前生产 RTMP 代次的 `ICameraStreamManager.ReceiveStreamListener` 元数据，绝不携带、保存、转发、解码或渲染视频字节。`unavailable`、`unobserved`、`receiving`、`stalled` 只说明当前代次是否观察到新编码帧；它们不能推导 AirLink/相机 Key、MSDK 推流、RTMP 到达或浏览器实际出画，也不参与任一控制门禁。
 - `gpsSignalLevel`、`gpsSatelliteCount`、`visionSensorUsed`、`visionSystemWarning`、`visionPositioningEnabled`、`landingProtectionState`、`landingConfirmationNeeded`、`takeoffFailureError` 和 `motorStartFailureError`：逐项读取同名 Android MSDK 遥测字段。布尔值、非负整数及受限枚举名称保留，缺失/畸形值为 `null` 或内部 `unknown`；不得以任一值推导“室内安全”、自动起飞、自动降落或自动继续降落。飞控明确断开时，全部清空。
 - 飞控**明确断开**时，`lowBatteryRthState`、`remainingFlightTimeSeconds`、`flightState`、`motorsOn`、`flightMode` 和 `pose` 均必须为未知或 `null`；不得展示先前连接留下的飞控动态数据。`batteryPercent` 由独立的 `battery` 状态决定，飞控状态未知时保持既有遥测投影语义。`live` 属于独立的当前图传观测，不能作为飞行事实或用于改变飞控状态。
 

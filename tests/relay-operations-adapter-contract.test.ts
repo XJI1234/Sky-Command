@@ -400,6 +400,38 @@ describe("RelayOperationsAdapter", () => {
     });
   });
 
+  it("逐项保留相机编码帧观察，而不将其混同为 MSDK 推流状态", () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+
+    fixture.replaceTelemetry(
+      object({
+        liveStreaming: bool(true),
+        cameraFrameGeneration: numeric("7"),
+        cameraFrameState: text("RECEIVING"),
+        cameraFrameCount: numeric("932"),
+        cameraFrameLastAgeMillis: numeric("24"),
+        cameraFrameCodec: text("H264"),
+        cameraFrameWidth: numeric("1920"),
+        cameraFrameHeight: numeric("1080"),
+        cameraFrameRate: numeric("30"),
+      }),
+      object({}),
+    );
+
+    expect(adapter.telemetry("relay-1")?.payload).toMatchObject({
+      liveStreaming: true,
+      cameraFrameGeneration: 7,
+      cameraFrameState: "RECEIVING",
+      cameraFrameCount: 932,
+      cameraFrameLastAgeMillis: 24,
+      cameraFrameCodec: "H264",
+      cameraFrameWidth: 1920,
+      cameraFrameHeight: 1080,
+      cameraFrameRate: 30,
+    });
+  });
+
   it("将航线命令的结构化 DJI 结果原样交给任务调度器", async () => {
     const result = object({
       domain: text("wayline"),

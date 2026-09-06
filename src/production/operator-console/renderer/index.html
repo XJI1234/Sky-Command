@@ -275,10 +275,46 @@
             </div>
           </div>
           <div class="operation-state-panel">
-            <h4>运行事实</h4>
+            <h4>图像源帧事实</h4>
+            <p class="muted">只读观察手机 MSDK 是否真的交付过相机编码字节；未观察到帧不等于 DJI Key 已断开。</p>
+            <div class="operation-state-list">
+              <div class="operation-state-row"><span>相机编码帧状态<small>[ICameraStreamManager.ReceiveStreamListener]</small></span><strong data-flight-status="stream-camera-frame-state">尚未取得</strong></div>
+              <div class="operation-state-row"><span>帧观察代次<small>[生产 RTMP 会话代次]</small></span><strong data-flight-status="stream-camera-frame-generation">尚未取得</strong></div>
+              <div class="operation-state-row"><span>有效编码帧数量<small>[ReceiveStreamListener]</small></span><strong data-flight-status="stream-camera-frame-count">尚未取得</strong></div>
+              <div class="operation-state-row"><span>最新帧年龄<small>[手机本地单调时钟]</small></span><strong data-flight-status="stream-camera-frame-age">尚未取得</strong></div>
+              <div class="operation-state-row"><span>最新帧格式<small>[DJI StreamInfo]</small></span><strong data-flight-status="stream-camera-frame-format">尚未取得</strong></div>
+            </div>
+          </div>
+          <div class="operation-state-panel">
+            <h4>手机端推流事实</h4>
+            <p class="muted">这些是 <code>LiveStreamStatus</code> 的运行期观测，不是启动或停止按钮的完成回执。</p>
+            <div class="operation-state-list">
+              <div class="operation-state-row"><span>MSDK 推流状态<small>[LiveStreamStatus.isStreaming]</small></span><strong data-flight-status="stream-msdk-push">尚未取得</strong></div>
+              <div class="operation-state-row"><span>MSDK 分辨率<small>[LiveStreamStatus.resolution]</small></span><strong data-flight-status="stream-msdk-resolution">尚未取得</strong></div>
+              <div class="operation-state-row"><span>MSDK 帧率<small>[LiveStreamStatus.fps]</small></span><strong data-flight-status="stream-msdk-fps">尚未取得</strong></div>
+              <div class="operation-state-row"><span>MSDK 码率<small>[LiveStreamStatus.vbps]</small></span><strong data-flight-status="stream-msdk-bitrate">尚未取得</strong></div>
+              <div class="operation-state-row"><span>MSDK RTT<small>[LiveStreamStatus.rtt]</small></span><strong data-flight-status="stream-msdk-rtt">尚未取得</strong></div>
+              <div class="operation-state-row"><span>MSDK 丢包<small>[LiveStreamStatus.packetLoss]</small></span><strong data-flight-status="stream-msdk-packet-loss">尚未取得</strong></div>
+              <div class="operation-state-row"><span>MSDK 缓存长度<small>[LiveStreamStatus.packetCacheLen]</small></span><strong data-flight-status="stream-msdk-packet-cache">尚未取得</strong></div>
+              <div class="operation-state-row"><span>MSDK 运行期错误<small>[LiveStreamStatusListener.onError]</small></span><strong data-flight-status="stream-msdk-runtime-error">尚未取得</strong></div>
+            </div>
+          </div>
+          <div class="operation-state-panel">
+            <h4>电脑媒体接收与播放事实</h4>
+            <p class="muted">共享服务就绪、当前设备 RTMP 到达、播放器选源和实际出画各自独立，不能互相推导。</p>
+            <div class="operation-state-list">
+              <div class="operation-state-row"><span>RTMP 接收服务<small>[桌面 media-pipeline]</small></span><strong data-flight-status="stream-rtmp-service">尚未取得</strong></div>
+              <div class="operation-state-row"><span>HTTP-FLV 服务<small>[桌面 media-pipeline]</small></span><strong data-flight-status="stream-http-flv-service">尚未取得</strong></div>
+              <div class="operation-state-row"><span>当前设备 RTMP 接收<small>[桌面 rtmp-ingest]</small></span><strong data-flight-status="stream-rtmp-arrival">尚未取得</strong></div>
+              <div class="operation-state-row"><span>播放器数据源<small>[桌面 video-player]</small></span><strong data-flight-status="stream-player-source">尚未取得</strong></div>
+              <div class="operation-state-row"><span>实际渲染<small>[HTMLVideoElement]</small></span><strong data-flight-status="stream-player-rendering">尚未取得</strong></div>
+            </div>
+          </div>
+          <div class="operation-state-panel">
+            <h4>图传控制状态</h4>
             <p id="stream-ready" class="notice"></p>
             <div class="operation-state-list">
-              <div class="operation-state-row"><span>图传状态<small>[手机推流、电脑接收与播放器观察]</small></span><strong data-flight-status="stream-runtime">尚未取得</strong></div>
+              <div class="operation-state-row"><span>图传控制工作流<small>[桌面 stream-control]</small></span><strong data-flight-status="stream-runtime">尚未取得</strong></div>
             </div>
           </div>
           <div class="row stream-controls">
@@ -444,9 +480,31 @@
               <div class="operation-state-row"><span>飞行控制器<small>[FlightControllerKey.KeyConnection]</small></span><strong data-flight-status="direct-flight-controller">尚未取得</strong></div>
               <div class="operation-state-row"><span>飞行状态<small>[FlightControllerKey.KeyIsFlying]</small></span><strong data-flight-status="direct-flight-state">尚未取得</strong></div>
               <div class="operation-state-row"><span>电机<small>[FlightControllerKey.KeyAreMotorsOn]</small></span><strong data-flight-status="direct-motors">尚未取得</strong></div>
+              <div class="operation-state-row"><span>主电池连接<small>[BatteryKey.KeyConnection, LEFT_OR_MAIN]</small></span><strong data-flight-status="direct-battery-link">尚未取得</strong></div>
               <div class="operation-state-row"><span>主电池<small>[BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]</small></span><strong data-flight-status="direct-battery">尚未取得</strong></div>
               <div class="operation-state-row"><span>降落保护<small>[FlightAssistantKey.KeyLandingProtectionState]</small></span><strong data-flight-status="direct-landing-protection">尚未取得</strong></div>
               <div class="operation-state-row"><span>需要确认降落<small>[FlightControllerKey.KeyIsLandingConfirmationNeeded]</small></span><strong data-flight-status="direct-landing-confirmation">尚未取得</strong></div>
+              <div class="operation-state-row"><span>飞行模式<small>[FlightControllerKey.KeyFCFlightMode]</small></span><strong data-flight-status="direct-flight-mode">尚未取得</strong></div>
+              <div class="operation-state-row"><span>相对起飞点高度<small>[FlightControllerKey.KeyAltitude]</small></span><strong data-flight-status="direct-altitude">尚未取得</strong></div>
+              <div class="operation-state-row"><span>位置<small>[FlightControllerKey.KeyAircraftLocation]</small></span><strong data-flight-status="direct-position">尚未取得</strong></div>
+              <div class="operation-state-row"><span>GPS 信号<small>[FlightControllerKey.KeyGPSSignalLevel]</small></span><strong data-flight-status="direct-gps-signal">尚未取得</strong></div>
+              <div class="operation-state-row"><span>GPS 卫星数<small>[FlightControllerKey.KeyGPSSatelliteCount]</small></span><strong data-flight-status="direct-gps-satellites">尚未取得</strong></div>
+              <div class="operation-state-row"><span>视觉传感器使用<small>[FlightControllerKey.KeyIsVisionSensorUsed]</small></span><strong data-flight-status="direct-vision-sensor">尚未取得</strong></div>
+              <div class="operation-state-row"><span>视觉系统警告<small>[FlightAssistantKey.KeyVisionSystemWarning]</small></span><strong data-flight-status="direct-vision-warning">尚未取得</strong></div>
+              <div class="operation-state-row"><span>视觉定位<small>[FlightAssistantKey.KeyVisionPositioningEnabled]</small></span><strong data-flight-status="direct-vision-positioning">尚未取得</strong></div>
+              <div class="operation-state-row"><span>低电量返航状态<small>[FlightControllerKey.KeyLowBatteryRTHInfo]</small></span><strong data-flight-status="direct-low-battery-rth">尚未取得</strong></div>
+              <div class="operation-state-row"><span>低电量返航预估<small>[FlightControllerKey.KeyLowBatteryRTHInfo]</small></span><strong data-flight-status="direct-remaining-flight-time">尚未取得</strong></div>
+              <div class="operation-state-row"><span>起飞失败原因<small>[FlightControllerKey.KeyTakeoffFailureError]</small></span><strong data-flight-status="direct-takeoff-failure">尚未取得</strong></div>
+              <div class="operation-state-row"><span>电机启动失败原因<small>[FlightControllerKey.KeyMotorStartFailureError]</small></span><strong data-flight-status="direct-motor-start-failure">尚未取得</strong></div>
+            </div>
+          </div>
+          <div class="operation-state-panel">
+            <h4>操作效果观察</h4>
+            <p class="muted">只由后续持续遥测确认，绝不由某次按钮的 <code>onSuccess</code> 推断。</p>
+            <div class="operation-state-list">
+              <div class="operation-state-row"><span>起飞效果<small>[KeyIsFlying + KeyAreMotorsOn]</small></span><strong data-flight-status="direct-takeoff-observation">尚未取得</strong></div>
+              <div class="operation-state-row"><span>降落效果<small>[KeyIsFlying + KeyAreMotorsOn]</small></span><strong data-flight-status="direct-landing-observation">尚未取得</strong></div>
+              <div class="operation-state-row"><span>返航效果<small>[KeyFCFlightMode + KeyAircraftLocation]</small></span><strong data-flight-status="direct-return-home-observation">尚未取得</strong></div>
             </div>
           </div>
           <div class="row">

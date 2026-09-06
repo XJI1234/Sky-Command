@@ -137,12 +137,13 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("MSDK 图传观测 [手机 MSDK 图传运行观测]"');
     expect(source).toContain('statusRow("图传丢包 [LiveStreamStatus.packetLoss]"');
     expect(source).toContain('statusRow("图传缓存长度 [LiveStreamStatus.packetCacheLen]"');
+    expect(source).toContain('statusRow("MSDK 运行期错误 [LiveStreamStatusListener.onError]"');
     expect(source).toContain('statusRow("状态更新时间 [桌面接收时间]"');
-    expect(source).toContain("runtimeStatusRows(inspected, view.streamDeviceId)");
+    expect(source).toContain("runtimeStatusRows(view, inspected, view.streamDeviceId)");
     expect(source).toContain('statusRow("状态更新时间 [桌面接收时间]", telemetryTimeLabel(connection), telemetryTimeKnown(connection) && !flightFactsUnconfirmed(connection))');
     expect(source).toContain('statusRow("任务 [手机任务运行状态]", missionRuntimeLabel(read(device, "mission")), false)');
     expect(source).toContain('statusRow("手机推流 [手机图传运行状态]", streamRuntimeLabel(device), false)');
-    expect(source).toContain('statusRow("桌面播放 [桌面播放器运行状态]", playbackRuntimeLabel(device, streamDeviceId), false)');
+    expect(source).toContain('statusRow("实际渲染 [HTMLVideoElement]", playbackRuntimeLabel(device, streamDeviceId), false)');
     expect(source).toContain('if (value === "UNKNOWN") return "未知（MSDK 返回 UNKNOWN）";');
     expect(source).not.toContain('code === "LANDING_IN_PROGRESS"');
     expect(source).toContain('await bridge().invoke("stream-select", { deviceId: view.streamDeviceId })');
@@ -898,6 +899,41 @@ describe("航线操作台渲染契约", () => {
     expect(rendererSource).toContain('flightPanel: FlightPanelName');
     expect(rendererSource).toContain('renderFlightPanelStatus');
     expect(rendererSource).toContain('renderFlightPanelVisibility');
+  });
+
+  it("图传页和设备页逐项展示手机帧、桌面服务和播放器事实，不把它们合成一个图传状态", () => {
+    const pageSource = page();
+    const rendererSource = renderer();
+    for (const status of [
+      "stream-camera-frame-state", "stream-camera-frame-count", "stream-camera-frame-age",
+      "stream-camera-frame-generation", "stream-camera-frame-format", "stream-msdk-push", "stream-msdk-resolution",
+      "stream-msdk-fps", "stream-msdk-bitrate", "stream-msdk-rtt", "stream-msdk-packet-loss",
+      "stream-msdk-packet-cache", "stream-msdk-runtime-error",
+      "stream-rtmp-service", "stream-http-flv-service", "stream-rtmp-arrival",
+      "stream-player-source", "stream-player-rendering",
+    ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
+    expect(rendererSource).toContain("cameraFrameStatus");
+    expect(rendererSource).toContain("desktopMediaServiceStatus");
+    expect(rendererSource).toContain("cameraFrameStatusRows(connection)");
+    expect(rendererSource).toContain("desktopMediaStatusRows(view, device, streamDeviceId)");
+    expect(rendererSource).toContain("player.error !== null");
+    expect(rendererSource).toContain("正在解码并出画");
+    expect(rendererSource).toContain("已收到媒体数据，等待解码或出画");
+    expect(rendererSource).toContain("等待媒体数据");
+  });
+
+  it("直接飞行页补齐独立的飞行动态事实与降落效果观察，不用按钮回执替代遥测", () => {
+    const pageSource = page();
+    const rendererSource = renderer();
+    for (const status of [
+      "direct-flight-mode", "direct-altitude", "direct-position", "direct-gps-signal",
+      "direct-gps-satellites", "direct-battery-link", "direct-vision-sensor", "direct-vision-warning",
+      "direct-vision-positioning", "direct-low-battery-rth", "direct-remaining-flight-time",
+      "direct-takeoff-failure", "direct-motor-start-failure", "direct-takeoff-observation",
+      "direct-landing-observation", "direct-return-home-observation",
+    ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
+    expect(rendererSource).toContain("directFlightObservationStatus");
+    expect(rendererSource).toContain('renderFlightStatus("direct-flight-mode"');
   });
 
   it("将航线事实按来源分开显示，不把上传、DJI 原始状态、里程碑和桌面工作流混为一谈", () => {

@@ -74,6 +74,8 @@ export interface OperatorView {
   readonly playbackReady: boolean;
   readonly streamCanStart: boolean;
   readonly streamCanStop: boolean;
+  /** Shared desktop media-service facts, independent of an individual phone stream. */
+  readonly media: unknown;
 }
 
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
@@ -354,6 +356,7 @@ function project(input: unknown): OperatorView {
     playbackReady: videoPhase === "ready" && !streamSourceUnavailable,
     streamCanStart: streamCanStartOf(streamDevice),
     streamCanStop: streamCanStopOf(streamDevice),
+    media: read(read(snapshot, "workflow"), "media"),
   };
   return freeze({ ...view, missionActions: missionActionsOf(view) });
 }

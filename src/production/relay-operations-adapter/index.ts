@@ -22,6 +22,8 @@ export interface TelemetryRefreshResult {
 type MsdkLinkState = "UNKNOWN" | "DISCONNECTED" | "CONNECTED";
 type MsdkPairingState = "UNKNOWN" | "IDLE" | "PAIRING" | "PAIRED" | "STOPPING" | "FAILED";
 type MissionDjiExecutionState = "IDLE" | "READY" | "UPLOADING" | "PREPARING" | "RECOVERING" | "ENTER_WAYLINE" | "EXECUTING" | "PAUSED" | "INTERRUPTED" | "FINISHED" | "RETURN_TO_START_POINT" | "DISCONNECTED" | "NOT_SUPPORTED" | "UNKNOWN";
+type CameraFrameObservationState = "UNAVAILABLE" | "UNOBSERVED" | "RECEIVING" | "STALLED";
+type CameraFrameCodec = "H264" | "H265" | "UNKNOWN";
 
 export interface DesktopRelayTelemetryPayload {
   readonly [key: string]: unknown;
@@ -77,6 +79,19 @@ export interface DesktopRelayTelemetryPayload {
   readonly livePacketLoss?: number;
   /** Raw Android MSDK LiveStreamStatus.packetCacheLen value; no unit is inferred. */
   readonly livePacketCacheLength?: number;
+  /** Production RTMP-generation counter from the read-only DJI ReceiveStreamListener observer. */
+  readonly cameraFrameGeneration?: number;
+  /** Read-only frame observation state; it is neither a DJI Key nor a connection assertion. */
+  readonly cameraFrameState?: CameraFrameObservationState;
+  /** Number of valid encoded camera frame receipts for the current production RTMP generation. */
+  readonly cameraFrameCount?: number;
+  /** Phone-local monotonic age of the latest received encoded frame. */
+  readonly cameraFrameLastAgeMillis?: number;
+  /** Codec classification from the raw DJI StreamInfo.mimeType. */
+  readonly cameraFrameCodec?: CameraFrameCodec;
+  readonly cameraFrameWidth?: number;
+  readonly cameraFrameHeight?: number;
+  readonly cameraFrameRate?: number;
   /** Raw Android MSDK FlightControllerKey.KeyGPSSignalLevel enum name. */
   readonly gpsSignalLevel?: string;
   /** Raw Android MSDK FlightControllerKey.KeyGPSSatelliteCount value. */
@@ -267,6 +282,14 @@ const lowBatteryRthState = (value: unknown): "IDLE" | "COUNTING_DOWN" | "EXECUTE
   const current = string(value);
   return current === "IDLE" || current === "COUNTING_DOWN" || current === "EXECUTED" || current === "CANCELLED" || current === "UNKNOWN" ? current : undefined;
 };
+const cameraFrameObservationState = (value: unknown): CameraFrameObservationState | undefined => {
+  const current = string(value);
+  return current === "UNAVAILABLE" || current === "UNOBSERVED" || current === "RECEIVING" || current === "STALLED" ? current : undefined;
+};
+const cameraFrameCodec = (value: unknown): CameraFrameCodec | undefined => {
+  const current = string(value);
+  return current === "H264" || current === "H265" || current === "UNKNOWN" ? current : undefined;
+};
 const status = (value: unknown): CommandStatus => {
   const current = read(value, "status");
   return current === "succeeded" || current === "rejected" || current === "timed-out" || current === "disconnected" || current === "transport-failed" ? current : "transport-failed";
@@ -353,6 +376,26 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
       const livePacketLoss = boundedInteger(payload.livePacketLoss, 0, 2_147_483_647); if (livePacketLoss !== undefined) outputPayload.livePacketLoss = livePacketLoss;
       const livePacketCacheLength = boundedInteger(payload.livePacketCacheLength, 0, 2_147_483_647); if (livePacketCacheLength !== undefined) outputPayload.livePacketCacheLength = livePacketCacheLength;
     }
+  }
+  const cameraFrameGeneration = nonNegativeIntegerValue(payload.cameraFrameGeneration);
+  if (cameraFrameGeneration !== undefined) outputPayload.cameraFrameGeneration = cameraFrameGeneration;
+  const cameraFrameStateValue = cameraFrameObservationState(payload.cameraFrameState);
+  if (cameraFrameStateValue !== undefined) outputPayload.cameraFrameState = cameraFrameStateValue;
+  const cameraFrameCount = nonNegativeIntegerValue(payload.cameraFrameCount);
+  if (cameraFrameCount !== undefined) outputPayload.cameraFrameCount = cameraFrameCount;
+  // A zero-receipt generation cannot honestly carry a previous frame's metadata. Keep
+  // only independently meaningful generation/state facts rather than project stale data.
+  if (cameraFrameCount !== undefined && cameraFrameCount > 0) {
+    const cameraFrameLastAgeMillis = nonNegativeIntegerValue(payload.cameraFrameLastAgeMillis);
+    if (cameraFrameLastAgeMillis !== undefined) outputPayload.cameraFrameLastAgeMillis = cameraFrameLastAgeMillis;
+    const cameraFrameCodecValue = cameraFrameCodec(payload.cameraFrameCodec);
+    if (cameraFrameCodecValue !== undefined) outputPayload.cameraFrameCodec = cameraFrameCodecValue;
+    const cameraFrameWidth = boundedInteger(payload.cameraFrameWidth, 1, 16_384);
+    if (cameraFrameWidth !== undefined) outputPayload.cameraFrameWidth = cameraFrameWidth;
+    const cameraFrameHeight = boundedInteger(payload.cameraFrameHeight, 1, 16_384);
+    if (cameraFrameHeight !== undefined) outputPayload.cameraFrameHeight = cameraFrameHeight;
+    const cameraFrameRate = boundedInteger(payload.cameraFrameRate, 1, 240);
+    if (cameraFrameRate !== undefined) outputPayload.cameraFrameRate = cameraFrameRate;
   }
   const gpsSignalLevel = safeText(string(payload.gpsSignalLevel)); if (gpsSignalLevel !== undefined) outputPayload.gpsSignalLevel = gpsSignalLevel;
   const gpsSatelliteCount = nonNegativeIntegerValue(payload.gpsSatelliteCount); if (gpsSatelliteCount !== undefined) outputPayload.gpsSatelliteCount = gpsSatelliteCount;
