@@ -7,7 +7,7 @@
 ```ts
 MediaPipeline.create(dependencies, options) -> MediaPipelineInstance
 
-instance.start(input) -> PipelineResult<MediaSnapshot>
+instance.start(input) -> Promise<PipelineResult<MediaSnapshot>>
 instance.stop() -> PipelineResult<MediaSnapshot>
 instance.evaluate(now) -> PipelineResult<MediaSnapshot>
 instance.notifyPlaybackReady(deviceId) -> PipelineResult<MediaSnapshot>
@@ -22,9 +22,11 @@ instance.snapshot() -> MediaSnapshot
 
 组合根状态为 `idle`、`starting`、`running`、`stopping`、`failed`、`disposed`。`snapshot` 只公开接收端点的 host/port/source、共享 RTMP 接收服务和 HTTP-FLV 服务的监听状态、每台设备的 deviceId/streamId/健康阶段/播放地址/安全诊断，以及播放器快照。
 
-共享服务的 `listening` 只表示桌面端口正在监听，不能证明任一手机正在推流。每台设备的流阶段只表示该设备的 RTMP 是否已经实际到达桌面；播放器选择只表示渲染器选中了该设备的 HTTP-FLV 地址。这三类事实必须独立保留，`media-pipeline` 不读取 HTML 视频元素，也不把浏览器是否实际解码出画写回媒体快照。
+共享服务的 `starting` 表示正在等待端口适配器的实际绑定结果；`listening` 只表示桌面端口已经监听，不能证明任一手机正在推流。每台设备的流阶段只表示该设备的 RTMP 是否已经实际到达桌面；播放器选择只表示渲染器选中了该设备的 HTTP-FLV 地址。这三类事实必须独立保留，`media-pipeline` 不读取 HTML 视频元素，也不把浏览器是否实际解码出画写回媒体快照。
 
-启动顺序固定为：解析局域网端点、启动 HTTP-FLV 分发、启动 RTMP。任一步失败都停止已经启动的服务并清空流状态。RTMP 发布后立即标记该设备 `ready`，播放地址为 `http://127.0.0.1:{httpFlvPort}/live/{deviceId}.flv`。`notifyPlaybackReady` 保留为幂等补标入口（例如测试或迟到回调），不得再假装依赖 HLS 播放列表写出。
+启动顺序固定为：解析局域网端点、等待 HTTP-FLV 端口实际绑定、等待 RTMP 端口实际绑定。任一步失败都停止已经启动的服务并清空流状态，且不得将组合根报告为 `running`。RTMP 发布后立即标记该设备 `ready`，播放地址为 `http://127.0.0.1:{httpFlvPort}/live/{deviceId}.flv`。`notifyPlaybackReady` 保留为幂等补标入口（例如测试或迟到回调），不得再假装依赖 HLS 播放列表写出。
+
+启动期间调用 `dispose()` 会立即使当前启动代次失效。之后才兑现的 HTTP-FLV 或 RTMP 绑定结果不得把根状态恢复为 `running`；若适配器报告绑定成功，组合根必须立即尝试关闭该服务，并以 `DISPOSED` 结束原启动 Promise。处置后的快照不得保留可用的旧网络端点、流或播放器选择。
 
 `invalidateStreamSource(deviceId)` 是工作流在手机 MSDK 明确报告 AirLink 或主相机不再 `CONNECTED` 时调用的本地失效入口：它只移除该设备媒体记录；若当前播放器选中了该设备，立即清空播放器。它绝不停止共享 RTMP/HTTP-FLV 服务，也不影响其他设备。失效设备即使还有旧 RTMP publish 也不得被 `evaluate()` 自动重新加入。只有桌面已收到一次新的、操作者手动请求且手机已确认成功的 `live-stream.start` 后，工作流才能调用 `allowStreamSource(deviceId)` 解除屏蔽；该方法不选择播放器、不发送命令、不自动启动图传。
 

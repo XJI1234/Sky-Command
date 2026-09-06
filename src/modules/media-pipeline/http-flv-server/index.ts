@@ -1,10 +1,10 @@
 export interface HttpFlvServerPort {
-  readonly listen: (input: Readonly<{ readonly host: "127.0.0.1"; readonly port: number; readonly rootDirectory: string }>) => void;
+  readonly listen: (input: Readonly<{ readonly host: "127.0.0.1"; readonly port: number; readonly rootDirectory: string }>) => Promise<void>;
   readonly close: () => void;
 }
 
 export interface HttpFlvServerSnapshot {
-  readonly phase: "idle" | "listening" | "failed";
+  readonly phase: "idle" | "starting" | "listening" | "failed";
   readonly revision: number;
   readonly port: number | null;
   readonly diagnostic: string | null;
@@ -21,7 +21,7 @@ export type PlaybackResult =
   | Readonly<{ readonly ok: false; readonly code: "INVALID_INPUT" | "NOT_LISTENING"; readonly value: HttpFlvServerSnapshot }>;
 
 export interface HttpFlvServerInstance {
-  readonly start: (input: unknown) => StartResult;
+  readonly start: (input: unknown) => Promise<StartResult>;
   readonly stop: () => StopResult;
   readonly playback: (streamId: unknown) => PlaybackResult;
   readonly snapshot: () => HttpFlvServerSnapshot;
@@ -61,12 +61,13 @@ function create(port: HttpFlvServerPort): HttpFlvServerInstance {
 
   return freeze({
     snapshot: () => snapshot(state),
-    start: (raw) => {
+    start: async (raw) => {
       const input = startInput(raw);
       if (input === null) return freeze({ ok: false as const, code: "INVALID_INPUT" as const, value: snapshot(state) });
-      if (state.phase === "listening") return freeze({ ok: false as const, code: "ALREADY_LISTENING" as const, value: snapshot(state) });
+      if (state.phase === "starting" || state.phase === "listening") return freeze({ ok: false as const, code: "ALREADY_LISTENING" as const, value: snapshot(state) });
+      transition({ phase: "starting", port: input.port, diagnostic: null });
       try {
-        port.listen(freeze({ host: "127.0.0.1" as const, port: input.port, rootDirectory: input.rootDirectory }));
+        await port.listen(freeze({ host: "127.0.0.1" as const, port: input.port, rootDirectory: input.rootDirectory }));
         return freeze({ ok: true as const, value: transition({ phase: "listening", port: input.port, diagnostic: null }) });
       } catch {
         return freeze({ ok: false as const, code: "LISTEN_FAILED" as const, value: transition({ phase: "failed", port: null, diagnostic: LISTEN_FAILED }) });

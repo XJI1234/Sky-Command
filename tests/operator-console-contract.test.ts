@@ -146,7 +146,7 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("实际渲染 [HTMLVideoElement]", playbackRuntimeLabel(device, streamDeviceId), false)');
     expect(source).toContain('if (value === "UNKNOWN") return "未知（MSDK 返回 UNKNOWN）";');
     expect(source).not.toContain('code === "LANDING_IN_PROGRESS"');
-    expect(source).toContain('await bridge().invoke("stream-select", { deviceId: view.streamDeviceId })');
+    expect(source).toContain('awaitCurrentRender(bridge().invoke("stream-select", { deviceId: view.streamDeviceId }), signal)');
   });
 
   it("飞控状态未知时把保留的动态事实明确标为上次更新且当前未确认", () => {
@@ -967,5 +967,16 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain("feedbackByAction");
     expect(source).toContain("未调用 DJI MSDK");
     expect(source).toContain("DJI MSDK 回调");
+  });
+
+  it("渲染器合并重入的状态轮询与用户触发重绘，避免无限堆积异步 DOM 更新", () => {
+    const source = renderer();
+
+    expect(source).toContain('import { createRenderScheduler, RenderDeadlineExceededError } from "./render-scheduler.js";');
+    expect(source).toContain("const renderOnce");
+    expect(source).toContain("const renderScheduler = createRenderScheduler");
+    expect(source).toContain("renderScheduler.request()");
+    expect(source).toContain("awaitCurrentRender");
+    expect(source).toContain("deadlineMs: 5_000");
   });
 });

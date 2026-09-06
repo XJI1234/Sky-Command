@@ -9,7 +9,7 @@ export interface DesktopRuntimeRelay {
 }
 
 export interface DesktopRuntimeMedia {
-  readonly start: (input: unknown) => unknown;
+  readonly start: (input: unknown) => Promise<unknown>;
   readonly stop: () => unknown;
   readonly snapshot: () => unknown;
   readonly dispose: () => void;
@@ -122,7 +122,7 @@ function create(dependencies: DesktopRuntimeDependencies, options: DesktopRuntim
         transition("idle");
         return result(false, "RELAY_START_FAILED");
       }
-      const mediaStarted = safely(() => dependencies.media.start(options.mediaStartInput));
+      const mediaStarted = await safelyAsync(() => dependencies.media.start(options.mediaStartInput));
       if (!successful(mediaStarted) && mediaRequired) {
         await safelyAsync(dependencies.relay.stop);
         operation = null;

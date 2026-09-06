@@ -431,6 +431,28 @@ describe("relay-server contract", () => {
     expect(events).toEqual(["state-changed", "state-changed", "connection-opened", "connection-closed"]);
   });
 
+  it("closes a session instead of accumulating unbounded inbound frames behind a blocked handshake", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    const closeReasons: string[] = [];
+    server.subscribe((event) => {
+      if (event.kind === "connection-closed") closeReasons.push(event.reason);
+    });
+    await server.start();
+    const connection = transport.connect();
+    connection.controlledSends = true;
+    connection.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+
+    for (let id = 1; id <= 17; id += 1) {
+      connection.emitMessage(bytes({ type: "command-result", id: `result-${id}`, ok: true, detail: "queued" }));
+    }
+
+    expect(connection.closed).toBe(true);
+    expect(server.snapshot().connections).toEqual([]);
+    expect(closeReasons).toEqual(["inbound-overflow"]);
+  });
+
   it("closes active connections during stop and normalizes missing close reasons", async () => {
     const transport = new FakeTransport();
     const server = createServer({ transport });
@@ -476,7 +498,36 @@ describe("relay-server contract", () => {
     expect(failing.closed).toBe(true);
   });
 
-  it("rejects malformed outbound bytes and cancels a queued send after close", async () => {
+  it("closes a session rather than retaining unbounded outbound frames behind a blocked transport", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    const closeReasons: string[] = [];
+    server.subscribe((event) => {
+      if (event.kind === "connection-closed") closeReasons.push(event.reason);
+    });
+    await server.start();
+    const connection = transport.connect();
+    connection.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+    connection.controlledSends = true;
+
+    const sends = Array.from({ length: 17 }, (_, index) =>
+      server.send("connection-1", bytes({ type: "mission-complete", id: `outbound-${index + 1}` })),
+    );
+    await flush();
+
+    expect(connection.closed).toBe(true);
+    expect(closeReasons).toEqual(["outbound-overflow"]);
+    const outcomes = await Promise.all(sends);
+    expect(outcomes).toHaveLength(17);
+    for (const outcome of outcomes.slice(0, 16)) {
+      expect(outcome).toMatchObject({ ok: false, error: { code: "NOT_CONNECTED" } });
+    }
+    expect(outcomes[16]).toMatchObject({ ok: false, error: { code: "OUTBOUND_OVERFLOW" } });
+    expect(server.snapshot().connections).toEqual([]);
+  });
+
+  it("rejects malformed outbound bytes and settles active and queued sends after close", async () => {
     const transport = new FakeTransport();
     const server = createServer({ transport });
     await server.start();
@@ -490,9 +541,10 @@ describe("relay-server contract", () => {
     const second = server.send("connection-1", bytes({ type: "mission-complete", id: "two" }));
     await flush();
     connection.emitClose("peer-closed");
-    connection.releaseNextSend();
-    await expect(first).resolves.toMatchObject({ ok: true });
+    await expect(first).resolves.toMatchObject({ ok: false, error: { code: "NOT_CONNECTED" } });
     await expect(second).resolves.toMatchObject({ ok: false, error: { code: "NOT_CONNECTED" } });
+    connection.releaseNextSend();
+    await flush();
   });
 
   it("closes a connection when the paired response transport send fails", async () => {

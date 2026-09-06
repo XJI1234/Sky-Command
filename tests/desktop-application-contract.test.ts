@@ -56,8 +56,8 @@ const options = (relayPort: number, calls: string[], behavior: Readonly<{ readon
   },
   media: {
     dependencies: {
-      rtmp: { listen: () => { calls.push("rtmp-listen"); if (behavior.failRtmpStart) throw new Error("受控 RTMP 启动失败"); }, close: () => { calls.push("rtmp-close"); } },
-      httpFlv: { listen: () => { calls.push("http-flv-listen"); }, close: () => { calls.push("http-flv-close"); if (behavior.failHttpFlvStop) throw new Error("受控 HTTP-FLV 停止失败"); } },
+      rtmp: { listen: async () => { calls.push("rtmp-listen"); if (behavior.failRtmpStart) throw new Error("受控 RTMP 启动失败"); }, close: () => { calls.push("rtmp-close"); } },
+      httpFlv: { listen: async () => { calls.push("http-flv-listen"); }, close: () => { calls.push("http-flv-close"); if (behavior.failHttpFlvStop) throw new Error("受控 HTTP-FLV 停止失败"); } },
       fileFacts: { isExecutableFile: () => true },
       processFactory: () => ({ launch: () => ({ terminate: () => undefined }) }),
       player: { setSource: () => undefined, clear: () => { calls.push("player-clear"); } },
@@ -230,6 +230,22 @@ describe("DesktopApplication", () => {
     const disposedUnsubscribe = created.value.subscribe(() => undefined);
     expect(disposedUnsubscribe).toEqual(expect.any(Function));
     disposedUnsubscribe();
+  });
+
+  it("合并并发释放，避免重复关闭同一组运行时资源", async () => {
+    const calls: string[] = [];
+    const created = DesktopApplication.create(options(await reservePort(), calls));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await expect(created.value.start()).resolves.toMatchObject({ ok: true });
+
+    const first = created.value.dispose();
+    const second = created.value.dispose();
+    expect(second).toBe(first);
+    await Promise.all([first, second]);
+
+    expect(calls).toEqual(["http-flv-listen", "rtmp-listen", "player-clear", "rtmp-close", "http-flv-close", "player-clear"]);
+    expect(created.value.snapshot().phase).toBe("disposed");
   });
 
   it("isolates observer failures and invokes the flight preflight bridge", async () => {

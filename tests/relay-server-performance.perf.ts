@@ -49,8 +49,10 @@ it("relay-server dispatches bounded inbound frames without quadratic work", asyn
   await new Promise<void>((resolve) => setImmediate(resolve));
   const frame = encode({ type: "mission-complete", id: "mission-1" });
   const startedAt = performance.now();
-  for (let index = 0; index < 1_000; index += 1) connection.emit(frame);
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (let batch = 0; batch < 125; batch += 1) {
+    for (let index = 0; index < 8; index += 1) connection.emit(frame);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
   expect(frames).toBe(1_000);
   expect(performance.now() - startedAt).toBeLessThan(500);
   await server.stop();

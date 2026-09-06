@@ -12,7 +12,7 @@ export type TimerScheduler = ServerTimerScheduler & CommandTimerScheduler & Miss
 
 export interface CommandRequest { readonly name: string; readonly fields: JsonObject["fields"]; }
 export interface RelayDiagnosticSink {
-  persist(input: Readonly<{ readonly deviceId: string; readonly runId: string; readonly events: readonly DiagnosticEventFrame[] }>): boolean;
+  persist(input: Readonly<{ readonly deviceId: string; readonly runId: string; readonly events: readonly DiagnosticEventFrame[] }>): Promise<boolean>;
 }
 export interface RelayDeviceSnapshot { readonly deviceId: string; readonly sessionId: string; }
 export interface RelayTelemetrySnapshot { readonly deviceId: string; readonly sessionId: string; readonly payload: JsonObject; readonly capabilities: JsonObject; readonly receivedAtMs: number | null; }
@@ -71,6 +71,7 @@ export interface RelayLinkInstance {
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const key = (connectionId: string, operationId: string): string => `${connectionId}\u0000${operationId}`;
 const frozen = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
+const MAX_QUEUED_DIAGNOSTIC_REPORTS = 8;
 const commandFailure = (deviceId: string, commandId: string, detail: string): CommandOutcome => frozen({ deviceId, commandId, status: "rejected", detail });
 const missionFailure = (deviceId: string, missionId: string, detail: string): MissionOutcome => frozen({ deviceId, missionId, status: "rejected", detail });
 const copyProbeReport = (report: LinkProbeReport): LinkProbeReport => report.status === "measured"
@@ -92,12 +93,36 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
   const ingressByConnection = new Map<string, string>();
   const commandWaiters = new Map<string, { readonly deviceId: string; readonly resolve: (outcome: CommandOutcome) => void }>();
   const persistedDiagnosticKeys = new Map<string, null>();
+  interface QueuedDiagnosticReport {
+    readonly identity: string;
+    readonly persist: () => Promise<void>;
+  }
+  interface DiagnosticPersistenceQueue {
+    readonly reports: QueuedDiagnosticReport[];
+    readonly identities: Set<string>;
+    running: boolean;
+  }
+  const diagnosticQueues = new Map<string, DiagnosticPersistenceQueue>();
   const diagnosticKey = (deviceId: string, runId: string, sequence: number): string => `${deviceId}\u0000${runId}\u0000${sequence}`;
   const rememberDiagnostic = (value: string): void => {
     persistedDiagnosticKeys.set(value, null);
     if (persistedDiagnosticKeys.size > 4_096) persistedDiagnosticKeys.delete(persistedDiagnosticKeys.keys().next().value!);
   };
   const deviceForConnection = (connectionId: string): DeviceSnapshot | null => registry.getByConnection(connectionId);
+  const drainDiagnosticQueue = (connectionId: string, queue: DiagnosticPersistenceQueue): void => {
+    void (async () => {
+      while (diagnosticQueues.get(connectionId) === queue) {
+        const report = queue.reports.shift();
+        if (report === undefined) {
+          queue.running = false;
+          diagnosticQueues.delete(connectionId);
+          return;
+        }
+        try { await report.persist(); } catch { /* diagnostics must not leak into the relay loop */ }
+        queue.identities.delete(report.identity);
+      }
+    })();
+  };
   const snapshot = (): RelayLinkSnapshot => {
     const serverSnapshot = server.snapshot();
     const devices = Object.freeze(registry.snapshot().devices.map((device) => frozen({ deviceId: device.deviceId, sessionId: device.sessionId })));
@@ -147,6 +172,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     }
     if (event.kind === "connection-closed") {
       ingressByConnection.delete(event.connectionId);
+      diagnosticQueues.delete(event.connectionId);
       registry.removeByConnection(event.connectionId); intake.removeConnection(event.connectionId); missionPhases.remove(event.connectionId);
       tracker.cancelConnection(event.connectionId, event.reason);
       missions.cancelConnection(event.connectionId, event.reason);
@@ -166,18 +192,36 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       const device = deviceForConnection(event.connectionId);
       const sink = options.diagnosticSink;
       if (!device || !sink) return;
-      const pending = diagnosticReport.events.filter((item) => !persistedDiagnosticKeys.has(diagnosticKey(device.deviceId, diagnosticReport.runId, item.sequence)));
-      if (pending.length > 0) {
-        let persisted = false;
-        try { persisted = sink.persist(frozen({ deviceId: device.deviceId, runId: diagnosticReport.runId, events: Object.freeze(pending.map((item) => frozen({ ...item }))) })); } catch { persisted = false; }
-        if (!persisted) return;
-        for (const item of pending) rememberDiagnostic(diagnosticKey(device.deviceId, diagnosticReport.runId, item.sequence));
+      const identity = `${diagnosticReport.runId}\u0000${diagnosticReport.events.map((item) => item.sequence).join(",")}`;
+      const queue = diagnosticQueues.get(event.connectionId) ?? { reports: [], identities: new Set<string>(), running: false };
+      if (queue.identities.has(identity) || queue.reports.length >= MAX_QUEUED_DIAGNOSTIC_REPORTS) return;
+      diagnosticQueues.set(event.connectionId, queue);
+      queue.identities.add(identity);
+      queue.reports.push({
+        identity,
+        persist: async () => {
+          if (diagnosticQueues.get(event.connectionId) !== queue) return;
+          const current = deviceForConnection(event.connectionId);
+          if (current?.sessionId !== device.sessionId) return;
+          const pending = diagnosticReport.events.filter((item) => !persistedDiagnosticKeys.has(diagnosticKey(device.deviceId, diagnosticReport.runId, item.sequence)));
+          if (pending.length > 0) {
+            let persisted = false;
+            try { persisted = await sink.persist(frozen({ deviceId: device.deviceId, runId: diagnosticReport.runId, events: Object.freeze(pending.map((item) => frozen({ ...item }))) })); } catch { persisted = false; }
+            if (!persisted) return;
+            for (const item of pending) rememberDiagnostic(diagnosticKey(device.deviceId, diagnosticReport.runId, item.sequence));
+          }
+          if (diagnosticQueues.get(event.connectionId) !== queue || deviceForConnection(event.connectionId)?.sessionId !== device.sessionId) return;
+          // protocol-core rejects an empty diagnostic report before it reaches this root module.
+          const acknowledgedSequence = diagnosticReport.events[diagnosticReport.events.length - 1]!.sequence;
+          const encoded = RelayFrameCodec.encode({ type: "diagnostic-ack", runId: diagnosticReport.runId, acknowledgedSequence });
+          /* c8 ignore next -- validated diagnostic identifiers and positive sequence always encode. */
+          if (encoded.ok) await server.send(event.connectionId, encoded.value);
+        },
+      });
+      if (!queue.running) {
+        queue.running = true;
+        drainDiagnosticQueue(event.connectionId, queue);
       }
-      // protocol-core rejects an empty diagnostic report before it reaches this root module.
-      const acknowledgedSequence = diagnosticReport.events[diagnosticReport.events.length - 1]!.sequence;
-      const encoded = RelayFrameCodec.encode({ type: "diagnostic-ack", runId: diagnosticReport.runId, acknowledgedSequence });
-      /* c8 ignore next -- validated diagnostic identifiers and positive sequence always encode. */
-      if (encoded.ok) void server.send(event.connectionId, encoded.value);
     }
   };
   server.subscribe(handleServerEvent);

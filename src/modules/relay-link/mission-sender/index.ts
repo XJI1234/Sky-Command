@@ -36,7 +36,7 @@ function create(options: MissionSenderOptions): MissionSenderInstance {
     const outcome = immediate(value.connectionId, value.missionId, status, detail); entry.resolve(outcome); publish(outcome);
   };
   const invalidMission = (connectionId: string, missionId: string, detail: string): Promise<MissionOutcome> => Promise.resolve(immediate(connectionId, missionId, "rejected", detail));
-  const send = async (connectionId: string, mission: MissionPayload, sink: MissionSink): Promise<MissionOutcome> => {
+  const send = (connectionId: string, mission: MissionPayload, sink: MissionSink): Promise<MissionOutcome> => {
     const missionId = typeof mission?.missionId === "string" ? mission.missionId : "invalid";
     if (mission === null || typeof mission !== "object") return invalidMission(connectionId, missionId, "Mission payload is invalid");
     if (!validId(connectionId) || !validId(missionId) || [...pending.values()].some((entry) => entry.value.connectionId === connectionId)) return invalidMission(connectionId, missionId, "Mission is already active or invalid");
@@ -48,15 +48,21 @@ function create(options: MissionSenderOptions): MissionSenderInstance {
     const timer = options.scheduler.setTimeout(() => finish(value, "timed-out", "Mission timed out"), options.timeoutMs);
     pending.set(key(connectionId, missionId), { value, timer, resolve }); rebuild();
     const copy = mission.bytes.slice();
-    try {
-      const begin: RelayFrame = { type: "mission-begin", id: missionId, fileName: mission.fileName, size: mission.size, sha256: mission.sha256 };
-      await sink.send(begin);
-      for (let offset = 0; offset < copy.byteLength; offset += ProtocolLimits.maxMissionChunkBytes) {
-        const chunk: RelayFrame = { type: "mission-chunk", id: missionId, data: copy.slice(offset, offset + ProtocolLimits.maxMissionChunkBytes) };
-        await sink.send(chunk);
-      }
-      await sink.send({ type: "mission-complete", id: missionId });
-    } catch { finish(value, "transport-failed", "Mission frame could not be sent"); }
+    const remainsPending = (): boolean => pending.get(key(connectionId, missionId))?.value === value;
+    void (async () => {
+      try {
+        const begin: RelayFrame = { type: "mission-begin", id: missionId, fileName: mission.fileName, size: mission.size, sha256: mission.sha256 };
+        await sink.send(begin);
+        if (!remainsPending()) return;
+        for (let offset = 0; offset < copy.byteLength; offset += ProtocolLimits.maxMissionChunkBytes) {
+          const chunk: RelayFrame = { type: "mission-chunk", id: missionId, data: copy.slice(offset, offset + ProtocolLimits.maxMissionChunkBytes) };
+          await sink.send(chunk);
+          if (!remainsPending()) return;
+        }
+        if (!remainsPending()) return;
+        await sink.send({ type: "mission-complete", id: missionId });
+      } catch { finish(value, "transport-failed", "Mission frame could not be sent"); }
+    })();
     return result;
   };
   const acceptResult = (connectionId: string, result: MissionResultInput): void => {

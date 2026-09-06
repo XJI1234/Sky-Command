@@ -6,7 +6,7 @@ void relay.start();
 
 const isolatedDiagnostics: NodeRelayOptions = {
   ...options,
-  diagnosticSink: { persist: () => true },
+  diagnosticSink: { persist: async () => true },
 };
 NodeRuntime.createRelay(isolatedDiagnostics);
 

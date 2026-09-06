@@ -11,12 +11,65 @@ afterEach(() => {
 });
 
 describe("事故日志", () => {
+  it("没有待写记录时刷新立即完成", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+
+    await expect(journal.flush()).resolves.toBeUndefined();
+  });
+
+  it("诊断积压满时保留新的错误并报告被丢弃的普通记录", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    for (let index = 0; index < 513; index += 1) {
+      journal.record({ link: "uplink", level: "INFO", event: `SAMPLE_${index}`, detail: "normal fact" });
+    }
+    journal.record({ link: "uplink", level: "ERROR", event: "IMPORTANT_FAILURE", detail: "must remain visible" });
+
+    await journal.flush();
+
+    const lines = readFileSync(journal.logPath, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(513);
+    expect(lines.some((line) => line.includes("IMPORTANT_FAILURE"))).toBe(true);
+    expect(lines.find((line) => line.includes("IMPORTANT_FAILURE"))).toContain("dropped=1");
+    expect(lines.some((line) => line.includes("SAMPLE_0"))).toBe(true);
+    expect(lines.some((line) => /\bSAMPLE_1\b/.test(line))).toBe(false);
+  });
+
+  it("在错误详情达到上限时仍保留普通日志的丢弃计数", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    for (let index = 0; index < 513; index += 1) {
+      journal.record({ link: "uplink", level: "INFO", event: `SAMPLE_${index}`, detail: "normal fact" });
+    }
+    journal.record({ link: "uplink", level: "ERROR", event: "IMPORTANT_FAILURE", detail: "x".repeat(600) });
+
+    await journal.flush();
+
+    const important = readFileSync(journal.logPath, "utf8").split("\n").find((line) => line.includes("IMPORTANT_FAILURE"));
+    expect(important).toContain("dropped=1");
+  });
+
+  it("在调用者不直接写文件时刷出已排队的事故记录", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    journal.record({ link: "phone-pc", level: "WARN", event: "RELAY_INTERRUPTED", detail: "Phone session ended" });
+
+    await journal.flush();
+
+    expect(readFileSync(journal.logPath, "utf8")).toContain("RELAY_INTERRUPTED");
+  });
+
   it("脱敏路径、口令和 URL 查询，并截断超长详情", () => {
     expect(sanitizeDetail("token=secret C:\\Users\\a\\secret ws://user:pass@host/path?x=1")).toContain("[REDACTED]");
     expect(sanitizeDetail("a".repeat(600)).length).toBe(512);
   });
 
-  it("把操作台拦住的动作和手机诊断写进同一份事故文件", () => {
+  it("把操作台拦住的动作和手机诊断写进同一份事故文件", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
     const journal = IncidentJournal.create(directory);
@@ -27,23 +80,22 @@ describe("事故日志", () => {
       subscribe: () => () => undefined,
       dispose: () => undefined,
     }, journal);
-    const sink = wrapPhoneDiagnostics({ persist: (input) => { recorded.push(input); return true; } }, journal);
+    const sink = wrapPhoneDiagnostics({ persist: async (input) => { recorded.push(input); return true; } }, journal);
 
-    return Promise.resolve().then(async () => {
-      await expect(gateway.invoke("diagnostics.record", { action: "mission-start", reason: "等待飞机" })).resolves.toEqual({ ok: true, value: true });
-      await expect(gateway.invoke("state.snapshot", undefined)).resolves.toMatchObject({ ok: true });
-      expect(sink.persist({
-        deviceId: "phone-1",
-        runId: "run-1",
-        events: [{ sequence: 1, timestampMillis: 0, level: "WARN", module: "wayline-mission", eventCode: "WAYLINE_UPLOAD_REJECTED", operationId: "cmd-1", safeDetail: "wayline.upload Aircraft is not connected" }],
-      })).toBe(true);
-      const log = readFileSync(journal.logPath, "utf8");
-      expect(log).toContain("CONSOLE_BLOCKED");
-      expect(log).toContain("mission-start");
-      expect(log).not.toContain("state.snapshot");
-      expect(log).toContain("WAYLINE_UPLOAD_REJECTED");
-      expect(recorded).toHaveLength(1);
-    });
+    await expect(gateway.invoke("diagnostics.record", { action: "mission-start", reason: "等待飞机" })).resolves.toEqual({ ok: true, value: true });
+    await expect(gateway.invoke("state.snapshot", undefined)).resolves.toMatchObject({ ok: true });
+    await expect(sink.persist({
+      deviceId: "phone-1",
+      runId: "run-1",
+      events: [{ sequence: 1, timestampMillis: 0, level: "WARN", module: "wayline-mission", eventCode: "WAYLINE_UPLOAD_REJECTED", operationId: "cmd-1", safeDetail: "wayline.upload Aircraft is not connected" }],
+    })).resolves.toBe(true);
+    await journal.flush();
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toContain("CONSOLE_BLOCKED");
+    expect(log).toContain("mission-start");
+    expect(log).not.toContain("state.snapshot");
+    expect(log).toContain("WAYLINE_UPLOAD_REJECTED");
+    expect(recorded).toHaveLength(1);
   });
 
   it("命令超时记为上行 WARN，渲染器高频图传轮询不写日志", async () => {
@@ -62,6 +114,7 @@ describe("事故日志", () => {
     await gateway.invoke("stream-refresh", undefined);
     await gateway.invoke("video-playback", { deviceId: "phone-1" });
     await gateway.invoke("video.playback", { deviceId: "phone-1" });
+    await journal.flush();
     const log = readFileSync(journal.logPath, "utf8");
     expect(log).toContain("MISSION_START_TIMED_OUT");
     expect(log).toContain("uplink");
@@ -88,6 +141,7 @@ describe("事故日志", () => {
 
     await gateway.invoke("mission.upload", { deviceId: "phone-1" });
 
+    await journal.flush();
     const log = readFileSync(journal.logPath, "utf8");
     expect(log).toMatch(/WARN uplink MISSION_UPLOAD_WAYLINE_UPLOAD_FAILED/);
     expect(log).toContain("WAYLINE_UPLOAD_FAILED");
@@ -107,13 +161,14 @@ describe("事故日志", () => {
     }, journal);
     await gateway.invoke("webrtc.start", undefined);
     await gateway.invoke("webrtc.refresh", undefined);
+    await journal.flush();
     const log = readFileSync(journal.logPath, "utf8");
     expect(log).toContain("WEBRTC_START_OK");
     expect(log).toContain("downlink");
     expect(log).not.toContain("WEBRTC_REFRESH");
   });
 
-  it("把图传画面变化记为下行，把任务阶段记为上行", () => {
+  it("把图传画面变化记为下行，把任务阶段记为上行", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
     const journal = IncidentJournal.create(directory);
@@ -132,6 +187,7 @@ describe("事故日志", () => {
       workflow: { devices: [{ deviceId: "phone-1", mission: { phase: "running" }, stream: { phase: "live" }, video: { phase: "playing" } }] },
       runtime: { media: { streams: [{ deviceId: "phone-1", phase: "publisher-ready" }] } }
     });
+    await journal.flush();
     const log = readFileSync(journal.logPath, "utf8");
     expect(log).toMatch(/uplink MISSION_RUNNING/);
     expect(log).toMatch(/downlink STREAM_LIVE/);
@@ -140,7 +196,7 @@ describe("事故日志", () => {
     stop();
   });
 
-  it("连接类事实需连续两次一致才落盘，unknown 不写 WARN", () => {
+  it("连接类事实需连续两次一致才落盘，unknown 不写 WARN", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
     const journal = IncidentJournal.create(directory);
@@ -160,10 +216,13 @@ describe("事故日志", () => {
       },
     }, journal);
     listener?.({ workflow: { devices: [device("disconnected")] }, runtime: {} });
+    await journal.flush();
     expect(readFileSync(journal.logPath, "utf8")).not.toContain("AIRCRAFT_DISCONNECTED");
     listener?.({ workflow: { devices: [device("disconnected")] }, runtime: {} });
+    await journal.flush();
     expect(readFileSync(journal.logPath, "utf8")).toContain("AIRCRAFT_DISCONNECTED");
     listener?.({ workflow: { devices: [device("unknown")] }, runtime: {} });
+    await journal.flush();
     expect(readFileSync(journal.logPath, "utf8")).not.toMatch(/WARN .*AIRCRAFT_UNKNOWN/);
     stop();
   });

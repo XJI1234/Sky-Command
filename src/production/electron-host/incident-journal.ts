@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { RelayDiagnosticSink } from "../../modules/relay-link/index.js";
 import type { DesktopUiGatewayInstance, GatewayResult } from "../desktop-ui-gateway/index.js";
@@ -19,9 +19,11 @@ export interface IncidentJournal {
   readonly ndjsonPath: string;
   readonly logPath: string;
   readonly record: (input: IncidentRecord) => void;
+  readonly flush: () => Promise<void>;
 }
 
 const MAX_DETAIL = 512;
+const MAX_QUEUED_RECORDS = 512;
 const quietMethods = new Set([
   "state.snapshot",
   "network.hint",
@@ -62,17 +64,49 @@ function text(value: unknown): string | null {
 function create(directory = defaultDirectory()): IncidentJournal {
   const ndjsonPath = join(directory, "incident.ndjson");
   const logPath = join(directory, "incident.log");
-  const write = (line: string, jsonLine: string): void => {
+  const pending: Array<{ readonly line: string; readonly jsonLine: string; readonly level: IncidentLevel }> = [];
+  let draining: Promise<void> | null = null;
+  let dropped = 0;
+  const scheduleDrain = (): void => {
+    if (pending.length > 0 && draining === null) draining = drain();
+  };
+  const drain = async (): Promise<void> => {
     try {
-      mkdirSync(dirname(ndjsonPath), { recursive: true });
-      appendFileSync(ndjsonPath, `${jsonLine}\n`, "utf8");
-      appendFileSync(logPath, `${line}\n`, "utf8");
+      while (pending.length > 0) {
+        const batch = pending.splice(0, pending.length);
+        await mkdir(dirname(ndjsonPath), { recursive: true });
+        await appendFile(ndjsonPath, `${batch.map((entry) => entry.jsonLine).join("\n")}\n`, "utf8");
+        await appendFile(logPath, `${batch.map((entry) => entry.line).join("\n")}\n`, "utf8");
+      }
     } catch { /* 日志失败不得挡住指挥链路 */ }
+    finally {
+      draining = null;
+      if (pending.length > 0) scheduleDrain();
+    }
+  };
+  const reserveQueueSlot = (level: IncidentLevel): boolean => {
+    if (pending.length < MAX_QUEUED_RECORDS) {
+      return true;
+    }
+    if (level === "INFO") {
+      dropped += 1;
+      return false;
+    }
+    const infoIndex = pending.findIndex((candidate) => candidate.level === "INFO");
+    if (infoIndex >= 0) pending.splice(infoIndex, 1);
+    else pending.shift();
+    dropped += 1;
+    return true;
   };
   const record = (input: IncidentRecord): void => {
+    if (!reserveQueueSlot(input.level)) return;
     const ts = new Date().toISOString();
     const event = sanitizeDetail(input.event).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 64) || "UNKNOWN";
-    const detail = sanitizeDetail(input.detail);
+    const dropMarker = dropped > 0 ? ` dropped=${dropped}` : "";
+    const sanitizedDetail = sanitizeDetail(input.detail);
+    const detail = dropMarker.length === 0
+      ? sanitizedDetail
+      : `${Array.from(sanitizedDetail).slice(0, Math.max(0, MAX_DETAIL - dropMarker.length)).join("").trimEnd()}${dropMarker}`;
     const deviceId = input.deviceId === undefined ? undefined : sanitizeDetail(input.deviceId).slice(0, 128);
     const operationId = input.operationId === undefined ? undefined : sanitizeDetail(input.operationId).slice(0, 128);
     const payload = {
@@ -85,9 +119,15 @@ function create(directory = defaultDirectory()): IncidentJournal {
       detail,
     };
     const line = [ts, input.level, input.link, event, deviceId ?? "-", operationId ?? "-", detail].join(" ");
-    write(line, JSON.stringify(payload));
+    pending.push({ line, jsonLine: JSON.stringify(payload), level: input.level });
+    dropped = 0;
+    scheduleDrain();
   };
-  return Object.freeze({ ndjsonPath, logPath, record });
+  const flush = async (): Promise<void> => {
+    scheduleDrain();
+    while (draining !== null) await draining;
+  };
+  return Object.freeze({ ndjsonPath, logPath, record, flush });
 }
 
 function linkForMethod(method: string): IncidentLink {
@@ -188,7 +228,7 @@ export function wrapGateway(gateway: DesktopUiGatewayInstance, journal: Incident
 
 export function wrapPhoneDiagnostics(store: RelayDiagnosticSink, journal: IncidentJournal): RelayDiagnosticSink {
   return Object.freeze({
-    persist(input: Parameters<RelayDiagnosticSink["persist"]>[0]): boolean {
+    persist(input: Parameters<RelayDiagnosticSink["persist"]>[0]): Promise<boolean> {
       for (const event of input.events) {
         journal.record({
           link: "phone",

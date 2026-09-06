@@ -26,7 +26,7 @@ instance.subscribe(listener) -> unsubscribe
 
 ## 生命周期
 
-初始状态为 `idle`。`start()` 固定先调用中继监听，再启动旧媒体服务。中继启动失败映射为 `RELAY_START_FAILED`。当 `mediaRequired` 为 `true` 时，旧媒体启动失败必须尝试停止中继，最终映射为 `MEDIA_START_FAILED`；当 `mediaRequired` 为 `false` 时，旧媒体启动失败只保留在媒体公开快照，中继保持运行，`start()` 返回成功并进入 `running`。任何底层异常都必须收敛为稳定结果，不能穿过本模块。
+初始状态为 `idle`。`start()` 固定先调用中继监听，再等待旧媒体服务的 RTMP 与 HTTP-FLV 端口实际绑定。中继启动失败映射为 `RELAY_START_FAILED`。当 `mediaRequired` 为 `true` 时，旧媒体启动失败必须尝试停止中继，最终映射为 `MEDIA_START_FAILED`；当 `mediaRequired` 为 `false` 时，旧媒体启动失败只保留在媒体公开快照，中继保持运行，`start()` 返回成功并进入 `running`。不得因仅调用了 Node 的 `listen()` 就进入 `running`；任何底层异常都必须收敛为稳定结果，不能穿过本模块。
 
 `stop()` 固定先请求直播控制停止所有已知设备的直播，再停止媒体服务，最后停止中继。停止必须尽力完成所有后续清理；某一步失败不会阻止更靠后的清理。完全停止后状态为 `idle`。重复 `stop()` 返回稳定的 `NOT_RUNNING`，重复 `start()` 返回 `ALREADY_RUNNING`，启动或停止尚未完成时另一操作返回 `OPERATION_IN_PROGRESS`。
 

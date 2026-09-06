@@ -159,7 +159,7 @@ const start = async (options: DesktopTestHostOptions): Promise<DesktopTestHostIn
     address: { host: "127.0.0.1", port: network.relayPort }, handshakeTimeoutMs: 10_000,
     maxConnections: 8, commandTimeoutMs: 10_000, missionTimeoutMs: 20_000,
     diagnosticSink: Object.freeze({
-      persist: (input: Parameters<RelayDiagnosticSink["persist"]>[0]): boolean => {
+      persist: async (input: Parameters<RelayDiagnosticSink["persist"]>[0]): Promise<boolean> => {
         diagnostics.push(input);
         return true;
       },
@@ -220,8 +220,8 @@ const start = async (options: DesktopTestHostOptions): Promise<DesktopTestHostIn
     },
   });
   const mediaPipeline = MediaPipeline.create({
-    rtmp: { listen: () => undefined, close: () => undefined },
-    httpFlv: { listen: () => undefined, close: () => undefined },
+    rtmp: { listen: async () => undefined, close: () => undefined },
+    httpFlv: { listen: async () => undefined, close: () => undefined },
     fileFacts: { isExecutableFile: () => true },
     processFactory: () => ({
       launch: () => ({ terminate: () => undefined }),

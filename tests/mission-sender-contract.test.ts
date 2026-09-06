@@ -56,6 +56,35 @@ describe("mission-sender contract", () => {
     await expect(second).resolves.toMatchObject({ status: "disconnected" });
   });
 
+  it("returns a timeout and does not send later mission frames when a blocked write resumes", async () => {
+    const { sender, scheduler } = create();
+    const frames: unknown[] = [];
+    let releaseBegin: (() => void) | null = null;
+    let blockFirstSend = true;
+    const sink: MissionSink = {
+      send: async (frame) => {
+        frames.push(frame);
+        if (!blockFirstSend) return;
+        blockFirstSend = false;
+        await new Promise<void>((resolve) => { releaseBegin = resolve; });
+      },
+    };
+    let outcome: unknown = null;
+    const transfer = sender.send("connection-1", payload(), sink);
+    void transfer.then((value) => { outcome = value; });
+    await flush();
+    expect(frames).toEqual([expect.objectContaining({ type: "mission-begin", id: "mission-1" })]);
+
+    scheduler.fireAll();
+    await flush();
+
+    expect(outcome).toMatchObject({ status: "timed-out" });
+    releaseBegin?.();
+    await flush();
+    await expect(transfer).resolves.toMatchObject({ status: "timed-out" });
+    expect(frames).toEqual([expect.objectContaining({ type: "mission-begin", id: "mission-1" })]);
+  });
+
   it("contains sink/listener failures and detaches input bytes", async () => {
     const { sender } = create(); const sink = new Sink(); sink.fail = true;
     sender.subscribe(() => { throw new Error("listener failure"); });

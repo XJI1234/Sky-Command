@@ -37,9 +37,9 @@ export interface MediaSnapshot {
   readonly revision: number;
   readonly endpoint: Readonly<{ readonly host: string; readonly port: number; readonly source: "manual" | "automatic" }> | null;
   /** Shared desktop RTMP listener state. It is not a statement about any device's stream. */
-  readonly rtmpIngest: Readonly<{ readonly phase: "idle" | "listening" | "failed" }>;
+  readonly rtmpIngest: Readonly<{ readonly phase: "idle" | "starting" | "listening" | "failed" }>;
   /** Shared desktop HTTP-FLV listener state. It is not a statement about any device's stream. */
-  readonly httpFlv: Readonly<{ readonly phase: "idle" | "listening" | "failed" }>;
+  readonly httpFlv: Readonly<{ readonly phase: "idle" | "starting" | "listening" | "failed" }>;
   readonly streams: readonly MediaStreamSnapshot[];
   readonly player: VideoPlayerSnapshot;
   readonly diagnostic: string | null;
@@ -48,7 +48,7 @@ export type PipelineResult<T> =
   | Readonly<{ readonly ok: true; readonly value: T }>
   | Readonly<{ readonly ok: false; readonly code: "INVALID_INPUT" | "ALREADY_RUNNING" | "NOT_STARTED" | "DISPOSED" | "FFMPEG_NOT_FOUND" | "FFMPEG_INSPECTION_FAILED" | "HTTP_FLV_START_FAILED" | "RTMP_START_FAILED" | "HTTP_FLV_STOP_FAILED" | "RTMP_STOP_FAILED" | "PLAYER_FAILED" | "UNKNOWN_DEVICE"; readonly value: MediaSnapshot }>;
 export interface MediaPipelineInstance {
-  readonly start: (input: unknown) => PipelineResult<MediaSnapshot>;
+  readonly start: (input: unknown) => Promise<PipelineResult<MediaSnapshot>>;
   readonly stop: () => PipelineResult<MediaSnapshot>;
   readonly evaluate: (now: unknown) => PipelineResult<MediaSnapshot>;
   readonly notifyPlaybackReady: (deviceId: unknown) => PipelineResult<MediaSnapshot>;
@@ -109,6 +109,7 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
   let nextStreamNumber = 1;
   let httpFlvListening = false;
   let rtmpListening = false;
+  let lifecycleToken = 0;
   const streams = new Map<string, StreamRecord>();
   const invalidatedSources = new Set<string>();
   const clock = dependencies.clock ?? (() => Date.now());
@@ -125,6 +126,7 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
       ? freeze({ host, port: endpoint.port, source: "automatic" as const })
       : freeze({ ...endpoint });
   };
+  const isDisposed = (): boolean => phase === "disposed";
   const current = (): MediaSnapshot => freeze({ phase, revision, endpoint: currentEndpoint(), rtmpIngest: freeze({ phase: rtmpIngest.snapshot().phase }), httpFlv: freeze({ phase: httpFlv.snapshot().phase }), streams: freeze([...streams].map(([deviceId, record]) => {
     const state = record.health.snapshot(record.streamId)!;
     return freeze({ deviceId, streamId: record.streamId, phase: state.state, playbackUrl: record.playbackUrl, diagnostic: state.diagnostic });
@@ -153,23 +155,35 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
     }
   };
   let rtmpIngest: ReturnType<typeof RtmpIngest.create>;
-  const wrappedRtmp: RtmpIngressPort = { listen: (port, events) => dependencies.rtmp.listen(port, { onPublished: (path) => { events.onPublished(path); syncStreams(); }, onUnpublished: (path) => { events.onUnpublished(path); syncStreams(); } }), close: () => dependencies.rtmp.close() };
+  const wrappedRtmp: RtmpIngressPort = { listen: async (port, events) => dependencies.rtmp.listen(port, { onPublished: (path) => { events.onPublished(path); syncStreams(); }, onUnpublished: (path) => { events.onUnpublished(path); syncStreams(); } }), close: () => dependencies.rtmp.close() };
   rtmpIngest = RtmpIngest.create(wrappedRtmp);
   return freeze({
     snapshot: current,
-    start: (raw) => {
+    start: async (raw) => {
       if (phase === "disposed") return failure("DISPOSED", current());
-      if (httpFlvListening || rtmpListening) return failure("ALREADY_RUNNING", current());
+      if (phase === "starting" || httpFlvListening || rtmpListening) return failure("ALREADY_RUNNING", current());
       if (!validInput(raw)) return failure("INVALID_INPUT", current());
+      const token = ++lifecycleToken;
       phase = "starting"; revision += 1;
       const resolved = endpointApi.resolve(raw.interfaces, raw.manualHost);
       if (!resolved.ok) return failure("INVALID_INPUT", transition("failed", DIAGNOSTIC));
       endpoint = freeze({ host: resolved.value.host, port: resolved.value.port, source: resolved.value.source });
-      const httpFlvStarted = httpFlv.start({ port: options.httpFlvPort, rootDirectory: raw.httpFlvRootDirectory });
+      const httpFlvStarted = await httpFlv.start({ port: options.httpFlvPort, rootDirectory: raw.httpFlvRootDirectory });
+      if (token !== lifecycleToken || isDisposed()) {
+        if (httpFlvStarted.ok) runCatchingStop(httpFlv);
+        return failure("DISPOSED", current());
+      }
       if (!httpFlvStarted.ok) return failure("HTTP_FLV_START_FAILED", transition("failed", DIAGNOSTIC));
       httpFlvListening = true;
-      phase = "running";
-      const rtmpStarted = rtmpIngest.start(options.rtmpPort);
+      const rtmpStarted = await rtmpIngest.start(options.rtmpPort);
+      if (token !== lifecycleToken || isDisposed()) {
+        if (rtmpStarted.ok) runCatchingStop(rtmpIngest);
+        if (httpFlvListening) {
+          runCatchingStop(httpFlv);
+          httpFlvListening = false;
+        }
+        return failure("DISPOSED", current());
+      }
       if (!rtmpStarted.ok) {
         streams.clear();
         const stopped = httpFlv.stop();
@@ -251,14 +265,26 @@ function create(dependencies: MediaPipelineDependencies, options: MediaPipelineO
     },
     dispose: () => {
       if (phase === "disposed") return;
+      lifecycleToken += 1;
       streams.clear();
-      rtmpIngest.stop();
-      httpFlv.stop();
+      if (rtmpListening) {
+        runCatchingStop(rtmpIngest);
+        rtmpListening = false;
+      }
+      if (httpFlvListening) {
+        runCatchingStop(httpFlv);
+        httpFlvListening = false;
+      }
       player.clear();
+      endpoint = null;
       phase = "disposed";
       revision += 1;
     }
   });
+}
+
+function runCatchingStop(service: { readonly stop: () => unknown }): void {
+  try { service.stop(); } catch { /* late cleanup must not resurrect the disposed pipeline */ }
 }
 
 class MediaPipelineApi { readonly create = create; }

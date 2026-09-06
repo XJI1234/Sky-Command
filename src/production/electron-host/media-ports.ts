@@ -1,18 +1,24 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
+import type { Server as NetServer } from "node:net";
 import type { HttpFlvServerPort } from "../../modules/media-pipeline/http-flv-server/index.js";
 import type { RtmpIngressPort } from "../../modules/media-pipeline/rtmp-ingest/index.js";
 
 const require = createRequire(import.meta.url);
 type PublishListener = (id: string, streamPath: string) => void;
 type NodeEvent = { on: (name: string, listener: PublishListener) => void; removeListener: (name: string, listener: PublishListener) => void };
-type RtmpServer = { run: () => void; stop: () => void };
+type RtmpServer = { readonly tcpServer: NetServer; readonly run: () => void; readonly stop: () => void };
 type FlvSession = { readonly run: () => void; readonly stop: () => void };
 type FlvSessionCtor = new (config: object, req: IncomingMessage, res: ServerResponse) => FlvSession;
 const NodeRtmpServer = require("node-media-server/src/node_rtmp_server.js") as new (config: { rtmp: { port: number; chunk_size: number; gop_cache: boolean; ping: number; ping_timeout: number } }) => RtmpServer;
 const NodeFlvSession = require("node-media-server/src/node_flv_session.js") as FlvSessionCtor;
-const mediaContext = require("node-media-server/src/node_core_ctx.js") as { nodeEvent: NodeEvent };
+const mediaContext = require("node-media-server/src/node_core_ctx.js") as {
+  readonly nodeEvent: NodeEvent;
+  readonly publishers: ReadonlyMap<string, string>;
+};
+// Bounds one local browser's queued video without changing the RTMP publisher's frame flow.
+const MAX_FLV_PENDING_BYTES = 2 * 1024 * 1024;
 
 export interface MediaPortLogEvent {
   readonly kind: string;
@@ -69,9 +75,16 @@ function deviceIdFromFlvPath(pathname: string): string | null {
   }
 }
 
-/** 只过滤 SEI-only 等无图像 AVC 包；绝不因背压丢 P 帧（本机回环丢帧会直接造成卡顿花屏）。 */
-function filterSeiOnlyWrites(res: ServerResponse): void {
+/** 只过滤 SEI-only 等无图像 AVC 包；慢播放器直接断开重连，绝不选择性丢 P 帧。 */
+function filterSeiOnlyWrites(res: ServerResponse, onBackpressureLimit: () => void): void {
   const write = res.write.bind(res);
+  let exceeded = false;
+  const terminateSlowPlayer = (): void => {
+    if (exceeded) return;
+    exceeded = true;
+    try { onBackpressureLimit(); } catch { /* cleanup must not make a video write fail */ }
+    try { res.destroy(); } catch { /* the request close handler also releases the NMS session */ }
+  };
   res.write = ((chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
     if (Buffer.isBuffer(chunk) && chunk.length >= 11 && chunk[0] === 9) {
       const size = chunk.readUIntBE(1, 3);
@@ -84,7 +97,9 @@ function filterSeiOnlyWrites(res: ServerResponse): void {
         }
       }
     }
-    return (write as (chunk: unknown, encoding?: unknown, cb?: unknown) => boolean)(chunk, encoding, cb);
+    const accepted = (write as (chunk: unknown, encoding?: unknown, cb?: unknown) => boolean)(chunk, encoding, cb);
+    if (res.writableLength >= MAX_FLV_PENDING_BYTES) terminateSlowPlayer();
+    return accepted;
   }) as typeof res.write;
 }
 
@@ -93,9 +108,28 @@ function createRtmpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLog
   let published: PublishListener | null = null;
   let unpublished: PublishListener | null = null;
   return {
-    listen: (port, events) => {
+    listen: async (port, events) => {
       if (server !== null) throw new Error("rtmp already listening");
       shared.rtmpPort = port;
+      const candidate = new NodeRtmpServer({ rtmp: { port, chunk_size: 60_000, gop_cache: true, ping: 30, ping_timeout: 60 } });
+      server = candidate;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const cleanup = (): void => {
+            candidate.tcpServer.removeListener("listening", onListening);
+            candidate.tcpServer.removeListener("error", onError);
+          };
+          const onListening = (): void => { cleanup(); resolve(); };
+          const onError = (error: Error): void => { cleanup(); reject(error); };
+          candidate.tcpServer.once("listening", onListening);
+          candidate.tcpServer.once("error", onError);
+          try { candidate.run(); } catch (error) { cleanup(); reject(error); }
+        });
+      } catch (error) {
+        if (server === candidate) server = null;
+        try { candidate.stop(); } catch { /* bind failure cleanup is best effort */ }
+        throw error;
+      }
       published = (_id, streamPath) => {
         const path = publishPath(String(streamPath));
         const deviceId = deviceIdFromPublishPath(path) ?? undefined;
@@ -110,8 +144,6 @@ function createRtmpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLog
       };
       mediaContext.nodeEvent.on("postPublish", published);
       mediaContext.nodeEvent.on("donePublish", unpublished);
-      server = new NodeRtmpServer({ rtmp: { port, chunk_size: 60_000, gop_cache: true, ping: 30, ping_timeout: 60 } });
-      server.run();
     },
     close: () => {
       if (published !== null) mediaContext.nodeEvent.removeListener("postPublish", published);
@@ -128,10 +160,10 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
   let server: Server | null = null;
   const sessions = new Map<string, FlvSession>();
   return {
-    listen: (input) => {
+    listen: async (input) => {
       if (server !== null) throw new Error("http-flv already listening");
       mkdirSync(input.rootDirectory, { recursive: true });
-      server = createServer((req, res) => {
+      const candidate = createServer((req, res) => {
         if (req.method === "OPTIONS") {
           res.writeHead(204, {
             "Access-Control-Allow-Origin": "*",
@@ -163,6 +195,13 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           res.end();
           return;
         }
+        const streamPath = `/live/${encodeURIComponent(deviceId)}`;
+        // HTTP-FLV source is unavailable; do not create an NMS idle player.
+        if (!mediaContext.publishers.has(streamPath)) {
+          res.writeHead(404, { "Access-Control-Allow-Origin": "*" });
+          res.end();
+          return;
+        }
         // 直连 NMS 发布会话播放器槽位，禁止再 RTMP 回环拉流（回环+丢帧曾把有效码率打到几十 kbps）。
         const previous = sessions.get(deviceId);
         if (previous !== undefined) {
@@ -176,10 +215,14 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           Connection: "close",
         });
         try { req.socket.setNoDelay(true); } catch { /* ignore */ }
-        filterSeiOnlyWrites(res);
         (req as IncomingMessage & { nmsConnectionType?: string }).nmsConnectionType = "http";
         const session = new NodeFlvSession({}, req, res);
         sessions.set(deviceId, session);
+        filterSeiOnlyWrites(res, () => {
+          if (sessions.get(deviceId) === session) sessions.delete(deviceId);
+          try { session.stop(); } catch { /* NMS session cleanup is best effort after socket backpressure */ }
+          try { log?.({ kind: "http-flv-client-backpressure", deviceId, detail: "HTTP-FLV player was disconnected after its output queue reached the limit" }); } catch { /* diagnostics must not affect media */ }
+        });
         const clear = (): void => {
           if (sessions.get(deviceId) === session) sessions.delete(deviceId);
         };
@@ -190,7 +233,24 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           if (!res.writableEnded) try { res.end(); } catch { /* ignore */ }
         }
       });
-      server.listen(input.port, input.host);
+      server = candidate;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const cleanup = (): void => {
+            candidate.removeListener("listening", onListening);
+            candidate.removeListener("error", onError);
+          };
+          const onListening = (): void => { cleanup(); resolve(); };
+          const onError = (error: Error): void => { cleanup(); reject(error); };
+          candidate.once("listening", onListening);
+          candidate.once("error", onError);
+          try { candidate.listen(input.port, input.host); } catch (error) { cleanup(); reject(error); }
+        });
+      } catch (error) {
+        if (server === candidate) server = null;
+        try { candidate.close(); } catch { /* bind failure cleanup is best effort */ }
+        throw error;
+      }
       log?.({ kind: "http-flv-listening", detail: `filtered HTTP-FLV listening on ${input.port}` });
     },
     close: () => {

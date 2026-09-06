@@ -101,7 +101,7 @@ describe("NodeRuntime", () => {
     const relay = NodeRuntime.createRelay({
       address: { host: "127.0.0.1", port: 0 }, handshakeTimeoutMs: 1_000, maxConnections: 1,
       commandTimeoutMs: 1_000, missionTimeoutMs: 1_000,
-      diagnosticSink: { persist: (report) => { received.push(report); return true; } },
+      diagnosticSink: { persist: async (report) => { received.push(report); return true; } },
     });
 
     expect(received).toEqual([]);

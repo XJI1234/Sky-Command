@@ -216,6 +216,7 @@ function instance(dependencies: Readonly<{
   let revision = 0;
   let operation: Operation = null;
   let active: Promise<DesktopApplicationResult> | null = null;
+  let disposal: Promise<void> | null = null;
   let disposed = false;
   const listeners = new Set<(snapshot: DesktopApplicationSnapshot) => void>();
   const snapshot = (): DesktopApplicationSnapshot => freeze({ phase, revision, runtime: publicSnapshot(copy(dependencies.runtime.snapshot())), workflow: publicSnapshot(copy(dependencies.workflow.snapshot())) });
@@ -265,19 +266,9 @@ function instance(dependencies: Readonly<{
     })();
     return active;
   };
-  return freeze({
-    start,
-    stop,
-    snapshot,
-    subscribe: (listener) => {
-      if (disposed) return () => undefined;
-      listeners.add(listener);
-      let subscribed = true;
-      return () => { if (subscribed) { subscribed = false; listeners.delete(listener); } };
-    },
-    workflow: () => dependencies.workflow,
-    dispose: async () => {
-      if (disposed) return;
+  const dispose = (): Promise<void> => {
+    if (disposal !== null) return disposal;
+    disposal = (async () => {
       if (active !== null) await active;
       if (phase === "running") await stop();
       disposed = true;
@@ -292,7 +283,21 @@ function instance(dependencies: Readonly<{
       listeners.clear();
       phase = "disposed";
       revision += 1;
-    }
+    })();
+    return disposal;
+  };
+  return freeze({
+    start,
+    stop,
+    snapshot,
+    subscribe: (listener) => {
+      if (disposed) return () => undefined;
+      listeners.add(listener);
+      let subscribed = true;
+      return () => { if (subscribed) { subscribed = false; listeners.delete(listener); } };
+    },
+    workflow: () => dependencies.workflow,
+    dispose,
   });
 }
 

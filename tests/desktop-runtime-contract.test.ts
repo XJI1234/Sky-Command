@@ -2,11 +2,30 @@ import { describe, expect, it } from "vitest";
 import { DesktopRuntime } from "../src/production/desktop-runtime/index.js";
 
 describe("DesktopRuntime", () => {
+  it("等待媒体端口真实就绪，绝不因仅调用监听而进入运行状态", async () => {
+    const calls: string[] = [];
+    let mediaEntered: (() => void) | null = null;
+    let confirmMedia: ((value: unknown) => void) | null = null;
+    const entered = new Promise<void>((resolve) => { mediaEntered = resolve; });
+    const runtime = DesktopRuntime.create({
+      relay: { start: async () => { calls.push("relay.start"); return { ok: true }; }, stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({}), subscribe: () => () => undefined },
+      media: { start: () => { calls.push("media.start"); mediaEntered!(); return new Promise((resolve) => { confirmMedia = resolve; }); }, stop: () => ({ ok: true }), snapshot: () => ({ phase: "starting" }), dispose: () => undefined },
+      live: { list: () => [], stop: async () => ({ ok: true }) },
+    }, { mediaStartInput: {} });
+
+    const starting = runtime.start();
+    await entered;
+    expect(runtime.snapshot()).toMatchObject({ phase: "starting" });
+    confirmMedia!({ ok: true, value: { phase: "running" } });
+    await expect(starting).resolves.toMatchObject({ ok: true, value: { phase: "running" } });
+    expect(calls).toEqual(["relay.start", "media.start"]);
+  });
+
   it("starts the relay before the media pipeline", async () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => { calls.push("relay.start"); return { ok: true, value: { state: "listening", endpoint: { host: "127.0.0.1", port: 9160 } } }; }, stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({ state: "stopped" }), devices: () => [], latestTelemetry: () => null, sendCommand: async () => ({ status: "rejected" }), sendMission: async () => ({ status: "rejected" }), subscribe: () => () => undefined },
-      media: { start: () => { calls.push("media.start"); return { ok: true, value: { phase: "running" } }; }, stop: () => { calls.push("media.stop"); return { ok: true, value: { phase: "idle" } }; }, snapshot: () => ({ phase: "idle" }), dispose: () => undefined },
+      media: { start: async () => { calls.push("media.start"); return { ok: true, value: { phase: "running" } }; }, stop: () => { calls.push("media.stop"); return { ok: true, value: { phase: "idle" } }; }, snapshot: () => ({ phase: "idle" }), dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
 
@@ -19,7 +38,7 @@ describe("DesktopRuntime", () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => { calls.push("relay.start"); return { ok: true }; }, stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({}), subscribe: () => () => undefined },
-      media: { start: () => { calls.push("media.start"); return { ok: false }; }, stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => undefined },
+      media: { start: async () => { calls.push("media.start"); return { ok: false }; }, stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
 
@@ -31,7 +50,7 @@ describe("DesktopRuntime", () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => { calls.push("relay.start"); return { ok: true }; }, stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({}), subscribe: () => () => undefined },
-      media: { start: () => { calls.push("media.start"); return { ok: false }; }, stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({ phase: "failed" }), dispose: () => undefined },
+      media: { start: async () => { calls.push("media.start"); return { ok: false }; }, stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({ phase: "failed" }), dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {}, mediaRequired: false });
 
@@ -45,7 +64,7 @@ describe("DesktopRuntime", () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({}), subscribe: () => () => undefined },
-      media: { start: () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => undefined },
+      media: { start: async () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => undefined },
       live: { list: () => [{ deviceId: "phone-1", phase: "streaming" }, { deviceId: "phone-2", phase: "idle" }], stop: async (deviceId) => { calls.push(`live.stop:${deviceId}`); return { ok: true }; } }
     }, { mediaStartInput: {} });
 
@@ -58,7 +77,7 @@ describe("DesktopRuntime", () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({}), subscribe: () => () => { calls.push("relay.unsubscribe"); } },
-      media: { start: () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => { calls.push("media.dispose"); } },
+      media: { start: async () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => { calls.push("media.dispose"); } },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
 
@@ -72,7 +91,7 @@ describe("DesktopRuntime", () => {
     let resolveRelay: ((value: unknown) => void) | undefined;
     const runtime = DesktopRuntime.create({
       relay: { start: () => new Promise((resolve) => { resolveRelay = resolve; }), stop: async () => undefined, snapshot: () => ({}), subscribe: () => () => undefined },
-      media: { start: () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => ({}), dispose: () => undefined },
+      media: { start: async () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => ({}), dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
 
@@ -87,7 +106,7 @@ describe("DesktopRuntime", () => {
     const snapshots: unknown[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => undefined, snapshot: () => ({ state: "stopped" }), subscribe: () => () => undefined },
-      media: { start: () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => ({ phase: "idle" }), dispose: () => undefined },
+      media: { start: async () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => ({ phase: "idle" }), dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
     runtime.subscribe(() => { throw new Error("observer"); });
@@ -107,7 +126,7 @@ describe("DesktopRuntime", () => {
   it("normalizes dependency faults and exposes stable lifecycle rejection codes", async () => {
     const relayFailure = DesktopRuntime.create({
       relay: { start: async () => { throw new Error("relay"); }, stop: async () => undefined, snapshot: () => null, subscribe: () => () => undefined },
-      media: { start: () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => 1, dispose: () => undefined },
+      media: { start: async () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => 1, dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
     await expect(relayFailure.start()).resolves.toEqual({ ok: false, code: "RELAY_START_FAILED", value: { phase: "idle", revision: 2, relay: null, media: null } });
@@ -115,7 +134,7 @@ describe("DesktopRuntime", () => {
 
     const mediaFailure = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => undefined, snapshot: () => ({}), subscribe: () => () => undefined },
-      media: { start: () => { throw new Error("media"); }, stop: () => ({ ok: true }), snapshot: () => ({}), dispose: () => undefined },
+      media: { start: async () => { throw new Error("media"); }, stop: () => ({ ok: true }), snapshot: () => ({}), dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
     await expect(mediaFailure.start()).resolves.toMatchObject({ ok: false, code: "MEDIA_START_FAILED" });
@@ -125,7 +144,7 @@ describe("DesktopRuntime", () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => { calls.push("relay.stop"); throw new Error("relay"); }, snapshot: () => ({}), subscribe: () => () => undefined },
-      media: { start: () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: false }; }, snapshot: () => ({}), dispose: () => undefined },
+      media: { start: async () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: false }; }, snapshot: () => ({}), dispose: () => undefined },
       live: { list: () => [null, { deviceId: 1, phase: "streaming" }, { deviceId: "phone-1", phase: "starting" }, { deviceId: "phone-2", phase: "stopping" }], stop: async (deviceId) => { calls.push(`live.stop:${deviceId}`); return { ok: true }; } }
     }, { mediaStartInput: {} });
     expect(runtime.services().relay).toBeDefined();
@@ -143,7 +162,7 @@ describe("DesktopRuntime", () => {
     let relayListener: (() => void) | undefined;
     const runtime = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => undefined, snapshot: () => ({}), subscribe: (listener) => { relayListener = listener; return () => undefined; } },
-      media: { start: () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => ({}), dispose: () => undefined },
+      media: { start: async () => ({ ok: true }), stop: () => ({ ok: true }), snapshot: () => ({}), dispose: () => undefined },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
     const revisions: number[] = [];
@@ -160,7 +179,7 @@ describe("DesktopRuntime", () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => { calls.push("relay.stop"); throw new Error("relay"); }, snapshot: () => ({}), subscribe: () => () => undefined },
-      media: { start: () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => undefined },
+      media: { start: async () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => undefined },
       live: { list: () => 1 as never, stop: async (deviceId) => { calls.push(`live.stop:${deviceId}`); return { ok: true }; } }
     }, { mediaStartInput: {} });
     await runtime.start();
@@ -172,7 +191,7 @@ describe("DesktopRuntime", () => {
     const calls: string[] = [];
     const runtime = DesktopRuntime.create({
       relay: { start: async () => ({ ok: true }), stop: async () => { calls.push("relay.stop"); }, snapshot: () => ({}), subscribe: () => () => { calls.push("relay.unsubscribe"); } },
-      media: { start: () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => { calls.push("media.dispose"); } },
+      media: { start: async () => ({ ok: true }), stop: () => { calls.push("media.stop"); return { ok: true }; }, snapshot: () => ({}), dispose: () => { calls.push("media.dispose"); } },
       live: { list: () => [], stop: async () => ({ ok: true }) }
     }, { mediaStartInput: {} });
     await runtime.dispose();

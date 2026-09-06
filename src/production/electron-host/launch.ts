@@ -10,6 +10,7 @@ import { NodeDiagnosticStore } from "../../adapters/node-diagnostic-store/index.
 import { createMediaPorts } from "./media-ports.js";
 import { IncidentJournal, mediaLogger, watchApplication, wrapGateway, wrapPhoneDiagnostics } from "./incident-journal.js";
 import { runtimeDataPaths } from "./runtime-paths.js";
+import { shutdownDesktopHost } from "./shutdown-sequence.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = [here, join(here, ".."), join(here, "..", "..", "..")].find((dir) => existsSync(join(dir, "package.json"))) ?? join(here, "..");
@@ -199,7 +200,17 @@ async function launch(): Promise<void> {
   const started = await shell.start();
   if (!started.ok) throw new Error(started.code);
   launchLog("window ready");
-  app.on("window-all-closed", () => { void shell.dispose(); app.quit(); });
+  let shutdownStarted = false;
+  app.on("window-all-closed", () => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    void shutdownDesktopHost({
+      disposeShell: shell.dispose,
+      disposeApplication: created.value.dispose,
+      flushJournal: journal.flush,
+      quit: () => { app.quit(); },
+    }).catch(() => undefined);
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {

@@ -64,4 +64,21 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(reuse).toBeGreaterThanOrEqual(0);
     expect(detach).toBeGreaterThan(reuse);
   });
+
+  it("慢速 HTTP-FLV 播放客户端达到写入上限时关闭整个会话，而不无限积压视频帧", () => {
+    const source = mediaPorts();
+
+    expect(source).toContain("MAX_FLV_PENDING_BYTES");
+    expect(source).toContain("res.writableLength");
+    expect(source).toContain("session.stop()");
+    expect(source).toContain("res.destroy()");
+  });
+
+  it("只为已有 RTMP 发布者创建 HTTP-FLV 播放会话，避免无源请求滞留为 NMS idlePlayers", () => {
+    const source = mediaPorts();
+
+    expect(source).toContain("mediaContext.publishers.has");
+    expect(source).toContain("HTTP-FLV source is unavailable");
+    expect(source).toContain("res.writeHead(404");
+  });
 });

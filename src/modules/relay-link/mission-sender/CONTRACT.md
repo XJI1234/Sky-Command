@@ -19,6 +19,6 @@ instance.subscribe(listener) -> unsubscribe
 
 ## 规则和安全
 
-发送严格依次输出 `mission-begin`、不超过 48 KiB 的 `mission-chunk` 和 `mission-complete`；只在匹配结果、超时或取消时完成。帧发送成功仍是待确认，不等于 DJI 任务成功。每连接只允许一个待处理任务；重复任务 ID 或活动连接返回拒绝且不发帧。异步前复制所有字节。
+发送严格依次输出 `mission-begin`、不超过 48 KiB 的 `mission-chunk` 和 `mission-complete`；只在匹配结果、超时或取消时完成。帧发送成功仍是待确认，不等于 DJI 任务成功。每连接只允许一个待处理任务；重复任务 ID 或活动连接返回拒绝且不发帧。异步前复制所有字节。每一次异步写入返回后都必须重新确认该任务仍处于待处理态；一旦匹配结果、截止时间或会话取消已经结束任务，不得再开始发送任何后续 chunk 或 complete。已经交给写入端、但尚未从其返回的单帧无法在本模块撤回；这时任务结果仍如实为超时/断线/已完成，且不得以该单帧实际到达伪装为手机或 DJI 已接受任务。
 
 结果状态为 `succeeded`、`rejected`、`timed-out`、`disconnected`、`transport-failed`。大小、SHA-256 小写摘要、文件名均须符合 `protocol-core`；失败不发部分任务且不遗留待处理项；写入端失败立即转为 `transport-failed`。快照、结果、帧、字节均冻结或复制，监听器异常隔离。测试覆盖块边界、摘要、顺序、超时、断线、写入失败、恶意结果和 100% 门禁。

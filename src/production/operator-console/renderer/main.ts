@@ -1,6 +1,7 @@
 import flvjs from "flv.js";
 import { OperatorConsole } from "../index.js";
 import { operationFeedback, type OperationFeedback } from "./operation-feedback.js";
+import { createRenderScheduler, RenderDeadlineExceededError } from "./render-scheduler.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight";
@@ -31,6 +32,26 @@ const bridge = (): RendererBridge => {
   const api = (window as unknown as { skyCommand?: RendererBridge }).skyCommand;
   if (api === undefined || typeof api.invoke !== "function") throw new Error("渲染进程只能通过 skyCommand.invoke 访问网关");
   return api;
+};
+
+const renderAbortError = (): Error => {
+  const error = new Error("Renderer redraw was superseded");
+  error.name = "AbortError";
+  return error;
+};
+
+const awaitCurrentRender = <T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
+  if (signal === undefined) return operation;
+  if (signal.aborted) return Promise.reject(renderAbortError());
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => { cleanup(); reject(renderAbortError()); };
+    const cleanup = (): void => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    void operation.then(
+      (value) => { cleanup(); signal.aborted ? reject(renderAbortError()) : resolve(value); },
+      (error: unknown) => { cleanup(); reject(error); },
+    );
+  });
 };
 
 const unwrap = (result: unknown): unknown => {
@@ -592,18 +613,18 @@ const playbackUrl = (value: unknown): string | null => {
   return typeof nestedUrl === "string" && nestedUrl.trim().length > 0 ? nestedUrl : null;
 };
 
-async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
+async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, signal?: AbortSignal): Promise<void> {
   if (!view.playbackReady) {
     if (attachedUrl !== null) detachVideo();
     return;
   }
   if (view.streamDeviceId === null) return;
-  const url = playbackUrl(await bridge().invoke("video-playback", { deviceId: view.streamDeviceId }));
+  const url = playbackUrl(await awaitCurrentRender(bridge().invoke("video-playback", { deviceId: view.streamDeviceId }), signal));
   if (url === null) return;
   attachVideo(url);
   if (flvPlayer === null || attachedUrl !== url) return;
   if (selectedPlaybackDeviceId !== view.streamDeviceId) {
-    const selected = await bridge().invoke("stream-select", { deviceId: view.streamDeviceId });
+    const selected = await awaitCurrentRender(bridge().invoke("stream-select", { deviceId: view.streamDeviceId }), signal);
     if (!accepted(selected)) return;
     selectedPlaybackDeviceId = view.streamDeviceId;
   }
@@ -938,10 +959,10 @@ const runtimeStatusRows = (view: ReturnType<typeof OperatorConsole.project>, dev
   statusRow("手机推流 [手机图传运行状态]", streamRuntimeLabel(device), false),
 ].join("") + desktopMediaStatusRows(view, device, streamDeviceId);
 
-async function projectView(): Promise<ReturnType<typeof OperatorConsole.project>> {
-  const snapshotResult = unwrap(await bridge().invoke("state-snapshot"));
+async function projectView(signal?: AbortSignal): Promise<ReturnType<typeof OperatorConsole.project>> {
+  const snapshotResult = unwrap(await awaitCurrentRender(bridge().invoke("state-snapshot"), signal));
   const snapshot = unwrap(snapshotResult) ?? {};
-  const hintResult = unwrap(await bridge().invoke("network-hint"));
+  const hintResult = unwrap(await awaitCurrentRender(bridge().invoke("network-hint"), signal));
   const listed = read(hintResult, "hints");
   const liveHints = Array.isArray(listed) ? listed.filter((item): item is string => typeof item === "string" && item.startsWith("ws://")) : [];
   return OperatorConsole.project({
@@ -1270,9 +1291,9 @@ const previewGeometry = (value: unknown): { polyline: RouteMapPreview["polyline"
   return points.length >= 2 && start !== null && end !== null ? { polyline: points, startMarker: start, endMarker: end } : null;
 };
 
-async function syncRouteMap(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
+async function syncRouteMap(view: ReturnType<typeof OperatorConsole.project>, signal?: AbortSignal): Promise<void> {
   if (state.workspace !== "routes") return;
-  await ensureRouteMap(el("map"));
+  await awaitCurrentRender(ensureRouteMap(el("map")), signal);
   resizeRouteMap();
   el("map-notice").textContent = routeMapNotice();
   const routeId = view.selectedRoute?.routeId ?? null;
@@ -1284,7 +1305,7 @@ async function syncRouteMap(view: ReturnType<typeof OperatorConsole.project>): P
     el("route-summary").textContent = `${view.selectedRoute?.displayName ?? ""} · ${routeMapNotice()}`;
     return;
   }
-  const preview = previewGeometry(await bridge().invoke("route-preview", { routeId }));
+  const preview = previewGeometry(await awaitCurrentRender(bridge().invoke("route-preview", { routeId }), signal));
   if (preview === null) {
     clearRoutePreview();
     el("map-notice").textContent = "当前航线没有可预览的航迹。";
@@ -1295,21 +1316,33 @@ async function syncRouteMap(view: ReturnType<typeof OperatorConsole.project>): P
   el("route-summary").textContent = `${view.selectedRoute?.displayName ?? ""} · ${preview.polyline.length} 个航点`;
 }
 
-async function render(): Promise<void> {
+const renderOnce = async (signal: AbortSignal): Promise<void> => {
   document.querySelectorAll("nav button").forEach((button) => {
     button.classList.toggle("active", (button as HTMLButtonElement).dataset.workspace === state.workspace);
   });
   document.querySelectorAll("main").forEach((node) => {
     node.classList.toggle("active", node.id === `workspace-${state.workspace}`);
   });
-  const view = await projectView();
+  const view = await projectView(signal);
   state.missionDeviceId = view.missionDeviceId;
   state.streamDeviceId = view.streamDeviceId;
   renderDevices(view);
   renderRoutes(view);
   renderFlight(view);
-  await syncRouteMap(view);
-}
+  await syncRouteMap(view, signal);
+  await ensurePlayback(view, signal);
+};
+
+const renderScheduler = createRenderScheduler(renderOnce, { deadlineMs: 5_000 });
+const render = async (): Promise<void> => {
+  try {
+    await renderScheduler.request();
+  } catch (error) {
+    show(error instanceof RenderDeadlineExceededError
+      ? "界面读取超时，正在自动重试"
+      : "界面刷新失败，请检查手机是否仍连接；若持续出现请重启软件");
+  }
+};
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
@@ -1501,7 +1534,6 @@ const tick = async (): Promise<void> => {
    try {
      await bridge().invoke("stream-refresh");
      await render();
-    await ensurePlayback(await projectView());
   } catch {
     show("界面刷新失败，请检查手机是否仍连接；若持续出现请重启软件");
   }

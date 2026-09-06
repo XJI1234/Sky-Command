@@ -15,7 +15,7 @@ interface RtmpIngressPort {
   readonly listen: (port: number, events: Readonly<{
     readonly onPublished: (path: string) => void;
     readonly onUnpublished: (path: string) => void;
-  }>) => void;
+  }>) => Promise<void>;
   readonly close: () => void;
 }
 
@@ -26,7 +26,7 @@ interface IngestStreamSnapshot {
 }
 
 interface RtmpIngestSnapshot {
-  readonly phase: "idle" | "listening" | "failed";
+  readonly phase: "idle" | "starting" | "listening" | "failed";
   readonly revision: number;
   readonly port: number | null;
   readonly streams: readonly IngestStreamSnapshot[];
@@ -34,11 +34,11 @@ interface RtmpIngestSnapshot {
 }
 ```
 
-端口接口、启动和停止结果沿用 `http-flv-server` 的同步语义：端口必须为 1024..65535；监听固定接收所有路径，但模块只承认精确格式 `/live/{encodedDeviceId}`。`deviceId` 解码后为 1..128 字符、非空白且不含 NUL；编码必须是 `encodeURIComponent(deviceId)` 的规范结果。非规范路径、未知路径和适配器在停止后的迟到事件都必须静默忽略，不能创建流。
+端口接口、启动和停止结果沿用 `http-flv-server` 的异步就绪语义：端口必须为 1024..65535；适配器的 `listen` 只有在端口真正绑定时才能兑现。监听固定接收所有路径，但模块只承认精确格式 `/live/{encodedDeviceId}`。`deviceId` 解码后为 1..128 字符、非空白且不含 NUL；编码必须是 `encodeURIComponent(deviceId)` 的规范结果。非规范路径、未知路径和适配器在停止后的迟到事件都必须静默忽略，不能创建流。
 
 ## 生命周期和流隔离
 
-1. `start(port)` 成功后为 `listening`；适配器回调只在当前监听代次生效。启动失败为 `failed` 并给出 `无法启动 RTMP 接收服务。请检查端口与桌面端权限。`。
+1. `start(port)` 先进入 `starting`，只有适配器 `listen` 成功兑现后才为 `listening`；适配器回调只在当前监听代次生效。启动同步抛错或异步拒绝均为 `failed`，并给出 `无法启动 RTMP 接收服务。请检查端口与桌面端权限。`。`starting` 与 `listening` 均保留请求端口，其他阶段端口为 `null`。
 2. `onPublished('/live/{deviceId}')` 把该设备流标为 `active`。同设备重复发布不增加修订，不影响其他设备。
 3. `onUnpublished('/live/{deviceId}')` 只将已有活动流改为 `ended`。未知或已结束流不改变状态。
 4. `stop()` 成功后清空所有流并回到 `idle`；停止失败保持当前监听与流状态，诊断为 `无法停止 RTMP 接收服务。请检查桌面端权限。`。

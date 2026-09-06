@@ -53,7 +53,7 @@ export interface RelayServerSnapshot {
   readonly connections: readonly ConnectionSnapshot[];
 }
 
-export type RelayServerErrorCode = "SERVER_ALREADY_STARTED" | "LISTEN_FAILED" | "NOT_CONNECTED" | "INVALID_FRAME" | "SEND_FAILED";
+export type RelayServerErrorCode = "SERVER_ALREADY_STARTED" | "LISTEN_FAILED" | "NOT_CONNECTED" | "INVALID_FRAME" | "SEND_FAILED" | "OUTBOUND_OVERFLOW";
 export interface RelayServerError { readonly code: RelayServerErrorCode; readonly message: string; }
 export type StartResult = Readonly<{ readonly ok: true; readonly value: RelayServerSnapshot }> | Readonly<{ readonly ok: false; readonly error: RelayServerError }>;
 export type SendResult = Readonly<{ readonly ok: true }> | Readonly<{ readonly ok: false; readonly error: RelayServerError }>;
@@ -83,6 +83,8 @@ const serverError = (code: RelayServerErrorCode, message: string): RelayServerEr
 const success = <T extends object>(value: T): Readonly<{ readonly ok: true } & T> => Object.freeze({ ok: true as const, ...value });
 const failure = <T = never>(code: RelayServerErrorCode, message: string): Readonly<{ readonly ok: false; readonly error: RelayServerError }> => Object.freeze({ ok: false as const, error: serverError(code, message) });
 const probeFailure = (status: "unavailable" | "timed-out" | "disconnected", sampleCount: number): LinkProbeReport => Object.freeze({ status, sampleCount });
+const MAX_PENDING_INBOUND_FRAMES = 16;
+const MAX_PENDING_OUTBOUND_SENDS = 16;
 const probeResult = (value: unknown): RelayConnectionProbeResult | null => {
   try {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
@@ -121,10 +123,19 @@ function create(options: RelayServerOptions): RelayServerInstance {
     reservedDeviceId: string | null;
     timeout: unknown;
     closed: boolean;
-    inbound: Promise<void> | null;
-    outbound: Promise<void>;
+    inbound: Uint8Array[];
+    inboundDraining: boolean;
+    outbound: OutboundSend[];
+    outboundDraining: boolean;
+    activeOutbound: OutboundSend | null;
     measurement: Promise<LinkProbeReport> | null;
     unsubscribe: readonly (() => void)[];
+  }
+
+  interface OutboundSend {
+    readonly bytes: Uint8Array;
+    readonly resolve: (result: SendResult) => void;
+    settled: boolean;
   }
 
   const snapshotConnection = (entry: InternalConnection): ConnectionSnapshot => {
@@ -140,9 +151,22 @@ function create(options: RelayServerOptions): RelayServerInstance {
   };
   const changeState = (next: RelayServerState): void => { state = next; publish(Object.freeze({ kind: "state-changed" as const, snapshot: snapshot() })); };
 
+  const settleOutbound = (outbound: OutboundSend, result: SendResult): void => {
+    if (outbound.settled) return;
+    outbound.settled = true;
+    outbound.resolve(result);
+  };
+
   const finish = (entry: InternalConnection, reason: string): void => {
     if (entry.closed) return;
     entry.closed = true;
+    entry.inbound.length = 0;
+    if (entry.activeOutbound !== null) {
+      settleOutbound(entry.activeOutbound, failure("NOT_CONNECTED", "Connection is not paired"));
+      entry.activeOutbound = null;
+    }
+    for (const outbound of entry.outbound) settleOutbound(outbound, failure("NOT_CONNECTED", "Connection is not paired"));
+    entry.outbound.length = 0;
     options.scheduler.clearTimeout(entry.timeout);
     for (const unsubscribe of entry.unsubscribe) unsubscribe();
     connections.delete(entry.id);
@@ -157,6 +181,30 @@ function create(options: RelayServerOptions): RelayServerInstance {
 
   const sendDirect = async (entry: InternalConnection, bytes: Uint8Array): Promise<void> => {
     await entry.transport.send(bytes.slice());
+  };
+
+  const drainOutbound = (entry: InternalConnection): void => {
+    void (async () => {
+      while (!entry.closed) {
+        const outbound = entry.outbound.shift();
+        if (outbound === undefined) break;
+        entry.activeOutbound = outbound;
+        try {
+          await entry.transport.send(outbound.bytes.slice());
+          settleOutbound(outbound, success({}));
+        } catch {
+          settleOutbound(outbound, failure("SEND_FAILED", "Frame could not be sent"));
+          finish(entry, "send-failed");
+        } finally {
+          if (entry.activeOutbound === outbound) entry.activeOutbound = null;
+        }
+      }
+      entry.outboundDraining = false;
+      if (!entry.closed && entry.outbound.length > 0) {
+        entry.outboundDraining = true;
+        drainOutbound(entry);
+      }
+    })();
   };
 
   const handleDecoded = async (entry: InternalConnection, result: DecodeResult): Promise<void> => {
@@ -193,9 +241,33 @@ function create(options: RelayServerOptions): RelayServerInstance {
     publish(Object.freeze({ kind: "frame" as const, connectionId: entry.id, frame }));
   };
 
+  const drainInbound = (entry: InternalConnection): void => {
+    void (async () => {
+      // Let a close delivered in the same transport turn cancel work not yet begun.
+      await Promise.resolve();
+      while (!entry.closed) {
+        const next = entry.inbound.shift();
+        if (next === undefined) break;
+        await handleDecoded(entry, RelayFrameCodec.decode(next));
+      }
+      entry.inboundDraining = false;
+      if (!entry.closed && entry.inbound.length > 0) {
+        entry.inboundDraining = true;
+        drainInbound(entry);
+      }
+    })();
+  };
+
   const enqueueInbound = (entry: InternalConnection, bytes: Uint8Array): void => {
-    const run = async (): Promise<void> => { if (!entry.closed) await handleDecoded(entry, RelayFrameCodec.decode(bytes)); };
-    entry.inbound = (entry.inbound ?? Promise.resolve()).then(run, run);
+    if (entry.closed) return;
+    if (entry.inbound.length >= MAX_PENDING_INBOUND_FRAMES) {
+      finish(entry, "inbound-overflow");
+      return;
+    }
+    entry.inbound.push(bytes);
+    if (entry.inboundDraining) return;
+    entry.inboundDraining = true;
+    drainInbound(entry);
   };
 
   const accept = (transportConnection: RelayConnection): void => {
@@ -206,7 +278,7 @@ function create(options: RelayServerOptions): RelayServerInstance {
     }
     const entry: InternalConnection = {
       id: options.createConnectionId(), transport: transportConnection, phase: "awaiting-hello", deviceId: null, sessionId: null, reservedDeviceId: null,
-      timeout: null, closed: false, inbound: null, outbound: Promise.resolve(), measurement: null, unsubscribe: []
+      timeout: null, closed: false, inbound: [], inboundDraining: false, outbound: [], outboundDraining: false, activeOutbound: null, measurement: null, unsubscribe: []
     };
     connections.set(entry.id, entry);
     entry.timeout = options.scheduler.setTimeout(() => { if (entry.phase === "awaiting-hello") finish(entry, "handshake-timeout"); }, options.handshakeTimeoutMs);
@@ -257,18 +329,18 @@ function create(options: RelayServerOptions): RelayServerInstance {
     if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0 || bytes.byteLength > ProtocolLimits.maxFrameBytes || RelayFrameCodec.decode(bytes).kind === "rejected") return failure("INVALID_FRAME", "Frame is invalid");
     const entry = connections.get(connectionId);
     if (!entry || entry.closed || entry.phase !== "paired") return failure("NOT_CONNECTED", "Connection is not paired");
+    if (entry.outbound.length + (entry.activeOutbound === null ? 0 : 1) >= MAX_PENDING_OUTBOUND_SENDS) {
+      finish(entry, "outbound-overflow");
+      return failure("OUTBOUND_OVERFLOW", "Outbound frame queue overflowed");
+    }
     const copy = bytes.slice();
     let resolveResult!: (result: SendResult) => void;
     const result = new Promise<SendResult>((resolve) => { resolveResult = resolve; });
-    entry.outbound = entry.outbound.then(
-      async () => {
-        if (entry.closed || entry.phase !== "paired") { resolveResult(failure("NOT_CONNECTED", "Connection is not paired")); return; }
-        try { await entry.transport.send(copy.slice()); resolveResult(success({})); }
-        catch { resolveResult(failure("SEND_FAILED", "Frame could not be sent")); finish(entry, "send-failed"); }
-      },
-      /* c8 ignore next -- every prior outbound branch resolves its error to the caller. */
-      () => { resolveResult(failure("SEND_FAILED", "Frame could not be sent")); }
-    );
+    entry.outbound.push({ bytes: copy, resolve: resolveResult, settled: false });
+    if (!entry.outboundDraining) {
+      entry.outboundDraining = true;
+      drainOutbound(entry);
+    }
     return result;
   };
   const measureLink = (connectionId: string): Promise<LinkProbeReport> => {

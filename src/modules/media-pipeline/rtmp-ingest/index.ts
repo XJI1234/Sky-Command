@@ -1,12 +1,12 @@
 export interface RtmpIngressPort {
-  readonly listen: (port: number, events: Readonly<{ readonly onPublished: (path: string) => void; readonly onUnpublished: (path: string) => void }>) => void;
+  readonly listen: (port: number, events: Readonly<{ readonly onPublished: (path: string) => void; readonly onUnpublished: (path: string) => void }>) => Promise<void>;
   readonly close: () => void;
 }
 
 export interface IngestStreamSnapshot { readonly deviceId: string; readonly phase: "active" | "ended"; readonly revision: number; }
-export interface RtmpIngestSnapshot { readonly phase: "idle" | "listening" | "failed"; readonly revision: number; readonly port: number | null; readonly streams: readonly IngestStreamSnapshot[]; readonly diagnostic: string | null; }
+export interface RtmpIngestSnapshot { readonly phase: "idle" | "starting" | "listening" | "failed"; readonly revision: number; readonly port: number | null; readonly streams: readonly IngestStreamSnapshot[]; readonly diagnostic: string | null; }
 export type IngestResult = Readonly<{ readonly ok: true; readonly value: RtmpIngestSnapshot }> | Readonly<{ readonly ok: false; readonly code: "INVALID_INPUT" | "ALREADY_LISTENING" | "LISTEN_FAILED" | "NOT_LISTENING" | "CLOSE_FAILED"; readonly value: RtmpIngestSnapshot }>;
-export interface RtmpIngestInstance { readonly start: (port: unknown) => IngestResult; readonly stop: () => IngestResult; readonly snapshot: () => RtmpIngestSnapshot; }
+export interface RtmpIngestInstance { readonly start: (port: unknown) => Promise<IngestResult>; readonly stop: () => IngestResult; readonly snapshot: () => RtmpIngestSnapshot; }
 
 type StreamPhase = IngestStreamSnapshot["phase"];
 type Stream = { readonly phase: StreamPhase; readonly revision: number };
@@ -88,14 +88,14 @@ function create(port: RtmpIngressPort): RtmpIngestInstance {
 
   return freeze({
     snapshot: current,
-    start: (raw) => {
+    start: async (raw) => {
       if (!validPort(raw)) return freeze({ ok: false as const, code: "INVALID_INPUT" as const, value: current() });
-      if (state.phase === "listening") return freeze({ ok: false as const, code: "ALREADY_LISTENING" as const, value: current() });
+      if (state.phase === "starting" || state.phase === "listening") return freeze({ ok: false as const, code: "ALREADY_LISTENING" as const, value: current() });
       const token = freeze({});
       generation = token;
-      state = { phase: "listening", revision: state.revision, port: raw, diagnostic: null };
+      transition({ phase: "starting", port: raw, diagnostic: null });
       try {
-        port.listen(raw, freeze({ onPublished: (path) => update(path, "active", token), onUnpublished: (path) => update(path, "ended", token) }));
+        await port.listen(raw, freeze({ onPublished: (path) => update(path, "active", token), onUnpublished: (path) => update(path, "ended", token) }));
         return freeze({ ok: true as const, value: transition({ phase: "listening", port: raw, diagnostic: null }) });
       } catch {
         generation = null;

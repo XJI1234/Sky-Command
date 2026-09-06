@@ -300,8 +300,8 @@ describe("relay-link root contract", () => {
   it("persists each mobile diagnostic batch before acknowledging its final sequence", async () => {
     const fixture = options();
     const persisted: unknown[] = [];
-    (fixture.options as { diagnosticSink?: { persist(input: unknown): boolean } }).diagnosticSink = {
-      persist: (input) => { persisted.push(input); return true; }
+    (fixture.options as { diagnosticSink?: { persist(input: unknown): Promise<boolean> } }).diagnosticSink = {
+      persist: async (input) => { persisted.push(input); return true; }
     };
     const link = RelayLink.create(fixture.options);
     await link.start();
@@ -325,12 +325,199 @@ describe("relay-link root contract", () => {
     expect(acknowledgements).toEqual([{ type: "diagnostic-ack", runId: "run-1", acknowledgedSequence: 1 }]);
   });
 
+  it("waits for asynchronous diagnostic persistence before acknowledging the phone", async () => {
+    const fixture = options();
+    let completePersistence: ((result: boolean) => void) | null = null;
+    (fixture.options as { diagnosticSink?: { persist(input: unknown): Promise<boolean> } }).diagnosticSink = {
+      persist: () => new Promise<boolean>((resolve) => { completePersistence = resolve; }),
+    };
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    phone.emit({
+      type: "diagnostic-report",
+      runId: "run-async",
+      events: [{ sequence: 1, timestampMillis: 1, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }],
+    });
+    await flush();
+
+    expect(phone.sent.map((bytes) => RelayFrameCodec.decode(bytes)).filter((result) => result.kind === "decoded" && result.frame.type === "diagnostic-ack")).toHaveLength(0);
+    completePersistence?.(true);
+    await flush();
+
+    expect(phone.sent.map((bytes) => RelayFrameCodec.decode(bytes)).filter((result) => result.kind === "decoded" && result.frame.type === "diagnostic-ack")).toHaveLength(1);
+  });
+
+  it("drops a diagnostic report whose connection closes before its inbound work starts", async () => {
+    const fixture = options();
+    const persisted: unknown[] = [];
+    (fixture.options as { diagnosticSink?: { persist(input: unknown): Promise<boolean> } }).diagnosticSink = {
+      persist: async (input) => { persisted.push(input); return true; },
+    };
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    phone.emit({
+      type: "diagnostic-report",
+      runId: "run-closed-before-start",
+      events: [{ sequence: 1, timestampMillis: 1, level: "WARN", module: "relay-gateway", eventCode: "CLOSED", operationId: null, safeDetail: "close immediately" }],
+    });
+    phone.emitClose("lost");
+    await flush();
+
+    expect(persisted).toEqual([]);
+    expect(phone.sent.map((bytes) => RelayFrameCodec.decode(bytes)).filter((result) => result.kind === "decoded" && result.frame.type === "diagnostic-ack")).toHaveLength(0);
+  });
+
+  it("does not acknowledge a report when its session closes during persistence", async () => {
+    const fixture = options();
+    const persisted: number[] = [];
+    let completePersistence: ((result: boolean) => void) | null = null;
+    (fixture.options as { diagnosticSink?: { persist(input: { events: readonly { sequence: number }[] }): Promise<boolean> } }).diagnosticSink = {
+      persist: (input) => {
+        persisted.push(input.events[0]!.sequence);
+        return new Promise<boolean>((resolve) => { completePersistence = resolve; });
+      },
+    };
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    phone.emit({
+      type: "diagnostic-report",
+      runId: "run-closed-during-write",
+      events: [{ sequence: 1, timestampMillis: 1, level: "ERROR", module: "relay-gateway", eventCode: "WRITE", operationId: null, safeDetail: "waiting for disk" }],
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    phone.emitClose("lost");
+    completePersistence?.(true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(persisted).toEqual([1]);
+    expect(phone.sent.map((bytes) => RelayFrameCodec.decode(bytes)).filter((result) => result.kind === "decoded" && result.frame.type === "diagnostic-ack")).toHaveLength(0);
+  });
+
+  it("does not persist queued diagnostics or acknowledge an old session after replacement", async () => {
+    const fixture = options({
+      createSessionId: ((count) => (deviceId: string) => `session-${deviceId}-${++count}`)(0),
+    });
+    const persisted: number[] = [];
+    const completions: Array<(result: boolean) => void> = [];
+    (fixture.options as { diagnosticSink?: { persist(input: { events: readonly { sequence: number }[] }): Promise<boolean> } }).diagnosticSink = {
+      persist: (input) => {
+        persisted.push(input.events[0]!.sequence);
+        return new Promise<boolean>((resolve) => completions.push(resolve));
+      },
+    };
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const first = fixture.transport.connect();
+    first.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    for (const sequence of [1, 2]) {
+      first.emit({
+        type: "diagnostic-report",
+        runId: "run-replaced",
+        events: [{ sequence, timestampMillis: sequence, level: "INFO", module: "relay-gateway", eventCode: "QUEUED", operationId: null, safeDetail: "waiting for disk" }],
+      });
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(persisted).toEqual([1]);
+
+    const replacement = fixture.transport.connect();
+    replacement.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+    completions[0]!(true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(link.devices()).toEqual([{ deviceId: "phone-1", sessionId: "session-phone-1-2" }]);
+    expect(persisted).toEqual([1]);
+    expect(first.sent.map((bytes) => RelayFrameCodec.decode(bytes)).filter((result) => result.kind === "decoded" && result.frame.type === "diagnostic-ack")).toHaveLength(0);
+    expect(replacement.sent.map((bytes) => RelayFrameCodec.decode(bytes)).filter((result) => result.kind === "decoded" && result.frame.type === "diagnostic-ack")).toHaveLength(0);
+  });
+
+  it("keeps a later diagnostic batch ordered while the previous batch is being persisted", async () => {
+    const fixture = options();
+    const completions: Array<(result: boolean) => void> = [];
+    const persisted: number[] = [];
+    (fixture.options as { diagnosticSink?: { persist(input: { events: readonly { sequence: number }[] }): Promise<boolean> } }).diagnosticSink = {
+      persist: (input) => {
+        persisted.push(input.events[0]!.sequence);
+        return new Promise<boolean>((resolve) => completions.push(resolve));
+      },
+    };
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    for (const sequence of [1, 2]) {
+      phone.emit({
+        type: "diagnostic-report",
+        runId: "run-ordered",
+        events: [{ sequence, timestampMillis: sequence, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }],
+      });
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(persisted).toEqual([1]);
+
+    completions[0]!(true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(persisted).toEqual([1, 2]);
+    completions[1]!(true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(phone.sent.map((bytes) => RelayFrameCodec.decode(bytes)).filter((result) => result.kind === "decoded" && result.frame.type === "diagnostic-ack")).toHaveLength(2);
+  });
+
+  it("bounds queued diagnostic batches when an unresponsive sink receives invalidly rapid reports", async () => {
+    const fixture = options();
+    const completions: Array<(result: boolean) => void> = [];
+    const persisted: number[] = [];
+    (fixture.options as { diagnosticSink?: { persist(input: { events: readonly { sequence: number }[] }): Promise<boolean> } }).diagnosticSink = {
+      persist: (input) => {
+        persisted.push(input.events[0]!.sequence);
+        return new Promise<boolean>((resolve) => completions.push(resolve));
+      },
+    };
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+
+    for (let sequence = 1; sequence <= 10; sequence += 1) {
+      phone.emit({
+        type: "diagnostic-report",
+        runId: "run-bounded",
+        events: [{ sequence, timestampMillis: sequence, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }],
+      });
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    for (let index = 0; index < 9; index += 1) {
+      completions[index]!(true);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(persisted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
   it("在日志未落盘时不确认，在重复上报时不重复写入", async () => {
     const fixture = options();
     const calls: unknown[] = [];
     let attempt = 0;
-    (fixture.options as { diagnosticSink?: { persist(input: unknown): boolean } }).diagnosticSink = {
-      persist: (input) => {
+    (fixture.options as { diagnosticSink?: { persist(input: unknown): Promise<boolean> } }).diagnosticSink = {
+      persist: async (input) => {
         calls.push(input);
         attempt += 1;
         if (attempt === 1) return false;
@@ -346,18 +533,18 @@ describe("relay-link root contract", () => {
     const report = { type: "diagnostic-report" as const, runId: "run-1", events: [{ sequence: 1, timestampMillis: 1, level: "INFO" as const, module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }] };
 
     phone.emit(report);
-    await flush();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     phone.emit(report);
-    await flush();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(phone.sent.filter((bytes) => {
       const decoded = RelayFrameCodec.decode(bytes);
       return decoded.kind === "decoded" && decoded.frame.type === "diagnostic-ack";
     })).toHaveLength(0);
 
     phone.emit(report);
-    await flush();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     phone.emit(report);
-    await flush();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(calls).toHaveLength(3);
     const acknowledgements = phone.sent
       .map((bytes) => RelayFrameCodec.decode(bytes))
@@ -386,19 +573,28 @@ describe("relay-link root contract", () => {
   it("限定诊断去重索引的内存上限", async () => {
     const fixture = options();
     let writes = 0;
-    (fixture.options as { diagnosticSink?: { persist(input: unknown): boolean } }).diagnosticSink = { persist: () => { writes += 1; return true; } };
+    (fixture.options as { diagnosticSink?: { persist(input: unknown): Promise<boolean> } }).diagnosticSink = { persist: async () => { writes += 1; return true; } };
     const link = RelayLink.create(fixture.options);
     await link.start();
     const phone = fixture.transport.connect();
     phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
     await flush();
-    for (let sequence = 1; sequence <= 4_097; sequence += 1) {
-      phone.emit({ type: "diagnostic-report", runId: "run-1", events: [{ sequence, timestampMillis: sequence, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }] });
+    for (let start = 1; start <= 4_096; start += 32) {
+      phone.emit({
+        type: "diagnostic-report",
+        runId: "run-1",
+        events: Array.from({ length: 32 }, (_, index) => {
+          const sequence = start + index;
+          return { sequence, timestampMillis: sequence, level: "INFO" as const, module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" };
+        }),
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
+    phone.emit({ type: "diagnostic-report", runId: "run-1", events: [{ sequence: 4_097, timestampMillis: 4_097, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }] });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     phone.emit({ type: "diagnostic-report", runId: "run-1", events: [{ sequence: 1, timestampMillis: 1, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }] });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(writes).toBe(4_098);
+    expect(writes).toBe(130);
   });
 
   it("将非法的中继入口设备标识稳定视为不存在", () => {
