@@ -32,11 +32,14 @@
       border-right: 1px solid var(--line);
       overflow: hidden;
     }
-    #workspace-flight .flight-controls {
-      overflow: auto;
-      padding: 0;
-      background: var(--panel-strong);
-    }
+     #workspace-flight .flight-controls {
+       display: grid;
+       grid-template-rows: auto minmax(0, 1fr) auto;
+       min-height: 0;
+       overflow: hidden;
+       padding: 0;
+       background: var(--panel-strong);
+     }
     #workspace-flight video {
       width: 100%;
       flex: 1 1 auto;
@@ -97,15 +100,14 @@
     .remove-route { border: 1px solid #704044; background: #161013; color: #ff9d9d; }
     .route-mission-control > p { margin: 12px 0 0; color: #93a1a4; font: 11px/1.5 monospace; }
     .flight-controls h2, .flight-controls h3, .flight-controls p { margin-top: 0; }
-    .control-heading { padding: 20px 20px 16px; border-bottom: 1px solid var(--line); }
-    .control-heading h2 { margin-bottom: 6px; color: var(--accent); }
-    .control-heading p { margin-bottom: 0; }
-    .flight-panel-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
-    .flight-panel-tab { min-height: 42px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
-    .flight-panel-tab:last-child { border-right: 0; }
-    .flight-panel-tab.active { background: #182126; color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
-    .flight-panel-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-    .flight-panel-view[hidden] { display: none; }
+     .flight-panel-tabs-shell { position: sticky; top: 0; z-index: 2; background: var(--panel-strong); }
+     .flight-panel-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+     .flight-panel-tab { min-height: 42px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+     .flight-panel-tab:last-child { border-right: 0; }
+     .flight-panel-tab.active { background: #182126; color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+     .flight-panel-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+     .flight-panel-content { min-height: 0; overflow: auto; }
+     .flight-panel-view[hidden] { display: none; }
     .control-block { padding: 16px 20px; border-bottom: 1px solid var(--line); }
     .control-block:last-of-type { border-bottom: 0; }
     .control-block-header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
@@ -155,9 +157,10 @@
     @media (max-width: 860px) {
       body { overflow: auto; }
       #workspace-flight { display: block; overflow: visible; }
-      #workspace-flight .flight-video { min-height: 420px; border-right: 0; border-bottom: 1px solid var(--line); }
-      #workspace-flight .flight-controls { overflow: visible; }
-    }
+       #workspace-flight .flight-video { min-height: 420px; border-right: 0; border-bottom: 1px solid var(--line); }
+       #workspace-flight .flight-controls { display: block; overflow: visible; }
+       #workspace-flight .flight-panel-content { overflow: visible; }
+     }
     @media (max-width: 520px) {
       .connection-status-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr); gap: 10px; }
       .device-select-grid { grid-template-columns: minmax(0, 1fr); }
@@ -236,23 +239,22 @@
   </main>
 
   <main id="workspace-flight">
-    <section class="flight-video">
+     <section class="flight-video">
       <h2>图传画面</h2>
       <p id="stream-label" class="notice"></p>
       <video id="video" controls muted autoplay playsinline></video>
-    </section>
-    <section class="flight-controls" aria-label="飞行操作">
-      <div class="control-heading">
-        <h2>飞行操作</h2>
-        <p class="notice">图传、航线和直接飞行分别操作。设备页保留全量状态；此处只显示当前操作有关的事实和回执。</p>
-      </div>
-      <div class="flight-panel-tabs" role="tablist" aria-label="飞行操作分类">
-        <button class="flight-panel-tab" type="button" role="tab" data-flight-panel="stream" aria-controls="flight-panel-stream">图传</button>
-        <button class="flight-panel-tab" type="button" role="tab" data-flight-panel="mission" aria-controls="flight-panel-mission">航线</button>
-        <button class="flight-panel-tab" type="button" role="tab" data-flight-panel="direct-flight" aria-controls="flight-panel-direct-flight">直接飞行</button>
-      </div>
+     </section>
+     <section class="flight-controls" aria-label="飞行操作">
+       <div class="flight-panel-tabs-shell">
+         <div class="flight-panel-tabs" role="tablist" aria-label="飞行操作分类">
+           <button class="flight-panel-tab" type="button" role="tab" data-flight-panel="stream" aria-controls="flight-panel-stream">图传</button>
+           <button class="flight-panel-tab" type="button" role="tab" data-flight-panel="mission" aria-controls="flight-panel-mission">航线</button>
+           <button class="flight-panel-tab" type="button" role="tab" data-flight-panel="direct-flight" aria-controls="flight-panel-direct-flight">直接飞行</button>
+         </div>
+       </div>
 
-      <div id="flight-panel-stream" class="flight-panel-view" data-flight-panel-view="stream" role="tabpanel">
+       <div class="flight-panel-content">
+         <div id="flight-panel-stream" class="flight-panel-view" data-flight-panel-view="stream" role="tabpanel">
         <div class="control-block">
           <div class="control-block-header">
             <div>
@@ -328,9 +330,9 @@
             </div>
           </div>
         </div>
-      </div>
+         </div>
 
-      <div id="flight-panel-mission" class="flight-panel-view" data-flight-panel-view="mission" role="tabpanel" hidden>
+         <div id="flight-panel-mission" class="flight-panel-view" data-flight-panel-view="mission" role="tabpanel" hidden>
         <div class="control-block">
           <div class="control-block-header">
             <div>
@@ -450,9 +452,9 @@
             </div>
           </div>
         </div>
-      </div>
+         </div>
 
-      <div id="flight-panel-direct-flight" class="flight-panel-view" data-flight-panel-view="direct-flight" role="tabpanel" hidden>
+         <div id="flight-panel-direct-flight" class="flight-panel-view" data-flight-panel-view="direct-flight" role="tabpanel" hidden>
         <div class="control-block flight-safety-controls">
           <div class="control-block-header">
             <div>
@@ -546,8 +548,9 @@
           <p id="landing-status" class="notice" aria-live="polite">未请求降落</p>
           <p id="guidance" class="notice" style="margin: 12px 0 0;"></p>
         </div>
-      </div>
-      <p id="status" class="operation-status" aria-live="polite"></p>
+         </div>
+       </div>
+       <p id="status" class="operation-status" aria-live="polite"></p>
     </section>
   </main>
 

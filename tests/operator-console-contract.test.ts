@@ -901,6 +901,16 @@ describe("航线操作台渲染契约", () => {
     expect(rendererSource).toContain('renderFlightPanelVisibility');
   });
 
+  it("飞行页右栏固定显示业务页签并让详情独立滚动", () => {
+    const pageSource = page();
+    expect(pageSource).toContain('class="flight-panel-tabs-shell"');
+    expect(pageSource).toContain('class="flight-panel-content"');
+    expect(pageSource).not.toContain('<h2>飞行操作</h2>');
+    expect(pageSource).not.toContain('图传、航线和直接飞行分别操作。设备页保留全量状态；此处只显示当前操作有关的事实和回执。');
+    expect(pageSource).toMatch(/\.flight-controls\s*\{\s*display:\s*grid;/);
+    expect(pageSource).toMatch(/\.flight-panel-content\s*\{\s*min-height:\s*0;\s*overflow:\s*auto;/);
+  });
+
   it("图传页和设备页逐项展示手机帧、桌面服务和播放器事实，不把它们合成一个图传状态", () => {
     const pageSource = page();
     const rendererSource = renderer();
