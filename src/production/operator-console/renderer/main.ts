@@ -7,6 +7,7 @@ import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, re
 type WorkspaceName = "devices" | "routes" | "flight";
 type FlightPanelName = "stream" | "mission" | "direct-flight";
 type MissionStartIntent = Readonly<{ deviceId: string; missionId: string; routeId: string; routeName: string }>;
+type FlightConfirmationIntent = Readonly<{ deviceId: string; action: string; confirmationId: string; expiresAtMs: number }>;
 type PhoneLinkProbeReport =
   | Readonly<{ readonly status: "measured"; readonly sampleCount: 10; readonly currentRttMs: number; readonly medianRttMs: number; readonly maximumRttMs: number; readonly jitterMs: number }>
   | Readonly<{ readonly status: "unavailable" | "timed-out" | "disconnected"; readonly sampleCount: number }>;
@@ -55,8 +56,26 @@ const awaitCurrentRender = <T>(operation: Promise<T>, signal: AbortSignal | unde
 };
 
 const unwrap = (result: unknown): unknown => {
-  if (result === null || typeof result !== "object" || !("ok" in result) || (result as { ok: unknown }).ok !== true) return result;
+  if (result === null || typeof result !== "object" || !("ok" in result) || !("value" in result) || (result as { ok: unknown }).ok !== true) return result;
   return (result as { value?: unknown }).value;
+};
+
+const unwrapAll = (result: unknown): unknown => {
+  let current = result;
+  for (let step = 0; step < 4; step += 1) {
+    const next = unwrap(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+};
+
+const safeRenderInvoke = async (name: string, input: unknown, signal?: AbortSignal): Promise<unknown | null> => {
+  try {
+    return await awaitCurrentRender(bridge().invoke(name, input), signal);
+  } catch {
+    return null;
+  }
 };
 
 const read = (value: unknown, key: string): unknown => value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
@@ -324,6 +343,51 @@ function renderFlightPanelVisibility(): void {
     panel.hidden = panel.dataset.flightPanelView !== state.flightPanel;
   });
 }
+
+const revealedFlightConfirmations = new WeakMap<HTMLElement, string>();
+const revealFlightConfirmation = (confirmation: HTMLElement, token: string): void => {
+  if (confirmation.hidden || revealedFlightConfirmations.get(confirmation) === token) return;
+  revealedFlightConfirmations.set(confirmation, token);
+  window.requestAnimationFrame(() => {
+    if (confirmation.hidden || !confirmation.isConnected || revealedFlightConfirmations.get(confirmation) !== token) return;
+    confirmation.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+  });
+};
+const forgetFlightConfirmationReveal = (confirmation: HTMLElement): void => { revealedFlightConfirmations.delete(confirmation); };
+
+const renderFlightConfirmationFallback = (): void => {
+  const intent = pendingFlightConfirmation;
+  const confirmation = document.getElementById("confirm");
+  if (!(confirmation instanceof HTMLElement)) return;
+  if (intent === null || intent.expiresAtMs <= Date.now()) {
+    pendingFlightConfirmation = null;
+    confirmation.hidden = true;
+    forgetFlightConfirmationReveal(confirmation);
+    return;
+  }
+  confirmation.hidden = false;
+  const textNode = document.getElementById("confirm-text");
+  if (textNode !== null) textNode.textContent = `确认让 ${intent.deviceId} ${flightActionLabel(intent.action)}？此操作会立刻下发到飞控；命令完成不等于飞机状态已经改变。`;
+  confirmation.dataset.deviceId = intent.deviceId;
+  confirmation.dataset.confirmationId = intent.confirmationId;
+  revealFlightConfirmation(confirmation, intent.confirmationId);
+};
+
+const renderMissionStartConfirmationFallback = (): void => {
+  const intent = pendingMissionStart;
+  const confirmation = document.getElementById("mission-confirm");
+  if (!(confirmation instanceof HTMLElement)) return;
+  if (intent === null) {
+    confirmation.hidden = true;
+    forgetFlightConfirmationReveal(confirmation);
+    return;
+  }
+  confirmation.hidden = false;
+  const textNode = document.getElementById("mission-confirm-text");
+  if (textNode !== null) textNode.textContent = `确认让 ${intent.deviceId} 执行航线「${intent.routeName}」？手机会在调用 DJI 前再次检查设备状态。`;
+  revealFlightConfirmation(confirmation, `${intent.deviceId}:${intent.missionId}:${intent.routeId}`);
+};
+
 type OperationFeedbackRecord = Readonly<{
   readonly deviceId: string | null;
   readonly connectionEpoch: number | null;
@@ -439,6 +503,9 @@ let lastPaintAtMs = 0;
 let lastSeenCurrentTime = 0;
 let selectedPlaybackDeviceId: string | null = null;
 let pendingMissionStart: MissionStartIntent | null = null;
+let pendingFlightConfirmation: FlightConfirmationIntent | null = null;
+let videoPlayRetryTimer: number | null = null;
+let videoPlayEventsBoundTo: HTMLVideoElement | null = null;
 const phoneLinkProbes = new Map<string, PhoneLinkProbeCacheEntry>();
 let phoneLinkProbeInFlightDeviceId: string | null = null;
 
@@ -454,9 +521,50 @@ const clearFlvRecoverTimer = (): void => {
 const isPainting = (video: HTMLVideoElement): boolean =>
   video.videoWidth > 0 && !video.paused && Number.isFinite(video.currentTime) && video.currentTime > 0;
 
+const clearVideoPlayRetry = (): void => {
+  if (videoPlayRetryTimer === null) return;
+  window.clearTimeout(videoPlayRetryTimer);
+  videoPlayRetryTimer = null;
+};
+
+const scheduleVideoPlay = (video: HTMLVideoElement): void => {
+  clearVideoPlayRetry();
+  videoPlayRetryTimer = window.setTimeout(() => {
+    videoPlayRetryTimer = null;
+    if (flvPlayer === null || attachedUrl === null) return;
+    if (!video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    void video.play().catch((error: unknown) => {
+      const name = error instanceof Error ? error.name : "";
+      if (name === "NotAllowedError") show("自动播放被拦截，请点一下上方画面");
+    });
+  }, 0);
+};
+
+const bindVideoPlayEvents = (video: HTMLVideoElement): void => {
+  if (videoPlayEventsBoundTo === video) return;
+  const onReady = (): void => { scheduleVideoPlay(video); };
+  for (const event of ["loadedmetadata", "loadeddata", "canplay", "playing"] as const) {
+    video.addEventListener(event, onReady);
+  }
+  videoPlayEventsBoundTo = video;
+  (video as HTMLVideoElement & { __skyCommandPlayReady?: () => void }).__skyCommandPlayReady = onReady;
+};
+
+const unbindVideoPlayEvents = (video: HTMLVideoElement): void => {
+  const onReady = (video as HTMLVideoElement & { __skyCommandPlayReady?: () => void }).__skyCommandPlayReady;
+  if (onReady === undefined) return;
+  for (const event of ["loadedmetadata", "loadeddata", "canplay", "playing"] as const) {
+    video.removeEventListener(event, onReady);
+  }
+  delete (video as HTMLVideoElement & { __skyCommandPlayReady?: () => void }).__skyCommandPlayReady;
+  if (videoPlayEventsBoundTo === video) videoPlayEventsBoundTo = null;
+};
+
 const detachVideo = (): void => {
   clearFlvRecoverTimer();
+  clearVideoPlayRetry();
   const video = el("video") as HTMLVideoElement;
+  unbindVideoPlayEvents(video);
   if (flvPlayer !== null) {
     try { flvPlayer.pause(); } catch { /* ignore */ }
     try { flvPlayer.unload(); } catch { /* ignore */ }
@@ -479,10 +587,7 @@ const playVideo = (video: HTMLVideoElement): void => {
   video.defaultMuted = true;
   video.volume = 0;
   video.setAttribute("playsinline", "");
-  void video.play().catch((error: unknown) => {
-    const name = error instanceof Error ? error.name : "";
-    show(name === "NotAllowedError" ? "自动播放被拦截，请点一下上方画面" : "图传已就绪但未出画，请点上方播放");
-  });
+  scheduleVideoPlay(video);
 };
 
 const softReloadFlv = (video: HTMLVideoElement): boolean => {
@@ -596,33 +701,53 @@ const attachVideo = (url: string): void => {
     playVideo(video);
     reportPlaybackHealth(video);
   };
-  if (!url.includes(".flv") || !flvjs.isSupported()) {
-    show("当前电脑无法播放图传画面，请重启 Sky Command 后再试");
-    return;
-  }
-  flvPlayer = flvjs.createPlayer(
-    { type: "flv", isLive: true, hasAudio: false, url },
-    // 小 stash 缓毛刺/网络抖动；过大则延迟明显。背压策略已在 HTTP-FLV 侧按关键frame 续写。
-    { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true },
-  );
-  flvPlayer.on(flvjs.Events.ERROR, () => {
-    flvFatalStreak += 1;
-    const retryUrl = attachedUrl;
-    if (retryUrl === null) return;
-    if (flvFatalStreak <= 3 && softReloadFlv(video)) {
-      show("图传不稳定，正在自动恢复…");
+  try {
+    if (!url.includes(".flv") || !flvjs.isSupported()) {
+      detachVideo();
+      show("当前电脑无法播放图传画面，请重启 Sky Command 后再试");
       return;
     }
-    show("图传中断，正在重新连接…");
+    flvPlayer = flvjs.createPlayer(
+      { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url },
+      // 小 stash 缓毛刺/网络抖动；过大则延迟明显。背压策略已在 HTTP-FLV 侧按关键frame 续写。
+      { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true },
+    );
+    bindVideoPlayEvents(video);
+    flvPlayer.on(flvjs.Events.MEDIA_INFO, () => { scheduleVideoPlay(video); });
+    flvPlayer.on(flvjs.Events.ERROR, () => {
+      flvFatalStreak += 1;
+      const retryUrl = attachedUrl;
+      if (retryUrl === null) return;
+      if (flvFatalStreak <= 3 && softReloadFlv(video)) {
+        show("图传不稳定，正在自动恢复…");
+        return;
+      }
+      show("图传中断，正在重新连接…");
+      detachVideo();
+      scheduleFlvReattach(retryUrl);
+    });
+    flvPlayer.attachMediaElement(video);
+    flvPlayer.load();
+    play();
+  } catch {
     detachVideo();
-    scheduleFlvReattach(retryUrl);
-  });
-  flvPlayer.attachMediaElement(video);
-  flvPlayer.load();
-  play();
+    show("图传播放器初始化失败，正在自动重试…");
+  }
 };
 
 const accepted = (value: unknown): boolean => value !== null && typeof value === "object" && (value as { ok?: unknown }).ok === true;
+
+const confirmationFromResult = (value: unknown, fallbackDeviceId: string | null, fallbackAction: string): FlightConfirmationIntent | null => {
+  const body = unwrapAll(value);
+  const confirmation = read(body, "confirmation");
+  const confirmationId = text(read(confirmation, "confirmationId"));
+  const deviceId = text(read(confirmation, "deviceId")) ?? fallbackDeviceId;
+  const action = text(read(confirmation, "action")) ?? text(read(body, "action")) ?? fallbackAction;
+  if (confirmationId === null || deviceId === null || action === null) return null;
+  const expiresAt = read(confirmation, "expiresAtMs");
+  const expiresAtMs = typeof expiresAt === "number" && Number.isFinite(expiresAt) ? expiresAt : Date.now() + 15_000;
+  return Object.freeze({ deviceId, action, confirmationId, expiresAtMs });
+};
 
 const playbackUrl = (value: unknown): string | null => {
   const body = unwrap(value);
@@ -640,12 +765,14 @@ async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, 
     return;
   }
   if (view.streamDeviceId === null) return;
-  const url = playbackUrl(await awaitCurrentRender(bridge().invoke("video-playback", { deviceId: view.streamDeviceId }), signal));
+  const playbackResult = await safeRenderInvoke("video-playback", { deviceId: view.streamDeviceId }, signal);
+  if (playbackResult === null) return;
+  const url = playbackUrl(playbackResult);
   if (url === null) return;
   attachVideo(url);
   if (flvPlayer === null || attachedUrl !== url) return;
   if (selectedPlaybackDeviceId !== view.streamDeviceId) {
-    const selected = await awaitCurrentRender(bridge().invoke("stream-select", { deviceId: view.streamDeviceId }), signal);
+    const selected = unwrap(await safeRenderInvoke("stream-select", { deviceId: view.streamDeviceId }, signal));
     if (!accepted(selected)) return;
     selectedPlaybackDeviceId = view.streamDeviceId;
   }
@@ -1000,8 +1127,14 @@ const blocked = (action: string, reason: string, deviceId: string | null = null,
   void bridge().invoke("diagnostics-record", { action, reason });
 };
 
-async function run(action: string, invokeName: string, input: unknown, feedbackAction = action): Promise<void> {
-  const view = await projectView();
+async function run(
+  action: string,
+  invokeName: string,
+  input: unknown,
+  knownView?: ReturnType<typeof OperatorConsole.project>,
+  feedbackAction = action,
+): Promise<void> {
+  const view = knownView ?? await projectView();
   const decision = OperatorConsole.evaluate(action, view);
   const deviceId = text(read(input, "deviceId"));
   const connectionEpoch = feedbackDeviceEpoch(view, deviceId);
@@ -1011,6 +1144,13 @@ async function run(action: string, invokeName: string, input: unknown, feedbackA
     result = await bridge().invoke(invokeName, input);
   } catch {
     result = { ok: false, code: "DEPENDENCY_FAILURE" };
+  }
+  if (invokeName === "flight-request") {
+    const requestedAction = text(read(input, "action")) ?? "takeoff";
+    const confirmation = confirmationFromResult(result, deviceId, requestedAction);
+    if (confirmation !== null) pendingFlightConfirmation = confirmation;
+  } else if ((action === "flight-confirm" || action === "flight-cancel") && accepted(unwrapAll(result))) {
+    pendingFlightConfirmation = null;
   }
   const feedback = captureFeedback(feedbackAction, deviceId, connectionEpoch, result);
   show(feedback.message);
@@ -1047,7 +1187,15 @@ const confirmMissionStart = async (): Promise<void> => {
   const intent = pendingMissionStart;
   pendingMissionStart = null;
   if (intent === null) { await render(); return; }
-  const view = await projectView();
+  let view: ReturnType<typeof OperatorConsole.project>;
+  try {
+    view = await projectView();
+  } catch {
+    pendingMissionStart = intent;
+    show("界面读取失败，确认未发送；请确认手机仍连接后重试");
+    renderMissionStartConfirmationFallback();
+    return;
+  }
   if (
     view.missionDeviceId !== intent.deviceId ||
     text(read(view.mission, "missionId")) !== intent.missionId ||
@@ -1057,7 +1205,7 @@ const confirmMissionStart = async (): Promise<void> => {
     await render();
     return;
   }
-  await run("mission-start", "mission-start", { deviceId: intent.deviceId });
+  await run("mission-start", "mission-start", { deviceId: intent.deviceId }, view);
 };
 
 function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
@@ -1246,15 +1394,20 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   const landing = read(landingDevice, "landing");
   const landingPhase = text(read(landing, "phase"));
   const landingStatus = document.getElementById("landing-status");
-  if (landingStatus !== null) landingStatus.textContent = landingProgressStatus(landingPhase, missionDevice);
+  if (landingStatus !== null) landingStatus.textContent = landingProgressStatus(landingPhase, landingDevice);
   const confirm = el("confirm");
-  if (view.confirmation !== null) {
+  if (view.confirmation !== null) pendingFlightConfirmation = view.confirmation;
+  if (pendingFlightConfirmation !== null && pendingFlightConfirmation.expiresAtMs <= Date.now()) pendingFlightConfirmation = null;
+  const confirmation = view.confirmation ?? (pendingFlightConfirmation !== null && pendingFlightConfirmation.deviceId === view.missionDeviceId ? pendingFlightConfirmation : null);
+  if (confirmation !== null) {
     confirm.hidden = false;
-    el("confirm-text").textContent = `确认让 ${view.confirmation.deviceId} ${flightActionLabel(view.confirmation.action)}？此操作会立刻下发到飞控；命令完成不等于飞机状态已经改变。`;
-    confirm.dataset.deviceId = view.confirmation.deviceId;
-    confirm.dataset.confirmationId = view.confirmation.confirmationId;
+    el("confirm-text").textContent = `确认让 ${confirmation.deviceId} ${flightActionLabel(confirmation.action)}？此操作会立刻下发到飞控；命令完成不等于飞机状态已经改变。`;
+    confirm.dataset.deviceId = confirmation.deviceId;
+    confirm.dataset.confirmationId = confirmation.confirmationId;
+    revealFlightConfirmation(confirm, confirmation.confirmationId);
   } else {
     confirm.hidden = true;
+    forgetFlightConfirmationReveal(confirm);
   }
   const missionConfirm = el("mission-confirm");
   const intent = pendingMissionStart;
@@ -1267,9 +1420,11 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   ) {
     pendingMissionStart = null;
     missionConfirm.hidden = true;
+    forgetFlightConfirmationReveal(missionConfirm);
   } else {
     missionConfirm.hidden = false;
     el("mission-confirm-text").textContent = `确认让 ${intent.deviceId} 执行航线「${intent.routeName}」？手机会在调用 DJI 前再次检查设备状态。`;
+    revealFlightConfirmation(missionConfirm, `${intent.deviceId}:${intent.missionId}:${intent.routeId}`);
   }
 }
 
@@ -1358,9 +1513,12 @@ const render = async (): Promise<void> => {
   try {
     await renderScheduler.request();
   } catch (error) {
+    console.error("[sky-render]", error);
     show(error instanceof RenderDeadlineExceededError
       ? "界面读取超时，正在自动重试"
       : "界面刷新失败，请检查手机是否仍连接；若持续出现请重启软件");
+    renderFlightConfirmationFallback();
+    renderMissionStartConfirmationFallback();
   }
 };
 
@@ -1477,7 +1635,15 @@ el("route-remove").addEventListener("click", async () => {
   document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     const action = (button as HTMLButtonElement).dataset.action ?? "";
-    const view = await projectView();
+    let view: ReturnType<typeof OperatorConsole.project>;
+    try {
+      view = await projectView();
+    } catch {
+      show("界面读取失败，本次操作未发送；请确认手机仍连接后重试");
+      renderFlightConfirmationFallback();
+      renderMissionStartConfirmationFallback();
+      return;
+    }
     if (action === "mission-start") {
       await requestMissionStartConfirmation(view);
       return;
@@ -1490,7 +1656,7 @@ el("route-remove").addEventListener("click", async () => {
     const streamAction = action.startsWith("stream-");
     const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
     if (action === "stream-select") {
-      await run(action, "stream-select", { deviceId });
+      await run(action, "stream-select", { deviceId }, view);
       show("图传已选中，等待本页出画");
       return;
     }
@@ -1523,21 +1689,25 @@ el("route-remove").addEventListener("click", async () => {
         return;
       }
     }
-    await run(action, invokeName, input);
+    await run(action, invokeName, input, view);
   });
 });
 
 el("confirm-yes").addEventListener("click", async () => {
-  const view = await projectView();
+  let view: ReturnType<typeof OperatorConsole.project>;
+  try { view = await projectView(); }
+  catch { show("界面读取失败，确认未发送；请确认手机仍连接后重试"); renderFlightConfirmationFallback(); return; }
   const deviceId = el("confirm").dataset.deviceId;
-  const originalAction = view.confirmation?.action;
-  await run("flight-confirm", "flight-confirm", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, originalAction === undefined ? "flight-confirm" : `flight-${originalAction}`);
+  const originalAction = view.confirmation?.action ?? pendingFlightConfirmation?.action;
+  await run("flight-confirm", "flight-confirm", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, undefined, originalAction === undefined ? "flight-confirm" : `flight-${originalAction}`);
 });
 el("confirm-no").addEventListener("click", async () => {
-  const view = await projectView();
+  let view: ReturnType<typeof OperatorConsole.project>;
+  try { view = await projectView(); }
+  catch { show("界面读取失败，取消未发送；请确认手机仍连接后重试"); renderFlightConfirmationFallback(); return; }
   const deviceId = el("confirm").dataset.deviceId;
-  const originalAction = view.confirmation?.action;
-  await run("flight-cancel", "flight-cancel", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, originalAction === undefined ? "flight-cancel" : `flight-${originalAction}`);
+  const originalAction = view.confirmation?.action ?? pendingFlightConfirmation?.action;
+  await run("flight-cancel", "flight-cancel", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, undefined, originalAction === undefined ? "flight-cancel" : `flight-${originalAction}`);
 });
 el("mission-confirm-yes").addEventListener("click", () => { void confirmMissionStart(); });
 el("mission-confirm-no").addEventListener("click", () => {
@@ -1554,7 +1724,8 @@ const tick = async (): Promise<void> => {
    try {
      await bridge().invoke("stream-refresh");
      await render();
-  } catch {
+  } catch (error) {
+    console.error("[sky-tick]", error);
     show("界面刷新失败，请检查手机是否仍连接；若持续出现请重启软件");
   }
   window.setTimeout(() => { void tick(); }, 800);

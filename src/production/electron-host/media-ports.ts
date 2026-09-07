@@ -75,6 +75,12 @@ function deviceIdFromFlvPath(pathname: string): string | null {
   }
 }
 
+/** NMS HTTP-FLV 头与 flv.js 约定 bit0=视频；无音轨推流时 NMS 常写出 flags=0，播放器会当成空轨。 */
+function markFlvHeaderHasVideo(chunk: Buffer): void {
+  if (chunk.length < 9 || chunk[0] !== 0x46 || chunk[1] !== 0x4c || chunk[2] !== 0x56) return;
+  chunk[4] |= 0x01;
+}
+
 /** 只过滤 SEI-only 等无图像 AVC 包；慢播放器直接断开重连，绝不选择性丢 P 帧。 */
 function filterSeiOnlyWrites(res: ServerResponse, onBackpressureLimit: () => void): void {
   const write = res.write.bind(res);
@@ -86,6 +92,7 @@ function filterSeiOnlyWrites(res: ServerResponse, onBackpressureLimit: () => voi
     try { res.destroy(); } catch { /* the request close handler also releases the NMS session */ }
   };
   res.write = ((chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
+    if (Buffer.isBuffer(chunk)) markFlvHeaderHasVideo(chunk);
     if (Buffer.isBuffer(chunk) && chunk.length >= 11 && chunk[0] === 9) {
       const size = chunk.readUIntBE(1, 3);
       if (Number.isFinite(size) && size >= 0 && 11 + size <= chunk.length) {

@@ -44,6 +44,55 @@ const snapshot = (devices: readonly unknown[], extra: Record<string, unknown> = 
 });
 
 describe("操作台投影", () => {
+  it("图传播放器异常不能中断整轮刷新，并且只在业务选择成功后标记播放器设备", () => {
+    const source = renderer();
+
+    expect(source).toContain("const safeRenderInvoke");
+    expect(source).toContain("const playbackResult = await safeRenderInvoke");
+    expect(source).toContain("const selected = unwrap(await safeRenderInvoke");
+    expect(source).toContain("selectedPlaybackDeviceId = view.streamDeviceId");
+  });
+
+  it("图传必须在 MediaSource/视频元数据就绪后重试播放，不能只在 load 后调用一次 play", () => {
+    const source = renderer();
+
+    expect(source).toContain("const scheduleVideoPlay");
+    expect(source).toContain("flvjs.Events.MEDIA_INFO");
+    expect(source).toContain('["loadedmetadata", "loadeddata", "canplay", "playing"]');
+    expect(source).toContain("video.addEventListener(event, onReady)");
+    expect(source).toContain("scheduleVideoPlay(video)");
+  });
+
+  it("起飞请求保留确认意图并复用已读取快照，刷新失败时仍能展示确认框", () => {
+    const source = renderer();
+
+    expect(source).toContain("let pendingFlightConfirmation");
+    expect(source).toContain("const renderFlightConfirmationFallback");
+    expect(source).toContain("await run(action, invokeName, input, view)");
+    expect(source).toContain("renderFlightConfirmationFallback();");
+  });
+
+  it("航线执行确认在刷新失败时保留意图，并复用确认前已读取的快照", () => {
+    const source = renderer();
+
+    expect(source).toContain("const renderMissionStartConfirmationFallback");
+    expect(source).toContain("renderMissionStartConfirmationFallback();");
+    expect(source).toContain("pendingMissionStart = intent;");
+    expect(source).toContain('await run("mission-start", "mission-start", { deviceId: intent.deviceId }, view);');
+  });
+
+  it("飞行页本地确认创建后必须进入右栏当前可视区域且契约禁止自动下发", () => {
+    const source = renderer();
+    const contract = readFileSync(new URL("../src/production/operator-console/CONTRACT.md", import.meta.url), "utf8");
+
+    expect(source).toContain("const revealFlightConfirmation");
+    expect(source).toContain("confirmation.scrollIntoView");
+    expect(source).toContain("revealFlightConfirmation(confirm, confirmation.confirmationId)");
+    expect(source).toContain("revealFlightConfirmation(missionConfirm,");
+    expect(contract).toContain("同一确认只能主动定位一次");
+    expect(contract).toContain("不得自动确认、发送 DJI 指令");
+  });
+
   it.each(["flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"] as const)("收尾动作 %s 不由页面上的遥控器、飞控或飞行状态推断拦截", (action) => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
@@ -146,7 +195,7 @@ describe("操作台投影", () => {
     expect(source).toContain('statusRow("实际渲染 [HTMLVideoElement]", playbackRuntimeLabel(device, streamDeviceId), false)');
     expect(source).toContain('if (value === "UNKNOWN") return "未知（MSDK 返回 UNKNOWN）";');
     expect(source).not.toContain('code === "LANDING_IN_PROGRESS"');
-    expect(source).toContain('awaitCurrentRender(bridge().invoke("stream-select", { deviceId: view.streamDeviceId }), signal)');
+    expect(source).toContain('safeRenderInvoke("stream-select", { deviceId: view.streamDeviceId }, signal)');
   });
 
   it("飞控状态未知时把保留的动态事实明确标为上次更新且当前未确认", () => {
@@ -171,7 +220,14 @@ describe("操作台投影", () => {
     expect(source).toContain("DJI 正在确认继续降落，等待持续飞行状态确认");
     expect(source).toContain('flying === "grounded" && motorsOn === false');
     expect(source).toContain("已确认落地（MSDK 持续状态：未飞行且电机关闭）");
-    expect(source).toContain("landingProgressStatus(landingPhase, missionDevice)");
+    expect(source).toContain("landingProgressStatus(landingPhase, landingDevice)");
+  });
+
+  it("renderFlight 用已定义的 landingDevice 更新降落过程，不引用未声明变量", () => {
+    const flight = renderer().slice(renderer().indexOf("function renderFlight"));
+    expect(flight).toContain("const landingDevice = devices.find");
+    expect(flight).toContain("landingProgressStatus(landingPhase, landingDevice)");
+    expect(flight).not.toContain("landingProgressStatus(landingPhase, missionDevice)");
   });
 
   it("图传源失效优先于旧播放器的 ready 记录显示，并且不允许重复停止", () => {
@@ -927,6 +983,26 @@ describe("航线操作台渲染契约", () => {
     expect(pageSource).not.toContain('图传、航线和直接飞行分别操作。设备页保留全量状态；此处只显示当前操作有关的事实和回执。');
     expect(pageSource).toMatch(/\.flight-controls\s*\{\s*display:\s*grid;/);
     expect(pageSource).toMatch(/\.flight-panel-content\s*\{\s*min-height:\s*0;\s*overflow:\s*auto;/);
+  });
+
+  it("图传和起飞按钮紧跟可达性状态，不被观测详情挤出可视区", () => {
+    const pageSource = page();
+    const streamStart = pageSource.indexOf('data-action="stream-start"');
+    const streamFrames = pageSource.indexOf("图像源帧事实");
+    const streamDesktop = pageSource.indexOf("电脑媒体接收与播放事实");
+    expect(streamStart).toBeGreaterThan(-1);
+    expect(streamFrames).toBeGreaterThan(-1);
+    expect(streamStart).toBeLessThan(streamFrames);
+    expect(streamStart).toBeLessThan(streamDesktop);
+
+    const takeoff = pageSource.indexOf('data-action="flight-takeoff"');
+    const confirm = pageSource.indexOf('id="confirm"');
+    const flightFacts = pageSource.indexOf("DJI 飞行事实");
+    expect(takeoff).toBeGreaterThan(-1);
+    expect(confirm).toBeGreaterThan(-1);
+    expect(takeoff).toBeLessThan(flightFacts);
+    expect(confirm).toBeLessThan(flightFacts);
+    expect(pageSource).toMatch(/\.flight-panel-actions\s*\{[^}]*position:\s*sticky;/);
   });
 
   it("图传页和设备页逐项展示手机帧、桌面服务和播放器事实，不把它们合成一个图传状态", () => {

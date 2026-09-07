@@ -36,6 +36,8 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     const source = renderer();
     const page = html();
     expect(source).toContain("flvjs");
+    expect(source).toContain("hasAudio: false");
+    expect(source).toContain("hasVideo: true");
     expect(source).toContain("enableStashBuffer: false");
     expect(source).toContain("chaseLiveEdge");
     expect(source).toContain("playbackUrl(");
@@ -72,6 +74,12 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).toContain("res.writableLength");
     expect(source).toContain("session.stop()");
     expect(source).toContain("res.destroy()");
+  });
+
+  it("HTTP-FLV 写出时把无音轨流的 FLV 头标成有视频，避免 flv.js 探测成空轨", () => {
+    const source = mediaPorts();
+    expect(source).toContain("markFlvHeaderHasVideo");
+    expect(source).toContain("chunk[4] |= 0x01");
   });
 
   it("只为已有 RTMP 发布者创建 HTTP-FLV 播放会话，避免无源请求滞留为 NMS idlePlayers", () => {
