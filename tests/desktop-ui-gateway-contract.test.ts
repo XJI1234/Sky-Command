@@ -30,7 +30,6 @@ describe("DesktopUiGateway", () => {
           { deviceId: "device-b", phase: "ready", playbackUrl: "https://example.invalid/live/stream-b.flv" },
         ] },
       }),
-      checkHardwareReadiness: named("checkHardwareReadiness"),
       refreshDeviceState: named("refreshDeviceState"),
       measurePhoneLink: named("measurePhoneLink"),
       importRoute: named("importRoute"), getRoutePreview: named("getRoutePreview"), selectRoute: named("selectRoute"), removeRoute: named("removeRoute"),
@@ -51,7 +50,6 @@ describe("DesktopUiGateway", () => {
     const commands: readonly Readonly<{ readonly method: string; readonly input: unknown }>[] = [
       { method: "device.refresh", input: { deviceId: "device-a" } },
       { method: "device.link.measure", input: { deviceId: "device-a" } },
-      { method: "hardware.readiness", input: { deviceId: "device-a" } },
       { method: "route.import", input: { fileName: "route.kmz", bytes: new Uint8Array([1, 2]) } },
       { method: "route.preview", input: { routeId: "route-a" } }, { method: "route.select", input: { routeId: "route-a" } }, { method: "route.remove", input: { routeId: "route-a" } },
       { method: "assignment.assign", input: { deviceId: "device-a", routeId: "route-a" } }, { method: "assignment.clear", input: { deviceId: "device-a" } },
@@ -67,7 +65,7 @@ describe("DesktopUiGateway", () => {
     await expect(gateway.invoke("video.playback", { deviceId: "device-a" })).resolves.toEqual({ ok: true, value: { deviceId: "device-a", url: "http://127.0.0.1:18080/live/stream-a.flv" } });
     await expect(gateway.invoke("video.playback", { deviceId: "device-b" })).resolves.toEqual({ ok: true, value: { ok: false, code: "VIDEO_NOT_READY" } });
     expect(calls.map((call) => call.name)).toEqual([
-      "refreshDeviceState", "measurePhoneLink", "checkHardwareReadiness", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",
+      "refreshDeviceState", "measurePhoneLink", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",
       "stage", "upload", "start", "pause", "resume", "stop", "startStream", "stopStream", "refreshMedia", "selectVideo", "clearVideo",
       "readTransmissionSettings", "writeTransmissionSettings", "readCameraSettings", "writeCameraSettings", "requestFlightAction", "confirmFlightAction", "cancelFlightAction",
     ]);
@@ -259,12 +257,12 @@ describe("DesktopUiGateway", () => {
     await expect(gateway.invoke("webrtc.stream-start", { deviceId: "phone-1" })).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
   });
 
-  it("在硬件就绪度查询缺少设备标识时不调用工作流", async () => {
+  it("拒绝已移除的实机预检方法，且不会调用工作流", async () => {
     let calls = 0;
     const gateway = DesktopUiGateway.create({
       application: { snapshot: () => ({}), subscribe: () => () => undefined, workflow: () => ({ checkHardwareReadiness: () => { calls += 1; } }) },
     });
-    await expect(gateway.invoke("hardware.readiness", {})).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
+    await expect(gateway.invoke("hardware.readiness", { deviceId: "device-a" })).resolves.toEqual({ ok: false, code: "METHOD_NOT_ALLOWED" });
     expect(calls).toBe(0);
   });
 });

@@ -53,6 +53,13 @@ describe("操作台投影", () => {
     expect(source).toContain("selectedPlaybackDeviceId = view.streamDeviceId");
   });
 
+  it("飞行页状态刷新失败不能跳过图传挂载", () => {
+    const source = renderer();
+    expect(source).toMatch(/try \{\s*renderFlight\(view\);\s*\} catch/);
+    expect(source).toContain("await ensurePlayback(view, signal)");
+    expect(source.indexOf("try { renderFlight(view); }")).toBeLessThan(source.indexOf("await ensurePlayback(view, signal)"));
+  });
+
   it("图传必须在 MediaSource/视频元数据就绪后重试播放，不能只在 load 后调用一次 play", () => {
     const source = renderer();
 
@@ -1071,6 +1078,86 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain("feedbackByAction");
     expect(source).toContain("未调用 DJI MSDK");
     expect(source).toContain("DJI MSDK 回调");
+  });
+
+  it("飞行页三个子页都固定一块当前进度，操作中只看命令、效果和下一步", () => {
+    const pageSource = page();
+    const rendererSource = renderer();
+    const contract = readFileSync(new URL("../src/production/operator-console/CONTRACT.md", import.meta.url), "utf8");
+    for (const lane of ["stream", "mission", "flight"] as const) {
+      expect(pageSource).toContain(`data-progress="${lane}"`);
+    }
+    expect(pageSource).toContain('data-progress-field="headline"');
+    expect(pageSource).toContain('data-progress-field="command"');
+    expect(pageSource).toContain('data-progress-field="effect"');
+    expect(pageSource).toContain('data-progress-field="next"');
+    expect(rendererSource).toContain("const renderLaneProgress");
+    expect(contract).toContain("当前进度");
+    expect(contract).toContain("命令、效果和下一步");
+  });
+
+  it("航线启动已受理时把命令接受和飞机进航线拆开，并只允许停止", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        mission: { phase: "starting", routeId: "route-1", lastResult: { operation: "start", ok: true, code: null }, startPointReached: false, routeExecutionStarted: false },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(view.missionLabel).toBe("启动已受理，等待飞机实际进入航线");
+    expect(view.progress.mission).toEqual({
+      headline: "启动已受理，等待飞机实际进入航线",
+      command: "DJI 已接受执行航线，不等于飞机已进入航线",
+      effect: "尚未收到当前任务的航线实际开始执行",
+      next: "等待进入航线。现在只能停止，不能再点执行",
+    });
+    expect(view.missionActions.start.enabled).toBe(false);
+    expect(view.missionActions.stop.enabled).toBe(true);
+  });
+
+  it("航线启动未确认时禁止重发执行，只指出可以停止", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        mission: { phase: "starting", routeId: "route-1", lastResult: { operation: "start", ok: false, code: "WAYLINE_START_UNCONFIRMED" }, failureCode: "WAYLINE_START_UNCONFIRMED" },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(view.progress.mission.command).toContain("结果未确认");
+    expect(view.progress.mission.next).toContain("不得再点执行");
+    expect(view.progress.mission.next).toContain("停止");
+    expect(view.missionActions.start.enabled).toBe(false);
+    expect(view.missionActions.stop.enabled).toBe(true);
+  });
+
+  it("图传命令成功但电脑未收到画面时，进度不得写成图传正常", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        stream: { phase: "streaming", lastOperation: "start", failureCode: null },
+        video: { phase: "unavailable", selected: true },
+      })], { selectedVideoDeviceId: "phone-1" }),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(view.streamLabel).toBe("手机已接命令，电脑还没收到画面");
+    expect(view.progress.stream.headline).toBe("手机已接命令，电脑还没收到画面");
+    expect(view.progress.stream.command).toBe("DJI 已接受启动图传，不等于电脑已收到画面");
+    expect(view.progress.stream.effect).toBe("电脑还没有可播放画面");
+    expect(view.progress.stream.next).toContain("停止图传");
+    expect(view.progress.stream.headline).not.toContain("图传播放中");
+  });
+
+  it("直接飞行待确认时进度只要求看确认框，不把命令写成已经下发", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device({
+        pendingFlightAction: { deviceId: "phone-1", action: "takeoff", confirmationId: "c1", expiresAtMs: Date.now() + 60_000 },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(view.progress.flight.command).toContain("尚未调用 DJI");
+    expect(view.progress.flight.next).toContain("确认");
+    expect(view.progress.flight.headline).toContain("起飞");
   });
 
   it("渲染器合并重入的状态轮询与用户触发重绘，避免无限堆积异步 DOM 更新", () => {

@@ -345,16 +345,6 @@ describe("飞行作业工作流模块契约", () => {
       },
     });
 
-    expect(workflow.checkHardwareReadiness("relay-a")).toMatchObject({
-      ok: true,
-      value: {
-        ok: false,
-        blockers: expect.arrayContaining([
-          expect.objectContaining({ code: "SDK_NOT_READY" }),
-        ]),
-      },
-    });
-    expect(workflow.checkHardwareReadiness(" ")).toMatchObject({ ok: false, code: "INVALID_INPUT" });
     await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "STATUS_REFRESH_FAILED" });
     rejectRefresh = true;
     await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "STATUS_REFRESH_FAILED" });
@@ -365,7 +355,7 @@ describe("飞行作业工作流模块契约", () => {
     await expect(workflow.readCameraSettings("relay-a")).resolves.toMatchObject({ ok: false, code: "DEVICE_OFFLINE" });
   });
 
-  it("将不可读取的 MSDK 状态和桌面图传配置收敛为未就绪，而不抛出异常", () => {
+  it("将不可读取的 MSDK 状态和桌面图传配置收敛为未就绪，而不抛出异常", async () => {
     const unreadable = new Proxy({}, { get: () => { throw new Error("unreadable"); } });
     const dependencies: Record<string, unknown> = {
       relayOperations: { devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }], telemetry: () => unreadable, controlTelemetry: () => unreadable, subscribe: () => () => undefined },
@@ -381,7 +371,7 @@ describe("飞行作业工作流模块契约", () => {
     const workflow = OperationWorkflow.create(dependencies as never);
 
     expect(() => workflow.snapshot()).not.toThrow();
-    expect(workflow.checkHardwareReadiness("relay-a")).toMatchObject({ ok: true, value: { ok: false } });
+    await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: false, code: "HARDWARE_NOT_READY" });
   });
 
   it("把任务暂存和飞行确认取消的下游异常收敛为稳定错误码", async () => {
@@ -905,7 +895,6 @@ describe("飞行作业工作流模块契约", () => {
     workflow.dispose();
     expect(workflow.selectRoute("route-a")).toMatchObject({ ok: false, code: "DISPOSED" });
     await expect(workflow.importRoute({})).resolves.toMatchObject({ ok: false, code: "DISPOSED" });
-    expect(workflow.checkHardwareReadiness("relay-a")).toMatchObject({ ok: false, code: "DISPOSED" });
     await expect(workflow.refreshDeviceState("relay-a")).resolves.toMatchObject({ ok: false, code: "DISPOSED" });
   });
 

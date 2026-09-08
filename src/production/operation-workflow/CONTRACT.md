@@ -72,7 +72,6 @@ instance.stop(deviceId) -> Promise<WorkflowResult>
 
 instance.startStream(deviceId) -> Promise<WorkflowResult>
 instance.stopStream(deviceId) -> Promise<WorkflowResult>
-instance.checkHardwareReadiness(deviceId) -> WorkflowResult
 instance.selectVideo(deviceId) -> WorkflowResult
 instance.clearVideo() -> WorkflowResult
 instance.refreshMedia() -> WorkflowResult
@@ -267,16 +266,15 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 1. `refreshDeviceState(deviceId)` 是设备页的显式只读刷新入口。它仅发送一次 `telemetry.read` 并返回稳定结果；只有手机回复的快照被适配器验证为当前会话的 `accepted` 或 `already-current` 时才成功。成功只表示桌面取得了当次手机状态，绝不表示飞机或图传就绪，也不发送 DJI、任务、图传或飞控命令。
 2. `measurePhoneLink(deviceId)` 是设备页独立的网络自检入口。它仅在指定手机当前在线时转交 `relayOperations.measurePhoneLink` 的固定 10 样本 WebSocket RTT 报告，不发布或修改工作流快照，不读取/写入 MSDK 遥测，也不调用 DJI、任务、图传、媒体或飞控模块。成功只表示该次协议往返已完成；不可测结果同样是诊断事实，绝不改变任何控制门禁。
-3. `checkHardwareReadiness(deviceId)` 只评估当前中继上报的显示事实，返回生产图传与直接飞控两个独立的 `hardware-readiness` 结果及按稳定优先级去重后的阻塞项。它不发送任何中继、DJI 或媒体命令。
 3. `startStream(deviceId)` 只在电脑端媒体接收服务可用时调用 `live-stream-control.start`；`hardware-readiness` 的 `legacy-video` 结果只包含局域网地址和本机媒体服务事实，不读取完整控制遥测。`live-stream-control` 以 Relay/MSDK 可达性、RTMP 接收端点、同设备操作顺序和当前会话的原始图传源 Key 决定是否下发：`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 都必须为 `CONNECTED`。手机端在真正调用 MSDK 前使用同一门禁重检，避免桌面与手机遥测更新间的竞态。此处的源门禁是必要例外：真机已经证实，源断开时 `startStream` 成功和 `LiveStreamStatus.isStreaming=true` 都不能证明有效视频。DJI `startStream` 回调、`LiveStreamStatus.isStreaming`、RTMP 有效 AVC/H.264 视频和桌面实际出画仍分别确认真实结果。
-4. `stopStream(deviceId)` 不经过实机预检或控制遥测读取，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
-4. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
-5. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。生产渲染器在成功附着当前图传机的 HTTP-FLV 播放器时必须调用该入口，使主进程选择状态与实际播放器目标一致；该选择本身不等同于首帧已经绘制。
-6. 图传与航线任务彼此独立：可以在航线开始前或飞行期间启动；图传失败不修改任务状态，任务失败不替其他设备停止图传。
-7. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`。同一设备编号换了会话时同样必须复位生产 RTMP 图传车道，不得继续显示“已启动”。任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
-8. `clearVideo()` 只清空本地播放器选择，不向手机发送停止推流命令。
-9. `refreshMedia()` 调用已运行媒体管线的 `mediaPipeline.evaluate(now())`，并据其返回的既有媒体快照更新工作流快照。它不启动媒体服务、不构造 RTMP 地址，也不创建额外的转码、播放或健康状态机。仅当媒体快照中某在线设备已 `failed`、且该设备图传仍为 `starting` 或 `streaming` 时，必须对该设备调用 `stopStream`；设备已离线时不得补发停止。
-10. `notifyPlaybackReady(deviceId)` 只委托 `mediaPipeline.notifyPlaybackReady(deviceId)`。生产路径在 RTMP publish 时已由 `media-pipeline` 自行标记 ready；该入口保留为幂等补标，不启动图传。
+4. `stopStream(deviceId)` 不经过独立预检按钮或控制遥测读取，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
+5. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
+6. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。生产渲染器在成功附着当前图传机的 HTTP-FLV 播放器时必须调用该入口，使主进程选择状态与实际播放器目标一致；该选择本身不等同于首帧已经绘制。
+7. 图传与航线任务彼此独立：可以在航线开始前或飞行期间启动；图传失败不修改任务状态，任务失败不替其他设备停止图传。
+8. 设备断连时，工作流必须调用 `liveStreamControl.recordDisconnected(deviceId)`。同一设备编号换了会话时同样必须复位生产 RTMP 图传车道，不得继续显示“已启动”。任何迟到图传结果都不得覆盖断连状态。重新连接后必须由操作者重新启动图传。
+9. `clearVideo()` 只清空本地播放器选择，不向手机发送停止推流命令。
+10. `refreshMedia()` 调用已运行媒体管线的 `mediaPipeline.evaluate(now())`，并据其返回的既有媒体快照更新工作流快照。它不启动媒体服务、不构造 RTMP 地址，也不创建额外的转码、播放或健康状态机。仅当媒体快照中某在线设备已 `failed`、且该设备图传仍为 `starting` 或 `streaming` 时，必须对该设备调用 `stopStream`；设备已离线时不得补发停止。
+11. `notifyPlaybackReady(deviceId)` 只委托 `mediaPipeline.notifyPlaybackReady(deviceId)`。生产路径在 RTMP publish 时已由 `media-pipeline` 自行标记 ready；该入口保留为幂等补标，不启动图传。
 
 ## 9. 设备设置规则
 

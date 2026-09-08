@@ -47,6 +47,19 @@ export interface OperatorMissionAction {
 
 export type OperatorMissionActions = Readonly<Record<MissionActionName, OperatorMissionAction>>;
 
+export interface OperatorLaneProgress {
+  readonly headline: string;
+  readonly command: string;
+  readonly effect: string;
+  readonly next: string;
+}
+
+export interface OperatorProgress {
+  readonly mission: OperatorLaneProgress;
+  readonly stream: OperatorLaneProgress;
+  readonly flight: OperatorLaneProgress;
+}
+
 export interface OperatorActionResult {
   readonly ok: boolean;
   readonly reason?: string;
@@ -69,6 +82,7 @@ export interface OperatorView {
   readonly selectedRoute: OperatorRouteFact | null;
   readonly missionLabel: string;
   readonly streamLabel: string;
+  readonly progress: OperatorProgress;
   /** The phone has already requested recovery stop after the MSDK video source disappeared. */
   readonly streamSourceUnavailable: boolean;
   readonly playbackReady: boolean;
@@ -307,6 +321,187 @@ const flightDevice = (view: OperatorView, action: string): OperatorActionResult 
   return device;
 };
 const rejected = (value: OperatorActionResult | Record<string, unknown>): value is OperatorActionResult => "ok" in value;
+const lastResultOf = (mission: unknown): Readonly<{ readonly operation: string | null; readonly ok: boolean | null; readonly code: string | null }> => {
+  const last = record(read(mission, "lastResult"));
+  return freeze({
+    operation: text(read(last, "operation")),
+    ok: last === null ? null : read(last, "ok") === true,
+    code: text(read(last, "code")),
+  });
+};
+const missionOperationLabel = (operation: string | null): string => {
+  if (operation === "stage") return "准备航线";
+  if (operation === "upload") return "上传至飞机";
+  if (operation === "start") return "执行航线";
+  if (operation === "pause") return "暂停航线";
+  if (operation === "resume") return "恢复航线";
+  if (operation === "stop") return "停止航线";
+  return "航线操作";
+};
+const missionCommandOf = (mission: unknown, phase: string | null): string => {
+  const last = lastResultOf(mission);
+  if (last.code !== null && last.code.endsWith("_UNCONFIRMED")) return `${missionOperationLabel(last.operation)}结果未确认：不能判断飞机是否已执行`;
+  if (last.ok === false && last.code === "WAYLINE_ACTION_REJECTED") return `${missionOperationLabel(last.operation)}被 DJI 明确拒绝`;
+  if (last.ok === false && last.code === "PREFLIGHT_BLOCKED") return `${missionOperationLabel(last.operation)}未发出：手机或 MSDK 不可达`;
+  if (phase === "staging") return "正在把航线传到手机并校验";
+  if (phase === "uploading") return "正在把航线上传到飞机，等待 DJI 确认";
+  if (phase === "starting") return "DJI 已接受执行航线，不等于飞机已进入航线";
+  if (phase === "pausing") return "暂停命令已发出，等待 DJI 确认";
+  if (phase === "resuming") return "恢复命令已发出，等待 DJI 确认";
+  if (phase === "stopping") return "停止命令已发出，等待 DJI 确认";
+  if (last.ok === true) return `${missionOperationLabel(last.operation)}调用已完成`;
+  return "当前没有进行中的航线命令";
+};
+const missionEffectOf = (mission: unknown, phase: string | null): string => {
+  if (read(mission, "routeExecutionStarted") === true || phase === "running") return "飞机正在执行航线";
+  if (read(mission, "startPointReached") === true) return "飞机已进入首航点，尚未确认开始执行航线";
+  if (phase === "starting") return "尚未收到当前任务的航线实际开始执行";
+  if (phase === "paused") return "航线已暂停";
+  if (phase === "uploaded") return "飞机已收到航线，尚未执行";
+  if (phase === "staged") return "航线只在手机上，飞机尚未收到";
+  if (phase === "completed") return "航线已结束";
+  if (phase === "failed") return "任务失败，飞机效果以遥控器和飞机为准";
+  if (phase === "disconnected") return "与手机失联，飞机状态未知";
+  if (phase === "idle" || phase === null) return "没有当前任务效果";
+  return "等待手机确认此次命令的设备效果";
+};
+const missionNextOf = (actions: OperatorMissionActions, phase: string | null, unconfirmedOperation: string | null): string => {
+  if (unconfirmedOperation === "start") return "不得再点执行。可停止航线";
+  if (unconfirmedOperation === "pause" || unconfirmedOperation === "resume") return "不得重复同一命令。可停止航线";
+  if (unconfirmedOperation === "stop") return "停止结果未确认。恢复手机和 MSDK 后可再次尝试停止";
+  if (phase === "starting") return "等待进入航线。现在只能停止，不能再点执行";
+  if (actions.upload.enabled) return "下一步：点「上传至飞机」";
+  if (actions.start.enabled) return "下一步：点「执行航线」";
+  if (actions.pause.enabled) return "下一步：可暂停或停止航线";
+  if (actions.resume.enabled) return "下一步：可恢复或停止航线";
+  if (actions.stage.enabled) return "下一步：点「准备航线」";
+  if (actions.stop.enabled) return "现在只能停止航线";
+  return "当前没有可执行的航线命令";
+};
+const missionProgressOf = (mission: unknown, deviceId: string | null, actions: OperatorMissionActions, headline: string): OperatorLaneProgress => {
+  if (deviceId === null) return freeze({ headline: "未选择任务机", command: "没有可发送的航线命令", effect: "没有当前任务", next: "请选择任务手机" });
+  const phase = text(read(mission, "phase"));
+  const last = lastResultOf(mission);
+  const unconfirmed = last.code !== null && last.code.endsWith("_UNCONFIRMED") ? last.operation : null;
+  return freeze({ headline, command: missionCommandOf(mission, phase), effect: missionEffectOf(mission, phase), next: missionNextOf(actions, phase, unconfirmed) });
+};
+const streamCommandOf = (device: Record<string, unknown> | undefined, playbackReady: boolean, sourceUnavailable: boolean, headline: string): string => {
+  const phase = text(read(read(device, "stream"), "phase"));
+  const failure = text(read(read(device, "stream"), "failureCode"));
+  if (sourceUnavailable) return "图传源已断开，手机已排队恢复性停止";
+  if (failure !== null && failure.endsWith("_UNCONFIRMED")) return "图传命令结果未确认：不能判断手机是否仍在推流";
+  if (phase === "stopping") return "停止图传已发出，等待手机确认";
+  if (phase === "starting" || phase === "streaming") return playbackReady ? "DJI 已接受启动图传" : "DJI 已接受启动图传，不等于电脑已收到画面";
+  if (headline.startsWith("DJI MSDK 图传运行回调：")) return "启动后的运行回调报错，不是本次按钮的完成回执";
+  if (phase === "failed") return "图传命令失败";
+  return "当前没有进行中的图传命令";
+};
+const streamEffectOf = (playbackReady: boolean, device: Record<string, unknown> | undefined, sourceUnavailable: boolean): string => {
+  const videoPhase = text(read(read(device, "video"), "phase"));
+  if (sourceUnavailable) return "本地画面已失效，需要恢复后手动再启";
+  if (playbackReady) return "电脑正在播放画面";
+  if (videoPhase === "awaiting-playback") return "电脑已收到可播放地址，画面尚未挂上";
+  if (videoPhase === "awaiting-ingest") return "手机已接受推流，电脑还在等 RTMP";
+  const phase = text(read(read(device, "stream"), "phase"));
+  if (phase === "starting" || phase === "streaming") return "电脑还没有可播放画面";
+  if (phase === "stopping") return "停止尚未确认，最后一帧不能当成仍在图传";
+  return "没有可播放画面";
+};
+const streamNextOf = (canStart: boolean, canStop: boolean, sourceUnavailable: boolean, phase: string | null, playbackReady: boolean): string => {
+  if (sourceUnavailable) return "恢复 AirLink 和主相机后，再点「启动图传」";
+  if (phase === "stopping") return canStart ? "等待停止确认。确认后可点「停止后重启图传」" : "等待停止确认。完成后才能重新启动";
+  if (canStop || playbackReady) return "要结束请点「停止图传」";
+  if (canStart) return "下一步：点「启动图传」";
+  return "现在不能启动图传";
+};
+const streamProgressOf = (device: Record<string, unknown> | undefined, headline: string, canStart: boolean, canStop: boolean, playbackReady: boolean, sourceUnavailable: boolean): OperatorLaneProgress => {
+  if (device === undefined) return freeze({ headline: "图传未就绪：未选择图传机", command: "没有可发送的图传命令", effect: "没有可播放画面", next: "请选择图传手机" });
+  const phase = text(read(read(device, "stream"), "phase"));
+  return freeze({
+    headline,
+    command: streamCommandOf(device, playbackReady, sourceUnavailable, headline),
+    effect: streamEffectOf(playbackReady, device, sourceUnavailable),
+    next: streamNextOf(canStart, canStop, sourceUnavailable, phase, playbackReady),
+  });
+};
+const flightActionName = (action: string | null): string => {
+  if (action === "takeoff") return "起飞";
+  if (action === "land") return "降落";
+  if (action === "confirm-landing") return "确认继续降落";
+  if (action === "return-home") return "返航";
+  if (action === "stop-takeoff") return "停止自动起飞";
+  if (action === "stop-auto-landing") return "停止自动降落";
+  return action ?? "飞行动作";
+};
+const flightProgressOf = (device: Record<string, unknown> | undefined, confirmation: OperatorConfirmation | null): OperatorLaneProgress => {
+  if (device === undefined) return freeze({ headline: "未选择任务机", command: "没有可发送的飞行动作", effect: "没有当前飞行效果", next: "请选择任务手机" });
+  const landing = text(read(read(device, "landing"), "phase"));
+  const flying = text(read(read(device, "connection"), "flightState"));
+  const motorsOn = read(read(device, "connection"), "motorsOn");
+  if (confirmation !== null) {
+    const label = flightActionName(confirmation.action);
+    return freeze({
+      headline: `等待人工确认：${label} 尚未调用 DJI`,
+      command: `${label}尚未调用 DJI，只生成了本地确认`,
+      effect: "飞机状态尚未因这次点击改变",
+      next: "看确认框：确认后才会下发，取消则不发送",
+    });
+  }
+  if (landing === "awaiting-msdk") {
+    return freeze({
+      headline: "DJI 已接受降落，等待落地确认",
+      command: "DJI 已接受自动降落，不等于已经落地",
+      effect: "仍在等待未飞行且电机关闭",
+      next: "持续观察降落过程；需要时可停止自动降落",
+    });
+  }
+  if (landing === "confirmation-required") {
+    return freeze({
+      headline: "DJI 要求确认继续降落",
+      command: "降落已在进行，DJI 正在等确认继续降落",
+      effect: "尚未确认落地",
+      next: "下一步：确认继续降落，或停止自动降落",
+    });
+  }
+  if (landing === "confirmed-grounded") {
+    return freeze({
+      headline: "已确认落地",
+      command: "最近一次降落命令已被 DJI 接受",
+      effect: "MSDK 持续状态：未飞行且电机关闭",
+      next: "降落已完成，可进行下一步作业",
+    });
+  }
+  if (landing === "stopped") {
+    return freeze({
+      headline: "自动降落已停止",
+      command: "停止自动降落已提交",
+      effect: "请以遥控器和飞行状态为准",
+      next: "持续观察飞行状态后再决定下一步",
+    });
+  }
+  if (landing === "state-unknown") {
+    return freeze({
+      headline: "降落命令已被接受，但飞行状态当前未知",
+      command: "DJI 已接受降落",
+      effect: "飞控状态不足以确认落地",
+      next: "以遥控器为准，必要时停止自动降落",
+    });
+  }
+  if (flying === "flying") {
+    return freeze({
+      headline: "飞机在空中，当前没有待确认的直接飞行动作",
+      command: "当前没有进行中的直接飞行命令",
+      effect: motorsOn === false ? "MSDK 报告在飞，电机状态未启动" : "MSDK 报告飞机在飞",
+      next: "可请求降落、返航或停止类动作",
+    });
+  }
+  return freeze({
+    headline: "当前没有进行中的直接飞行动作",
+    command: "当前没有进行中的直接飞行命令",
+    effect: flying === "grounded" ? "MSDK 报告在地面" : "没有已确认的直接飞行效果",
+    next: "可请求起飞、降落或返航",
+  });
+};
 const missionActionState = (result: OperatorActionResult): OperatorMissionAction => freeze({ enabled: result.ok, reason: result.ok ? null : result.reason ?? "当前阶段不能执行此操作" });
 const missionActionsOf = (view: unknown): OperatorMissionActions => freeze({
   stage: missionActionState(evaluate("mission-stage", view)),
@@ -358,7 +553,13 @@ function project(input: unknown): OperatorView {
     streamCanStop: streamCanStopOf(streamDevice),
     media: read(read(snapshot, "workflow"), "media"),
   };
-  return freeze({ ...view, missionActions: missionActionsOf(view) });
+  const missionActions = missionActionsOf(view);
+  const progress = freeze({
+    mission: missionProgressOf(mission, missionDeviceId, missionActions, view.missionLabel),
+    stream: streamProgressOf(streamDevice, view.streamLabel, view.streamCanStart, view.streamCanStop, view.playbackReady, streamSourceUnavailable),
+    flight: flightProgressOf(missionDevice, view.confirmation),
+  });
+  return freeze({ ...view, missionActions, progress });
 }
 
 function evaluate(action: unknown, view: unknown): OperatorActionResult {

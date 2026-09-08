@@ -51,11 +51,13 @@ describe("Electron 生产图传渲染", () => {
     expect(renderer()).toContain("自动播放被拦截，请点一下上方画面");
   });
 
-  it("操作台可显式运行实机预检，并展示开始操作被预检拦住的原因", () => {
-    expect(html()).toContain('data-action="hardware-readiness"');
+  it("操作台不提供独立实机预检按钮或 IPC，图传接收条件失败仍展示模块原文", () => {
+    expect(html()).not.toContain('data-action="hardware-readiness"');
+    expect(html()).not.toContain("实机预检");
     const source = renderer();
-    expect(source).toContain('"hardware-readiness"');
+    expect(source).not.toContain('"hardware-readiness"');
+    expect(source).not.toContain("实机预检");
     expect(source).toContain("HARDWARE_NOT_READY");
-    expect(source).toContain("实机预检未通过");
+    expect(preload()).not.toContain("hardware-readiness");
   });
 });

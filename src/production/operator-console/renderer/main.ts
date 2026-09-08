@@ -252,6 +252,15 @@ const missionMilestoneStatus = (view: ReturnType<typeof OperatorConsole.project>
   if (mission === null || typeof mission !== "object") return "当前没有桌面任务";
   return read(mission, field) === true ? "DJI 已确认" : "尚未确认";
 };
+const renderLaneProgress = (lane: "stream" | "mission" | "flight", progress: { readonly headline: string; readonly command: string; readonly effect: string; readonly next: string }): void => {
+  const root = document.querySelector(`[data-progress="${lane}"]`);
+  if (!(root instanceof HTMLElement)) return;
+  for (const field of ["headline", "command", "effect", "next"] as const) {
+    const node = root.querySelector(`[data-progress-field="${field}"]`);
+    if (node instanceof HTMLElement) node.textContent = progress[field];
+  }
+};
+
 const renderFlightStatus = (name: string, value: string): void => {
   const node = document.querySelector(`[data-flight-status="${name}"]`);
   if (node instanceof HTMLElement) node.textContent = value;
@@ -458,9 +467,9 @@ const operatorNotice = (value: unknown): string => {
     const blockers = read(inner, "blockers") ?? read(value, "blockers");
     if (Array.isArray(blockers)) {
       const messages = blockers.map((item) => read(item, "message")).filter((message): message is string => typeof message === "string" && message.length > 0);
-      if (messages.length > 0) return `实机预检未通过：${messages.join("；")}`;
+      if (messages.length > 0) return messages.join("；");
     }
-    return "实机预检未通过";
+    return "电脑图传接收条件未满足";
   }
   if (reason === "ANOTHER_VIDEO_TRANSPORT_ACTIVE") return "另一路图传正在使用，请先停止";
   if (reason === "VIDEO_TRANSPORT_FAILED") return "图传未能完成";
@@ -1314,6 +1323,19 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("direct-flight-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
+  const progress = view.progress;
+  if (progress !== undefined) {
+    renderLaneProgress("mission", pendingMissionStart !== null && pendingMissionStart.deviceId === view.missionDeviceId
+      ? {
+        headline: `等待人工确认：执行航线「${pendingMissionStart.routeName}」尚未调用 DJI`,
+        command: "执行航线尚未调用 DJI，只生成了本地确认",
+        effect: progress.mission.effect,
+        next: "看确认框：确认后才会发给手机，取消则不发送",
+      }
+      : progress.mission);
+    renderLaneProgress("stream", progress.stream);
+    renderLaneProgress("flight", progress.flight);
+  }
   renderFlightPanelStatus(view);
   renderFlightPanelVisibility();
   el("mission-label").textContent = view.missionDeviceId === null ? "未选择任务机" : `${view.missionDeviceId} · ${view.missionLabel}`;
@@ -1501,10 +1523,10 @@ const renderOnce = async (signal: AbortSignal): Promise<void> => {
   const view = await projectView(signal);
   state.missionDeviceId = view.missionDeviceId;
   state.streamDeviceId = view.streamDeviceId;
-  renderDevices(view);
-  renderRoutes(view);
-  renderFlight(view);
-  await syncRouteMap(view, signal);
+  try { renderDevices(view); } catch (error) { console.error("[sky-render]", error); }
+  try { renderRoutes(view); } catch (error) { console.error("[sky-render]", error); }
+  try { renderFlight(view); } catch (error) { console.error("[sky-render]", error); }
+  try { await syncRouteMap(view, signal); } catch (error) { console.error("[sky-render]", error); }
   await ensurePlayback(view, signal);
 };
 
@@ -1646,11 +1668,6 @@ el("route-remove").addEventListener("click", async () => {
     }
     if (action === "mission-start") {
       await requestMissionStartConfirmation(view);
-      return;
-    }
-    if (action === "hardware-readiness") {
-      if (view.missionDeviceId === null) { show("请先选择任务飞机"); return; }
-      show(operatorNotice(await bridge().invoke("hardware-readiness", { deviceId: view.missionDeviceId })));
       return;
     }
     const streamAction = action.startsWith("stream-");

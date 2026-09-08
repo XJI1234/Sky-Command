@@ -167,14 +167,6 @@ function create(dependencies: OperationWorkflowDependencies) {
       payload: payloadFacts,
     }, target);
   };
-  const readinessSummary = (deviceId: string): Readonly<{ readonly ok: boolean; readonly legacyVideo: HardwareReadinessResult; readonly flightControl: HardwareReadinessResult; readonly blockers: readonly unknown[] }> => {
-    const legacyVideo = readiness(deviceId, "legacy-video");
-    const flightControl = readiness(deviceId, "flight-control");
-    const seen = new Set<string>();
-    const blockers: unknown[] = [];
-    for (const result of [legacyVideo, flightControl]) for (const blocker of result.blockers) if (!seen.has(blocker.code)) { seen.add(blocker.code); blockers.push(blocker); }
-    return freeze({ ok: blockers.length === 0, legacyVideo, flightControl, blockers: freeze(blockers) });
-  };
   const actions = WorkflowActions.create({
     online,
     assignedRoute: (deviceId) => assignments.get(deviceId),
@@ -248,11 +240,6 @@ function create(dependencies: OperationWorkflowDependencies) {
       return outcome;
     }),
     stopStream: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.stopStream(deviceId)),
-    checkHardwareReadiness: (deviceId: string): WorkflowResult => {
-      if (disposed) return failure("DISPOSED");
-      if (!validId(deviceId)) return failure("INVALID_INPUT");
-      return success(readinessSummary(deviceId));
-    },
     selectVideo: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!online(deviceId)) return failure("DEVICE_OFFLINE"); const streams = read(media(), "streams"); const selected = Array.isArray(streams) && streams.some((entry) => read(entry, "deviceId") === deviceId && read(entry, "phase") === "ready"); if (!selected) return failure("VIDEO_NOT_READY"); try { const outcome = dependencies.mediaPipeline.selectPlayer(deviceId); selectedVideoDeviceId = deviceId; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
     clearVideo: (): WorkflowResult => { if (disposed) return failure("DISPOSED"); try { const outcome = dependencies.mediaPipeline.clearPlayer(); selectedVideoDeviceId = null; publish(); return success(outcome); } catch { return failure("DEPENDENCY_FAILURE"); } },
     refreshMedia: (): WorkflowResult => {

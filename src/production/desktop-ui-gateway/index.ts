@@ -126,10 +126,6 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
         const deviceId = one(input, "deviceId");
         return deviceId === null ? failure("INVALID_INPUT") : call("measurePhoneLink", [deviceId]);
       }
-      if (method === "hardware.readiness") {
-        const deviceId = one(input, "deviceId");
-        return deviceId === null ? failure("INVALID_INPUT") : call("checkHardwareReadiness", [deviceId]);
-      }
       if (method === "route.import") {
         const source = exact(input, ["fileName", "bytes"]);
         const fileName = source === null ? null : read(source, "fileName");

@@ -10,7 +10,7 @@ npm run build
 npm run desktop
 ```
 
-`npm run build` 把主进程打进 `electron/main.mjs`，把操作台渲染器打进 `dist/renderer/`。桌面快捷方式运行构建后的 Electron，不再用 `tsx` 直接执行源码。
+`npm run build` 把主进程打进 `electron/main.mjs`，把操作台渲染器打进 `dist/renderer/`。桌面快捷方式必须启动 `scripts/launch-desktop.cmd`（仓库根目录下已构建的 Electron），不得打开安装目录里的 `Sky Command.exe`。不再用 `tsx` 直接执行源码。
 
 打包时 `appRoot` 可以是只读的 `resources/app.asar`，因此它只用于定位主进程、预加载脚本和渲染器资源。所有宿主运行时写入都必须在 `app.whenReady()` 后基于 `app.getPath("userData")` 解析：本机 HTTP-FLV 临时根目录是 `userData/tmp-http-flv`，启动日志是 `userData/tmp/desktop-launch.log`。不得在 `appRoot`、`projectRoot` 或 ASAR 内创建目录、写日志或写缓存。
 

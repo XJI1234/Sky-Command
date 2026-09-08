@@ -28,7 +28,6 @@ gateway.dispose() -> void
 | 类别 | 方法 |
 | --- | --- |
 | 状态 | `state.snapshot`、`network.hint`、`device.refresh`、`device.link.measure` |
-| 实机预检 | `hardware.readiness` |
 | 航线 | `route.import`、`route.preview`、`route.select`、`route.remove` |
 | 分配 | `assignment.assign`、`assignment.clear` |
 | 任务 | `mission.stage`、`mission.upload`、`mission.start`、`mission.pause`、`mission.resume`、`mission.stop` |
@@ -43,7 +42,7 @@ gateway.dispose() -> void
 
 `route.import` 仅接收 `{ fileName, bytes }`，其中 `bytes` 为 `Uint8Array`；渲染层不能提供路径。
 
-`device.refresh`、`device.link.measure`、`hardware.readiness` 与每个设备操作均要求唯一 `{ deviceId }`；航线操作要求 `{ routeId }`；分配要求 `{ deviceId, routeId }`；设置写入额外要求 `{ patch }`；飞控请求要求 `{ deviceId, action }`，其中 `action` 仅可为 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff` 或 `stop-auto-landing`；确认/取消额外要求 `{ confirmationId }`。网关只验证并转交该封闭动作词表，不生成 DJI 命令。
+`device.refresh`、`device.link.measure` 与每个设备操作均要求唯一 `{ deviceId }`；航线操作要求 `{ routeId }`；分配要求 `{ deviceId, routeId }`；设置写入额外要求 `{ patch }`；飞控请求要求 `{ deviceId, action }`，其中 `action` 仅可为 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff` 或 `stop-auto-landing`；确认/取消额外要求 `{ confirmationId }`。网关只验证并转交该封闭动作词表，不生成 DJI 命令。
 
 `confirm-landing` 只能在桌面快照中的原始 `landingConfirmationNeeded` 为 `true`、`flightState` 为 `flying`、控制链路完整时，由操作者再次确认后送入既有 `flight.confirm` 路径；网关不会为 `flight.land` 自动追加它。`state.snapshot`、`stream.refresh`、`stream.clear`、`network.hint` 不接受输入。不接受多余字段、控制字符、空标识符、非有限时间值或错误值类型。
 
@@ -51,7 +50,7 @@ gateway.dispose() -> void
 
 `device.link.measure` 只委托 `workflow.measurePhoneLink(deviceId)`，返回受限的当前 RTT、中位 RTT、最大 RTT 与抖动，或稳定的不可测状态；它不发送 Relay 协议帧、`telemetry.read`、DJI、图传、航线或飞控命令，也不修改快照或门禁。
 
-`hardware.readiness` 只委托 `workflow.checkHardwareReadiness(deviceId)`，返回脱敏后的图传与直接飞控预检及可显示阻塞项；它不调用 `stream.start`、`flight.request` 或任一媒体服务生命周期方法。
+已移除的 `hardware.readiness` 必须返回 `METHOD_NOT_ALLOWED`，且不得调用工作流。
 
 ## 5. 快照和视频资源
 

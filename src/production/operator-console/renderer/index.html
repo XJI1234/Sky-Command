@@ -108,6 +108,10 @@
      .flight-panel-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
      .flight-panel-content { min-height: 0; overflow: auto; }
      .flight-panel-actions { position: sticky; top: 0; z-index: 1; margin-top: 12px; padding: 12px 0 10px; background: var(--panel-strong); border-bottom: 1px solid var(--line); }
+     .operation-progress { margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--line); background: #10171b; }
+     .operation-progress h4 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.04em; }
+     .operation-progress-headline { margin: 0 0 10px; font-weight: 600; color: var(--text); }
+     .operation-progress .operation-state-row span { min-width: 3.5em; }
      .flight-panel-view[hidden] { display: none; }
     .control-block { padding: 16px 20px; border-bottom: 1px solid var(--line); }
     .control-block:last-of-type { border-bottom: 0; }
@@ -278,6 +282,15 @@
             </div>
           </div>
           <div class="flight-panel-actions">
+            <div class="operation-progress" data-progress="stream" aria-live="polite">
+              <h4>当前进度</h4>
+              <p class="operation-progress-headline" data-progress-field="headline"></p>
+              <div class="operation-state-list">
+                <div class="operation-state-row"><span>命令</span><strong data-progress-field="command"></strong></div>
+                <div class="operation-state-row"><span>效果</span><strong data-progress-field="effect"></strong></div>
+                <div class="operation-state-row"><span>下一步</span><strong data-progress-field="next"></strong></div>
+              </div>
+            </div>
             <div class="operation-state-panel" style="margin-top: 0; padding-top: 0; border-top: 0;">
               <h4>图传控制状态</h4>
               <p id="stream-ready" class="notice"></p>
@@ -356,6 +369,64 @@
               <div class="operation-state-row"><span>MSDK<small>[DJISDKInitEvent]</small></span><strong data-flight-status="mission-msdk">尚未取得</strong></div>
             </div>
           </div>
+          <div class="flight-panel-actions">
+            <div class="operation-progress" data-progress="mission" aria-live="polite">
+              <h4>当前进度</h4>
+              <p class="operation-progress-headline" data-progress-field="headline"></p>
+              <div class="operation-state-list">
+                <div class="operation-state-row"><span>命令</span><strong data-progress-field="command"></strong></div>
+                <div class="operation-state-row"><span>效果</span><strong data-progress-field="effect"></strong></div>
+                <div class="operation-state-row"><span>下一步</span><strong data-progress-field="next"></strong></div>
+              </div>
+            </div>
+            <div class="mission-flow">
+              <div class="mission-step" data-mission-step="prepare">
+                <div class="mission-step-copy">
+                  <span class="mission-step-name">准备到手机</span>
+                  <span class="mission-step-detail">仅传输到手机并校验文件</span>
+                  <p class="operation-feedback" data-operation-feedback="mission-stage" aria-live="polite"></p>
+                </div>
+                <button data-action="mission-stage">准备航线</button>
+              </div>
+              <div class="mission-step" data-mission-step="upload">
+                <div class="mission-step-copy">
+                  <span class="mission-step-name">上传至飞机</span>
+                  <span class="mission-step-detail">手机将已校验文件交给飞机</span>
+                  <p class="operation-feedback" data-operation-feedback="mission-upload" aria-live="polite"></p>
+                </div>
+                <button data-action="mission-upload">上传至飞机</button>
+              </div>
+              <div class="mission-step" data-mission-step="execute">
+                <div class="mission-step-copy">
+                  <span class="mission-step-name">执行航线</span>
+                  <span class="mission-step-detail">执行前会再次要求确认</span>
+                  <p class="operation-feedback" data-operation-feedback="mission-start" aria-live="polite"></p>
+                </div>
+                <button data-action="mission-start">执行航线</button>
+              </div>
+            </div>
+            <div class="mission-secondary-actions" aria-label="航线进行中控制">
+              <div class="operation-action">
+                <button data-action="mission-pause">暂停</button>
+                <p class="operation-feedback" data-operation-feedback="mission-pause" aria-live="polite"></p>
+              </div>
+              <div class="operation-action">
+                <button data-action="mission-resume">恢复</button>
+                <p class="operation-feedback" data-operation-feedback="mission-resume" aria-live="polite"></p>
+              </div>
+              <div class="operation-action">
+                <button data-action="mission-stop">停止航线</button>
+                <p class="operation-feedback" data-operation-feedback="mission-stop" aria-live="polite"></p>
+              </div>
+            </div>
+            <div id="mission-confirm" class="mission-confirmation" hidden>
+              <p id="mission-confirm-text"></p>
+              <div class="confirmation-actions">
+                <button id="mission-confirm-yes">确认执行</button>
+                <button id="mission-confirm-no">取消</button>
+              </div>
+            </div>
+          </div>
           <div class="operation-state-panel">
             <h4>DJI 设备事实</h4>
             <p class="muted">当前手机订阅的 DJI Key；它们是观察事实，不是桌面额外添加的航线门禁。</p>
@@ -407,53 +478,6 @@
             <p id="mission-label" class="mission-status"></p>
             <p id="flight-route" class="mission-route"></p>
           </div>
-          <div class="mission-flow">
-            <div class="mission-step" data-mission-step="prepare">
-              <div class="mission-step-copy">
-                <span class="mission-step-name">准备到手机</span>
-                <span class="mission-step-detail">仅传输到手机并校验文件</span>
-                <p class="operation-feedback" data-operation-feedback="mission-stage" aria-live="polite"></p>
-              </div>
-              <button data-action="mission-stage">准备航线</button>
-            </div>
-            <div class="mission-step" data-mission-step="upload">
-              <div class="mission-step-copy">
-                <span class="mission-step-name">上传至飞机</span>
-                <span class="mission-step-detail">手机将已校验文件交给飞机</span>
-                <p class="operation-feedback" data-operation-feedback="mission-upload" aria-live="polite"></p>
-              </div>
-              <button data-action="mission-upload">上传至飞机</button>
-            </div>
-            <div class="mission-step" data-mission-step="execute">
-              <div class="mission-step-copy">
-                <span class="mission-step-name">执行航线</span>
-                <span class="mission-step-detail">执行前会再次要求确认</span>
-                <p class="operation-feedback" data-operation-feedback="mission-start" aria-live="polite"></p>
-              </div>
-              <button data-action="mission-start">执行航线</button>
-            </div>
-          </div>
-          <div class="mission-secondary-actions" aria-label="航线进行中控制">
-            <div class="operation-action">
-              <button data-action="mission-pause">暂停</button>
-              <p class="operation-feedback" data-operation-feedback="mission-pause" aria-live="polite"></p>
-            </div>
-            <div class="operation-action">
-              <button data-action="mission-resume">恢复</button>
-              <p class="operation-feedback" data-operation-feedback="mission-resume" aria-live="polite"></p>
-            </div>
-            <div class="operation-action">
-              <button data-action="mission-stop">停止航线</button>
-              <p class="operation-feedback" data-operation-feedback="mission-stop" aria-live="polite"></p>
-            </div>
-          </div>
-          <div id="mission-confirm" class="mission-confirmation" hidden>
-            <p id="mission-confirm-text"></p>
-            <div class="confirmation-actions">
-              <button id="mission-confirm-yes">确认执行</button>
-              <button id="mission-confirm-no">取消</button>
-            </div>
-          </div>
         </div>
          </div>
 
@@ -478,8 +502,14 @@
             </div>
           </div>
           <div class="flight-panel-actions">
-            <div class="row">
-              <button data-action="hardware-readiness">实机预检</button>
+            <div class="operation-progress" data-progress="flight" aria-live="polite">
+              <h4>当前进度</h4>
+              <p class="operation-progress-headline" data-progress-field="headline"></p>
+              <div class="operation-state-list">
+                <div class="operation-state-row"><span>命令</span><strong data-progress-field="command"></strong></div>
+                <div class="operation-state-row"><span>效果</span><strong data-progress-field="effect"></strong></div>
+                <div class="operation-state-row"><span>下一步</span><strong data-progress-field="next"></strong></div>
+              </div>
             </div>
             <div class="direct-flight-actions">
               <div class="operation-action">
