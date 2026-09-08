@@ -159,6 +159,8 @@ ParsedRouteDocument {
   readonly sourceDocument: string
   readonly sourceKind: "kml" | "waylines-wpml"
   readonly hasCompanionTemplate: boolean
+  /** Count of DJI-namespaced waylineId elements in the selected WPML; 0 for KML sources. */
+  readonly djiWaylineCount: number
   readonly wpmlNamespace: string | null
   readonly waypointCandidates: readonly RawWaypointCandidate[]
   readonly sha256: string

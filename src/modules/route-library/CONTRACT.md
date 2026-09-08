@@ -74,11 +74,12 @@ D3 不负责：
 满足以下桌面侧条件的 KMZ：
 
 - ZIP 容器安全且可读取；
-- 包含可识别的 `waylines.wpml` 和同目录 `template.kml`；
+- 包含可识别的 `wpmz/waylines.wpml` 和同目录 `template.kml`；
+- 该 WPML 恰好包含一条 DJI 命名空间的 `waylineId`（与手机端上传守卫一致）；
 - 能提取至少两个有效航点；
 - 文件大小、条目数和解压大小未超过限制。
 
-“可上传候选”不等于“可执行航线”。最终是否可执行只能由手机端 DJI WPMZ 校验、飞机 capability、固件状态和 MSDK 上传结果共同决定。
+“可上传候选”不等于“可执行航线”。最终是否可执行只能由手机端 DJI WPMZ 校验、飞机 capability、固件状态和 MSDK 上传结果共同决定。桌面 `upload-candidate` 必须与手机端 `SingleWaylineKmzGuard` 对齐，避免电脑显示可提交后仍被手机本地守卫拒绝。
 
 ### 4.6 当前航线 Selected Route
 
@@ -251,8 +252,8 @@ MissionPayload {
 2. 拒绝加密归档和不安全路径。
 3. 查找 `waylines.wpml`，优先使用 `wpmz/waylines.wpml`。
 4. 如果没有 WPML，再查找 `template.kml` 或其他 KML 作为预览来源。
-5. `waylines.wpml` 可安全解析、存在同目录 `template.kml` 且包含至少两个有效航点时，分类为 `upload-candidate`；这仍不代表通过 DJI WPMZ 校验。
-6. 不存在 WPML但存在有效预览航迹时分类为 `preview-only`，并产生 `WPML_MISSING` 警告；WPML 缺少同目录模板时同样为 `preview-only`，并产生 `DJI_TEMPLATE_MISSING` 警告。
+5. `wpmz/waylines.wpml` 可安全解析、存在同目录 `template.kml`、恰好一条 DJI `waylineId` 且包含至少两个有效航点时，分类为 `upload-candidate`；这仍不代表通过 DJI WPMZ 校验。根目录或其他路径的 `waylines.wpml`、以及多条/零条 `waylineId`，即使可预览也只能是 `preview-only`。
+6. 不存在 WPML但存在有效预览航迹时分类为 `preview-only`，并产生 `WPML_MISSING` 警告；WPML 缺少同目录模板时同样为 `preview-only`，并产生 `DJI_TEMPLATE_MISSING` 警告；路径或条数与手机端守卫不一致时分别产生 `WAYLINE_PATH_NOT_CANONICAL` / `WAYLINE_COUNT_NOT_ONE`。
 7. 归档检查和内容解析必须在内存中完成，不得把 ZIP 条目解压到任何磁盘目录。
 
 ### 9.3 航点数量
@@ -434,6 +435,8 @@ RouteLibraryError {
 
 - `route-domain` `RouteWarningCode.WPML_MISSING`：KMZ 可以预览但不能作为上传候选。
 - `route-domain` `RouteWarningCode.DJI_TEMPLATE_MISSING`：KMZ 含有 WPML，但缺少与其同目录的 DJI `template.kml`，可以预览但不能作为上传候选。
+- `route-domain` `RouteWarningCode.WAYLINE_PATH_NOT_CANONICAL`：WPML 不在手机端要求的 `wpmz/waylines.wpml` 路径。
+- `route-domain` `RouteWarningCode.WAYLINE_COUNT_NOT_ONE`：WPML 的 DJI `waylineId` 条数不是恰好一条。
 - `route-domain` `RouteWarningCode.ALTITUDE_MISSING`：部分或全部航点没有高度。
 
 地图侧警告（当前使用备用底图、三维白模不可用）由 `geo-map` 定义，本模块不产生也不转发。
@@ -573,7 +576,7 @@ D3.3 负责：
 - 使用 D3.1 构造并验证每个 RouteWaypoint。
 - 检查航点数量、sequence 连续性和整条航线结构。
 - 根据源格式、WPML 与同目录模板存在性和解析结果确定分类。
-- 生成 `WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`ALTITUDE_MISSING` 等领域警告。
+- 生成 `WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`WAYLINE_PATH_NOT_CANONICAL`、`WAYLINE_COUNT_NOT_ONE`、`ALTITUDE_MISSING` 等领域警告。
 - 失败时返回稳定错误，不产生部分 QualifiedRoute。
 
 D3.3 不读取 ZIP/XML，不计算摘要，不决定 routeId，不管理目录，不访问地图或 UI。

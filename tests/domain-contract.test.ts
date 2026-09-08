@@ -274,9 +274,13 @@ describe("QualifiedRoute", () => {
   it.each([
     ["kml", "upload-candidate", "route.kml", "route.kml", []],
     ["kmz", "upload-candidate", "route.kmz", "doc.kml", []],
-    ["kmz", "upload-candidate", "route.kmz", "waylines.wpml", [{ code: "WPML_MISSING", message: "x" }]],
-    ["kmz", "upload-candidate", "route.kmz", "waylines.wpml", [{ code: "DJI_TEMPLATE_MISSING", message: "x" }]],
-    ["kmz", "preview-only", "route.kmz", "doc.kml", []]
+    ["kmz", "upload-candidate", "route.kmz", "waylines.wpml", []],
+    ["kmz", "upload-candidate", "route.kmz", "wpmz/waylines.wpml", [{ code: "WPML_MISSING", message: "x" }]],
+    ["kmz", "upload-candidate", "route.kmz", "wpmz/waylines.wpml", [{ code: "DJI_TEMPLATE_MISSING", message: "x" }]],
+    ["kmz", "upload-candidate", "route.kmz", "wpmz/waylines.wpml", [{ code: "WAYLINE_PATH_NOT_CANONICAL", message: "x" }]],
+    ["kmz", "upload-candidate", "route.kmz", "wpmz/waylines.wpml", [{ code: "WAYLINE_COUNT_NOT_ONE", message: "x" }]],
+    ["kmz", "preview-only", "route.kmz", "doc.kml", []],
+    ["kmz", "preview-only", "route.kmz", "waylines.wpml", []]
   ] as [RouteFileFormat, RouteClassification, string, string, RouteWarning[]][]) (
     "rejects inconsistent classification %s/%s",
     (format, classification, displayName, sourceDocument, warnings) => {

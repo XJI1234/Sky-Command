@@ -1295,13 +1295,20 @@ function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
   if (selected === null || selected === undefined) {
     el("route-file-name").textContent = "";
     el("route-meta").textContent = "";
+    el("route-executable").textContent = "";
+    el("route-executable").classList.remove("is-blocked");
     el("route-summary").textContent = hasRoute ? "请选择要预览的航线" : "尚未导入航迹文件";
     return;
   }
   el("route-file-name").textContent = selected.displayName;
-  el("route-meta").textContent = selected.executable
+  const executableLabel = selected.executable
     ? "可提交给飞机"
-    : `${selected.blockedReason ?? "KML 只能预览"} · 要飞这条航线需要 Wayline 导出的 KMZ`;
+    : (selected.blockedReason ?? "当前航线不能提交给飞机");
+  el("route-meta").textContent = selected.executable
+    ? "桌面文件检查已通过，飞机仍可能在上传或执行时拒绝"
+    : `${executableLabel} · 要飞这条航线需要 Wayline 导出的 KMZ`;
+  el("route-executable").textContent = executableLabel;
+  el("route-executable").classList.toggle("is-blocked", selected.executable !== true);
 }
 
 function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {

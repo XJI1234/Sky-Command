@@ -5,6 +5,7 @@ import { makeKmz } from "./helpers/zip-fixture.js";
 const bytes = new TextEncoder().encode(`<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><LineString><coordinates>120,30,10 121,31,20</coordinates></LineString></Placemark></Document></kml>`);
 const wpml = `<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wp="http://www.dji.com/wpmz/1.0.6"><Document><Folder>
+<wp:waylineId>0</wp:waylineId>
 <Placemark><Point><coordinates>120,30</coordinates></Point><wp:index>0</wp:index><wp:executeHeight>10</wp:executeHeight></Placemark>
 <Placemark><Point><coordinates>121,31</coordinates></Point><wp:index>1</wp:index><wp:executeHeight>20</wp:executeHeight></Placemark>
 </Folder></Document></kml>`;
@@ -66,7 +67,7 @@ describe("D3 route-library first-level contract", () => {
   });
 
   it("hands upload-candidate KMZ bytes to mission control as an independent copy", async () => {
-    const kmz = await makeKmz({ "template.kml": template, "waylines.wpml": wpml });
+    const kmz = await makeKmz({ "wpmz/template.kml": template, "wpmz/waylines.wpml": wpml });
     const created = RouteLibrary.create({ idProvider: () => "route-1", clock: () => "2026-08-10T00:00:00.000Z" });
     if (!created.ok) throw created.error;
     expect(await created.value.importFile({ fileName: "mission.kmz", bytes: kmz })).toMatchObject({ status: "imported", route: { classification: "upload-candidate" } });

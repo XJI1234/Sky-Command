@@ -36,6 +36,8 @@ export interface ParsedRouteDocument {
   readonly sourceKind: "kml" | "waylines-wpml";
   /** True only when the selected WPML has a sibling template.kml in the same KMZ directory. */
   readonly hasCompanionTemplate: boolean;
+  /** Count of DJI-namespaced `waylineId` elements; must be 1 for phone-aligned upload eligibility. */
+  readonly djiWaylineCount: number;
   readonly wpmlNamespace: string | null;
   readonly waypointCandidates: readonly RawWaypointCandidate[];
   readonly sha256: string;

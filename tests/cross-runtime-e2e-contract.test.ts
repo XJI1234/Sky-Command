@@ -74,6 +74,7 @@ describe("跨运行时桌面测试宿主", () => {
     try {
       const device = await host.waitForDevice(30_000);
       const wpml = `<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wp="http://www.dji.com/wpmz/1.0.6"><Document><Folder>
+        <wp:waylineId>0</wp:waylineId>
         <Placemark><Point><coordinates>120.1,30.1</coordinates></Point><wp:index>0</wp:index><wp:executeHeight>40</wp:executeHeight></Placemark>
         <Placemark><Point><coordinates>120.2,30.2</coordinates></Point><wp:index>1</wp:index><wp:executeHeight>40</wp:executeHeight></Placemark>
       </Folder></Document></kml>`;

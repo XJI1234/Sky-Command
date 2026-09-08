@@ -434,6 +434,24 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("import-route", view)).toEqual({ ok: true });
   });
 
+  it("航线页在定位和删除键旁展示与准备航线相同的可执行性判断", () => {
+    const pageSource = page();
+    const rendererSource = renderer();
+    const actions = pageSource.indexOf('class="route-actions"');
+    const executable = pageSource.indexOf('id="route-executable"');
+    const locate = pageSource.indexOf('id="route-locate"');
+    const remove = pageSource.indexOf('id="route-remove"');
+
+    expect(actions).toBeGreaterThan(-1);
+    expect(executable).toBeGreaterThan(actions);
+    expect(locate).toBeGreaterThan(executable);
+    expect(remove).toBeGreaterThan(locate);
+    expect(rendererSource).toContain('el("route-executable")');
+    expect(rendererSource).toContain("selected.executable");
+    expect(rendererSource).toContain("可提交给飞机");
+    expect(rendererSource).toContain("selected.blockedReason");
+  });
+
   it("删除后若当前选择为空或已不存在，投影到剩余航线，不得当成没有航线", () => {
     const remaining = { routeId: "route-2", displayName: "canal.kmz", format: "kmz", classification: "upload-candidate" };
     const missingSelection = OperatorConsole.project({

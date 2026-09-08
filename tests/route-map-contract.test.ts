@@ -10,4 +10,13 @@ describe("航线地图显示契约", () => {
     expect(source).toContain('name: `航点${index + 2}`');
     expect(source).toContain("point:");
   });
+
+  it("默认加载南京白模并保留杭州白模", async () => {
+    const source = await readFile(new URL("../src/production/operator-console/renderer/route-map.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("setNanjingCamera");
+    expect(source).toContain("loadNanjingCityModel");
+    expect(source).toContain("loadHangzhouCityModel");
+    expect(source).toContain("南京三维白模");
+  });
 });

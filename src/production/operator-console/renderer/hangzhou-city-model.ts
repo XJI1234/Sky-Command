@@ -49,3 +49,43 @@ export async function loadHangzhouCityModel(Cesium: CesiumApi, viewer: import("c
   viewer.scene.primitives.add(tileset);
   return tileset;
 }
+
+export const nanjingCityCameraView = {
+  longitude: 118.778,
+  latitude: 32.043,
+  height: 4_000,
+  heading: 0.45,
+  pitch: -Math.PI / 4,
+  roll: 0,
+};
+
+export function nanjingTilesetUrl(baseUrl: string): string {
+  return new URL("city-tiles/nanjing/tileset.json", baseUrl).href;
+}
+
+export function setNanjingCamera(Cesium: CesiumApi, viewer: import("cesium").Viewer): void {
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(
+      nanjingCityCameraView.longitude,
+      nanjingCityCameraView.latitude,
+      nanjingCityCameraView.height,
+    ),
+    orientation: {
+      heading: nanjingCityCameraView.heading,
+      pitch: nanjingCityCameraView.pitch,
+      roll: nanjingCityCameraView.roll,
+    },
+  });
+  viewer.scene.requestRender();
+}
+
+export async function loadNanjingCityModel(Cesium: CesiumApi, viewer: import("cesium").Viewer, baseUrl = document.baseURI): Promise<import("cesium").Cesium3DTileset> {
+  const tileset = await Cesium.Cesium3DTileset.fromUrl(nanjingTilesetUrl(baseUrl), {
+    maximumScreenSpaceError: 12,
+    skipLevelOfDetail: true,
+    preferLeaves: true,
+    dynamicScreenSpaceError: true,
+  });
+  viewer.scene.primitives.add(tileset);
+  return tileset;
+}

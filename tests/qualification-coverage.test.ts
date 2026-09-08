@@ -27,6 +27,7 @@ function document(overrides: Record<string, unknown> = {}): ParsedRouteDocument 
     sourceDocument: "route.kml",
     sourceKind: "kml",
     hasCompanionTemplate: false,
+    djiWaylineCount: 0,
     wpmlNamespace: null,
     waypointCandidates: Object.freeze([
       candidate(),

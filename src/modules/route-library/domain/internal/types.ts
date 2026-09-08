@@ -61,7 +61,12 @@ export interface RouteWaypoint {
 
 export type RouteFileFormat = "kml" | "kmz";
 export type RouteClassification = "preview-only" | "upload-candidate";
-export type RouteWarningCode = "WPML_MISSING" | "DJI_TEMPLATE_MISSING" | "ALTITUDE_MISSING";
+export type RouteWarningCode =
+  | "WPML_MISSING"
+  | "DJI_TEMPLATE_MISSING"
+  | "WAYLINE_PATH_NOT_CANONICAL"
+  | "WAYLINE_COUNT_NOT_ONE"
+  | "ALTITUDE_MISSING";
 
 export interface RouteWarning {
   readonly code: RouteWarningCode;

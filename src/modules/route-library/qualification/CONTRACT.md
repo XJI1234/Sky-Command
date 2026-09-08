@@ -121,24 +121,28 @@ DJI WPML URI 的有效形式为以 `http://www.dji.com/wpmz/` 或 `https://www.d
 
 分类只能通过以下真值表得到：
 
-| format | sourceKind | hasCompanionTemplate | classification | warnings |
-|---|---|---|---|
-| `kml` | `kml` | `false` | `preview-only` | 高度缺失时仅 `ALTITUDE_MISSING` |
-| `kmz` | `kml` | `false` | `preview-only` | 始终 `WPML_MISSING`；高度缺失时再加 `ALTITUDE_MISSING` |
-| `kmz` | `waylines-wpml` | `false` | `preview-only` | 始终 `DJI_TEMPLATE_MISSING`；高度缺失时再加 `ALTITUDE_MISSING` |
-| `kmz` | `waylines-wpml` | `true` | `upload-candidate` | 高度缺失时仅 `ALTITUDE_MISSING` |
+| format | sourceKind | hasCompanionTemplate | sourceDocument | djiWaylineCount | classification | warnings |
+|---|---|---|---|---|---|---|
+| `kml` | `kml` | `false` | `*.kml` | `0` | `preview-only` | 高度缺失时仅 `ALTITUDE_MISSING` |
+| `kmz` | `kml` | `false` | `*.kml` | `0` | `preview-only` | 始终 `WPML_MISSING`；高度缺失时再加 `ALTITUDE_MISSING` |
+| `kmz` | `waylines-wpml` | `false` | `*.wpml` | any | `preview-only` | 始终 `DJI_TEMPLATE_MISSING`；高度缺失时再加 `ALTITUDE_MISSING` |
+| `kmz` | `waylines-wpml` | `true` | 非 `wpmz/waylines.wpml` | any | `preview-only` | 始终 `WAYLINE_PATH_NOT_CANONICAL`；高度缺失时再加 `ALTITUDE_MISSING` |
+| `kmz` | `waylines-wpml` | `true` | `wpmz/waylines.wpml` | ≠1 | `preview-only` | 始终 `WAYLINE_COUNT_NOT_ONE`；高度缺失时再加 `ALTITUDE_MISSING` |
+| `kmz` | `waylines-wpml` | `true` | `wpmz/waylines.wpml` | `1` | `upload-candidate` | 高度缺失时仅 `ALTITUDE_MISSING` |
 
 固定警告定义：
 
 ```text
 WPML_MISSING: "KMZ 中未找到可提交的 waylines.wpml，仅可预览。"
 DJI_TEMPLATE_MISSING: "KMZ 缺少与 waylines.wpml 配套的 template.kml，仅可预览。"
+WAYLINE_PATH_NOT_CANONICAL: "航线文件必须位于 wpmz/waylines.wpml，才能与手机端上传检查一致，仅可预览。"
+WAYLINE_COUNT_NOT_ONE: "航线包必须恰好包含一条 WPML 航线，才能与手机端上传检查一致，仅可预览。"
 ALTITUDE_MISSING: "部分航点未提供高度，将按文件缺失状态预览。"
 ```
 
-- 警告顺序永远是 `WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`ALTITUDE_MISSING`；前两者互斥。
+- 警告顺序永远是 `WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`WAYLINE_PATH_NOT_CANONICAL`、`WAYLINE_COUNT_NOT_ONE`、`ALTITUDE_MISSING`；路径与条数警告互斥，且仅在已有配套模板时出现。
 - 每种警告最多一次，警告 `details` 不存在。
-- `upload-candidate` 仅表示桌面侧已具备把原始 KMZ 交给任务模块的条件，绝不表示 DJI 校验、上传或飞行一定成功。
+- `upload-candidate` 与手机端 `SingleWaylineKmzGuard` 对齐：必须是 `wpmz/waylines.wpml` 且恰好一条 DJI `waylineId`；它仍不表示 DJI 校验、上传或飞行一定成功。
 
 ## 7. 原子性、复杂度与隔离
 

@@ -27,6 +27,7 @@ const WPML_FIELDS = new Set(["index", "executeHeight", "ellipsoidHeight", "heigh
 
 interface ParsedXmlDocument {
   readonly wpmlNamespace: string | null;
+  readonly djiWaylineCount: number;
   readonly waypointCandidates: readonly RawWaypointCandidate[];
 }
 
@@ -322,6 +323,7 @@ async function parseXmlBytes(
   let excludedDepth: number | undefined;
   let rootSeen = false;
   let wpmlNamespace: string | null = null;
+  let djiWaylineCount = 0;
 
   const parser = new SaxesParser({ xmlns: true });
   parser.on("doctype", () => { throw new ImporterPhaseError("EXTERNAL_ENTITY_FORBIDDEN", { phase: "xml-doctype" }); });
@@ -347,6 +349,9 @@ async function parseXmlBytes(
       throw new ImporterPhaseError("EXTERNAL_ENTITY_FORBIDDEN", { phase: "xml-xinclude" });
     }
     if (isWpmlUri(uri)) wpmlNamespace ??= uri;
+    if (sourceKind === "waylines-wpml" && local === "waylineId" && isWpmlUri(uri)) {
+      djiWaylineCount += 1;
+    }
     if (excludedDepth === undefined && startsExcludedSubtree(local, uri)) excludedDepth = elementDepth;
     if (excludedDepth !== undefined) return;
 
@@ -500,6 +505,7 @@ async function parseXmlBytes(
   const selected = sawLineCoordinates ? lineDrafts : pointDrafts;
   return Object.freeze({
     wpmlNamespace,
+    djiWaylineCount: sourceKind === "waylines-wpml" ? djiWaylineCount : 0,
     waypointCandidates: Object.freeze(selected.map(finalizeCandidate))
   });
 }

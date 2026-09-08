@@ -265,9 +265,11 @@ RouteClassification =
 - KML 只能是 `preview-only`。
 - `upload-candidate` 必须是 KMZ。
 - `upload-candidate` 的 sourceDocument 必须以 `.wpml` 结尾。
-- `upload-candidate` 不得包含 `WPML_MISSING` 或 `DJI_TEMPLATE_MISSING` 警告。
+- `upload-candidate` 不得包含 `WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`WAYLINE_PATH_NOT_CANONICAL` 或 `WAYLINE_COUNT_NOT_ONE` 警告。
+- `upload-candidate` 的 sourceDocument 必须恰好为 `wpmz/waylines.wpml`，与手机端 `SingleWaylineKmzGuard` 对齐。
 - 缺少 WPML 的 KMZ 必须是 `preview-only`，并包含 `WPML_MISSING`。
 - WPML 缺少同目录 DJI 模板的 KMZ 必须是 `preview-only`，并包含 `DJI_TEMPLATE_MISSING`。
+- WPML 不在 `wpmz/waylines.wpml` 或 `waylineId` 条数不为 1 的 KMZ 必须是 `preview-only`，并分别包含 `WAYLINE_PATH_NOT_CANONICAL` 或 `WAYLINE_COUNT_NOT_ONE`。
 - D3.1 不自行推断分类；它验证 D3.3 给出的分类是否自洽。
 - 分类组合不一致返回 `DOMAIN_INVARIANT_VIOLATION`。
 
@@ -277,6 +279,8 @@ RouteClassification =
 RouteWarningCode =
   | "WPML_MISSING"
   | "DJI_TEMPLATE_MISSING"
+  | "WAYLINE_PATH_NOT_CANONICAL"
+  | "WAYLINE_COUNT_NOT_ONE"
   | "ALTITUDE_MISSING"
 
 RouteWarning {
@@ -290,7 +294,7 @@ RouteWarning {
 
 - 警告码是封闭集合。
 - 同一警告码最多出现一次。
-- 警告按固定顺序输出：`WPML_MISSING`、`DJI_TEMPLATE_MISSING`，然后 `ALTITUDE_MISSING`；前两者互斥。
+- 警告按固定顺序输出：`WPML_MISSING`、`DJI_TEMPLATE_MISSING`、`WAYLINE_PATH_NOT_CANONICAL`、`WAYLINE_COUNT_NOT_ONE`，然后 `ALTITUDE_MISSING`；路径与条数警告互斥，且与模板缺失互斥。
 - 任意航点 altitude 为 null 时必须包含 `ALTITUDE_MISSING`。
 - 所有航点高度存在时不得包含 `ALTITUDE_MISSING`。
 - message 是面向人的中文说明；业务判断只能依赖 code。
@@ -696,7 +700,7 @@ D3.1 只有同时满足以下条件才算完成：
 6. originalBytes 在构造和读取时都执行防御性复制。
 7. importedAt 必须由外部 Clock 提供规范 UTC ISO 字符串。
 8. SHA-256 只验证格式，内容计算和一致性由 D3.2 与集成测试负责。
-9. RouteWarning 只包含 WPML_MISSING、DJI_TEMPLATE_MISSING 和 ALTITUDE_MISSING；地图警告属于一级模块 `geo-map`。
+9. RouteWarning 只包含 WPML_MISSING、DJI_TEMPLATE_MISSING、WAYLINE_PATH_NOT_CANONICAL、WAYLINE_COUNT_NOT_ONE 和 ALTITUDE_MISSING；地图警告属于一级模块 `geo-map`。
 10. D3.1 生产代码不使用任何第三方运行时依赖。
 11. D3.1 不再拆成正式三级模块，多个实现文件仍共享一个公开入口和契约。
 

@@ -15,6 +15,7 @@ export interface QualificationDocument {
   readonly sourceDocument: string;
   readonly sourceKind: "kml" | "waylines-wpml";
   readonly hasCompanionTemplate: boolean;
+  readonly djiWaylineCount: number;
   readonly wpmlNamespace: string | null;
   readonly candidates: readonly unknown[];
   readonly sha256: string;

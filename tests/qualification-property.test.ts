@@ -13,6 +13,7 @@ function document(candidates: readonly RawWaypointCandidate[]): ParsedRouteDocum
     sourceDocument: "property.kml",
     sourceKind: "kml" as const,
     hasCompanionTemplate: false,
+    djiWaylineCount: 0,
     wpmlNamespace: null,
     waypointCandidates: Object.freeze(candidates),
     sha256: "c".repeat(64),

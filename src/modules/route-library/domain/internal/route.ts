@@ -23,7 +23,9 @@ const CLASSIFICATION_VALUES: readonly RouteClassification[] = ["preview-only", "
 const WARNING_ORDER: Readonly<Record<RouteWarningCode, number>> = {
   WPML_MISSING: 0,
   DJI_TEMPLATE_MISSING: 1,
-  ALTITUDE_MISSING: 2
+  WAYLINE_PATH_NOT_CANONICAL: 2,
+  WAYLINE_COUNT_NOT_ONE: 3,
+  ALTITUDE_MISSING: 4
 };
 
 function invariant(field: string, reason: string): DomainResult<never> {
@@ -79,7 +81,13 @@ function normalizeWarnings(value: unknown): DomainResult<readonly RouteWarning[]
   for (const candidate of value) {
     if (candidate === null || candidate === undefined) return invariant("warnings", "invalid-warning");
     const record = candidate as Record<string, unknown>;
-    if (record.code !== "WPML_MISSING" && record.code !== "DJI_TEMPLATE_MISSING" && record.code !== "ALTITUDE_MISSING") {
+    if (
+      record.code !== "WPML_MISSING"
+      && record.code !== "DJI_TEMPLATE_MISSING"
+      && record.code !== "WAYLINE_PATH_NOT_CANONICAL"
+      && record.code !== "WAYLINE_COUNT_NOT_ONE"
+      && record.code !== "ALTITUDE_MISSING"
+    ) {
       return invariant("warnings", "unknown-code");
     }
     if (seen.has(record.code)) return invariant("warnings", "duplicate-code");
@@ -165,19 +173,32 @@ export function createQualifiedRoute(input: CreateQualifiedRouteInput): DomainRe
   const warnings = warningResult.value;
   const hasWpmlMissing = warnings.some((warning) => warning.code === "WPML_MISSING");
   const hasDjiTemplateMissing = warnings.some((warning) => warning.code === "DJI_TEMPLATE_MISSING");
+  const hasWaylinePathNotCanonical = warnings.some((warning) => warning.code === "WAYLINE_PATH_NOT_CANONICAL");
+  const hasWaylineCountNotOne = warnings.some((warning) => warning.code === "WAYLINE_COUNT_NOT_ONE");
   const hasAltitudeMissing = warnings.some((warning) => warning.code === "ALTITUDE_MISSING");
   const altitudeMissing = value.waypoints.some((point) => point.altitude === null);
+  const phoneUploadBlockers = hasDjiTemplateMissing || hasWaylinePathNotCanonical || hasWaylineCountNotOne;
 
   if (hasAltitudeMissing !== altitudeMissing) return invariant("warnings", "altitude-warning-mismatch");
   if (value.format === "kml") {
-    if (value.classification !== "preview-only" || hasWpmlMissing || hasDjiTemplateMissing) return invariant("classification", "invalid-kml-combination");
+    if (value.classification !== "preview-only" || hasWpmlMissing || phoneUploadBlockers) {
+      return invariant("classification", "invalid-kml-combination");
+    }
   } else if (value.classification === "upload-candidate") {
-    if (!value.sourceDocument.toLowerCase().endsWith(".wpml") || hasWpmlMissing || hasDjiTemplateMissing) {
+    if (
+      value.sourceDocument !== "wpmz/waylines.wpml"
+      || hasWpmlMissing
+      || phoneUploadBlockers
+    ) {
       return invariant("classification", "invalid-upload-combination");
     }
   } else {
     const sourceIsWpml = value.sourceDocument.toLowerCase().endsWith(".wpml");
-    if ((sourceIsWpml && !hasDjiTemplateMissing) || (!sourceIsWpml && !hasWpmlMissing) || (hasWpmlMissing && hasDjiTemplateMissing)) {
+    if (
+      (sourceIsWpml && !phoneUploadBlockers)
+      || (!sourceIsWpml && !hasWpmlMissing)
+      || (hasWpmlMissing && phoneUploadBlockers)
+    ) {
       return invariant("classification", "invalid-preview-combination");
     }
   }

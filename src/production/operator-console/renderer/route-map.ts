@@ -1,5 +1,5 @@
 import { attachWaylineImagery, createOrbitViewerOptions } from "./cesium-config.js";
-import { frameHangzhouModel, loadHangzhouCityModel, setHangzhouCamera } from "./hangzhou-city-model.js";
+import { loadHangzhouCityModel, loadNanjingCityModel, setNanjingCamera } from "./hangzhou-city-model.js";
 
 type CesiumApi = typeof import("cesium");
 type Viewer = import("cesium").Viewer;
@@ -38,14 +38,28 @@ export async function ensureRouteMap(host: HTMLElement): Promise<void> {
   viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.screenSpaceCameraController.minimumZoomDistance = 20;
   viewer.scene.screenSpaceCameraController.enableTilt = true;
-  setHangzhouCamera(Cesium, viewer);
+  setNanjingCamera(Cesium, viewer);
+  const imagery = provider === "tianditu" ? "天地图影像" : "Esri 卫星图";
+  const loaded: string[] = [];
+  const failed: string[] = [];
   try {
-    const cityModel = await loadHangzhouCityModel(Cesium, viewer);
-    if (viewer === undefined || viewer.isDestroyed()) return;
-    frameHangzhouModel(Cesium, viewer, cityModel);
-    notice = `杭州三维白模已加载，当前底图：${provider === "tianditu" ? "天地图影像" : "Esri 卫星图"}。导入 Wayline 导出的 KML 或 KMZ 文件以叠加航迹。`;
+    await loadNanjingCityModel(Cesium, viewer);
+    loaded.push("南京三维白模");
   } catch (error) {
-    notice = `杭州三维白模加载失败：${error instanceof Error ? error.message : String(error)}`;
+    failed.push(`南京三维白模加载失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (viewer === undefined || viewer.isDestroyed()) return;
+  try {
+    await loadHangzhouCityModel(Cesium, viewer);
+    loaded.push("杭州三维白模");
+  } catch (error) {
+    failed.push(`杭州三维白模加载失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (viewer === undefined || viewer.isDestroyed()) return;
+  if (loaded.length > 0) {
+    notice = `${loaded.join("、")}已加载，当前底图：${imagery}。导入 Wayline 导出的 KML 或 KMZ 文件以叠加航迹。`;
+  } else {
+    notice = failed.join("；") || `城市白模加载失败，当前底图：${imagery}。`;
   }
 }
 

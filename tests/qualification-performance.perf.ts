@@ -22,6 +22,7 @@ function largeDocument(count: number): ParsedRouteDocument {
     sourceDocument: "large.kml",
     sourceKind: "kml" as const,
     hasCompanionTemplate: false,
+    djiWaylineCount: 0,
     wpmlNamespace: null,
     waypointCandidates: Object.freeze(candidates),
     sha256: "d".repeat(64),

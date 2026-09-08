@@ -53,6 +53,7 @@ async function ingest(
       sourceDocument: source.value.sourceDocument,
       sourceKind: source.value.sourceKind,
       hasCompanionTemplate: source.value.hasCompanionTemplate,
+      djiWaylineCount: parsed.value.djiWaylineCount,
       wpmlNamespace: parsed.value.wpmlNamespace,
       waypointCandidates: parsed.value.waypointCandidates,
       sha256,

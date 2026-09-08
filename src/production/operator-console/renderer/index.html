@@ -93,7 +93,9 @@
     .route-details { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 12px; }
     .route-details strong { display: block; color: #eff6f5; font-size: 13px; overflow-wrap: anywhere; }
     .route-details small { display: block; margin-top: 5px; color: #8a999d; font: 9px monospace; }
-    .route-actions { display: flex; gap: 6px; }
+    .route-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+    .route-executable { max-width: 132px; padding: 5px 8px; border: 1px solid #475948; background: #121a14; color: var(--accent); font: 11px/1.35 sans-serif; overflow-wrap: anywhere; text-align: right; }
+    .route-executable.is-blocked { border-color: #8a6a2b; background: #1a1610; color: #fc6; }
     .focus-route, .remove-route { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; cursor: pointer; min-height: 0; padding: 0; }
     .focus-route svg, .remove-route svg { display: block; }
     .focus-route { border: 1px solid #475948; background: #121a14; color: #d7f16a; }
@@ -230,6 +232,7 @@
             <small id="route-meta"></small>
           </div>
           <div class="route-actions">
+            <span id="route-executable" class="route-executable"></span>
             <button id="route-locate" class="focus-route" type="button" title="定位到当前航线">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></svg>
             </button>

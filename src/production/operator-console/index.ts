@@ -172,7 +172,7 @@ const routeFact = (value: unknown): OperatorRouteFact | null => {
   const blockedReason = previewOnly
     ? format === "kml"
       ? "KML 只能预览，不能提交给飞机"
-      : "该 KMZ 不是完整 DJI 航线包，仅可预览"
+      : "该 KMZ 未通过与手机端一致的提交检查（需 wpmz/waylines.wpml、配套模板、恰好一条航线），仅可预览"
     : executable
       ? null
       : "尚未取得该航线的可执行性事实";

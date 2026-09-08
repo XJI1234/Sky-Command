@@ -28,6 +28,7 @@ function parsedDocument(overrides: Partial<ParsedRouteDocument> = {}): ParsedRou
     sourceDocument: "route.kml",
     sourceKind: "kml" as const,
     hasCompanionTemplate: false,
+    djiWaylineCount: 0,
     wpmlNamespace: null,
     waypointCandidates: Object.freeze([
       candidate(),
@@ -81,6 +82,7 @@ describe("D3.3 route qualification public contract", () => {
       sourceDocument: "wpmz/waylines.wpml",
       sourceKind: "waylines-wpml",
       hasCompanionTemplate: true,
+      djiWaylineCount: 1,
       wpmlNamespace: "http://www.dji.com/wpmz/1.0.6/",
       waypointCandidates: Object.freeze([
         candidate({ declaredSequenceText: "0" }),
@@ -95,6 +97,44 @@ describe("D3.3 route qualification public contract", () => {
 
     expect(detail.classification).toBe("upload-candidate");
     expect(detail.warnings).toEqual([]);
+  });
+
+  it("keeps root waylines.wpml preview-only to match the phone SingleWaylineKmzGuard path", () => {
+    const detail = qualifiedDetail(parsedDocument({
+      fileName: "mission.kmz",
+      format: "kmz",
+      sourceDocument: "waylines.wpml",
+      sourceKind: "waylines-wpml",
+      hasCompanionTemplate: true,
+      djiWaylineCount: 1,
+      wpmlNamespace: "http://www.dji.com/wpmz/1.0.6/",
+      waypointCandidates: Object.freeze([
+        candidate({ declaredSequenceText: "0" }),
+        candidate({ documentOrder: 1, declaredSequenceText: "1", longitudeText: "120.1670", latitudeText: "30.3220" })
+      ])
+    }));
+
+    expect(detail.classification).toBe("preview-only");
+    expect(detail.warnings.map((warning) => warning.code)).toEqual(["WAYLINE_PATH_NOT_CANONICAL"]);
+  });
+
+  it("keeps multi-wayline KMZ preview-only to match the phone SingleWaylineKmzGuard cardinality", () => {
+    const detail = qualifiedDetail(parsedDocument({
+      fileName: "mission.kmz",
+      format: "kmz",
+      sourceDocument: "wpmz/waylines.wpml",
+      sourceKind: "waylines-wpml",
+      hasCompanionTemplate: true,
+      djiWaylineCount: 2,
+      wpmlNamespace: "http://www.dji.com/wpmz/1.0.6/",
+      waypointCandidates: Object.freeze([
+        candidate({ declaredSequenceText: "0" }),
+        candidate({ documentOrder: 1, declaredSequenceText: "1", longitudeText: "120.1670", latitudeText: "30.3220" })
+      ])
+    }));
+
+    expect(detail.classification).toBe("preview-only");
+    expect(detail.warnings.map((warning) => warning.code)).toEqual(["WAYLINE_COUNT_NOT_ONE"]);
   });
 
   it("classifies a KMZ whose selected source is KML as preview-only with WPML_MISSING", () => {
