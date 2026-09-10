@@ -44,11 +44,11 @@ interface PreflightInput {
 
 `sdkAvailability` 必须直接来自同一次手机 MSDK 生命周期观察。旧的 `sdkRegistered` 只允许迁移期兼容输入，不能覆盖存在的原始字段。航线和直接飞行的可达性只将 `sdkAvailability === READY` 视为已知可以调用 MSDK；`UNKNOWN`、缺失或非 MSDK 值均阻塞。遥控器、飞控、电量、飞行、电机和能力字段可以随同遥测传入，但本模块不得读取它们，避免将显示事实或无关读取错误变成命令阻断。
 
-航线启动的 `missionPhase` 必须为 `uploaded`；它是当前任务身份已经由本系统上传确认的业务不变量，不是 DJI 设备安全判断。本模块绝不推进状态机。
+航线启动的 `missionPhase` 必须为 `uploaded`、`starting`、`pausing` 或 `resuming`：前两者表示当前任务身份已经由本系统上传确认，启动已发出或回执未确认但文件身份仍然有效；后两者表示暂停或恢复的回执未确认，任务文件身份仍然有效，允许改发启动。这些都不是 DJI 设备安全判断。本模块绝不推进状态机。不得把已确认的 `running` 或 `paused` 当成可启动阶段。
 
 `evaluateUpload(input)` 复用同一输入结构，但只评估中继与 MSDK 可达性。它不读取任务阶段、遥控器、飞控、机型能力、电量、飞行状态或电机状态；任务调度器也复用这条无任务阶段的可达性检查来保护暂停、恢复和停止等其它 DJI 航线命令。航线是否可上传、机型是否支持、飞控是否接受以及 DJI 的具体拒绝原因，必须通过对应 MSDK 回调如实返回。
 
-`evaluate(input)` 是航线启动的唯一纯门禁：除中继与 MSDK 可达性外，仅要求 `missionPhase === uploaded`。航线是否符合机型、是否满足飞行条件、是否已能执行及其具体拒绝原因，必须由 `startMission` 的完成回调裁决。回调中的 `IDJIError` 必须作为受限的错误码与说明传回桌面；无终态不得伪装成拒绝。
+`evaluate(input)` 是航线启动的唯一纯门禁：除中继与 MSDK 可达性外，仅要求 `missionPhase` 为 `uploaded`、`starting`、`pausing` 或 `resuming`。航线是否符合机型、是否满足飞行条件、是否已能执行及其具体拒绝原因，必须由 `startMission` 的完成回调裁决。回调中的 `IDJIError` 必须作为受限的错误码与说明传回桌面；无终态不得伪装成拒绝。
 
 ## 4. 直接飞行动作接口
 

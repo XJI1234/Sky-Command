@@ -21,6 +21,8 @@ export function createOrbitViewerOptions(): import("cesium").Viewer.ConstructorO
     skyBox: false,
     skyAtmosphere: false,
     baseLayer: false,
+    requestRenderMode: true,
+    maximumRenderTimeChange: Number.POSITIVE_INFINITY,
   };
 }
 

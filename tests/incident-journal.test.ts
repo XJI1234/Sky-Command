@@ -147,6 +147,34 @@ describe("事故日志", () => {
     expect(log).toContain("WAYLINE_UPLOAD_FAILED");
   });
 
+  it("把 DJI 拒绝航线启动的错误码和说明写入事故日志", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    const gateway = wrapGateway({
+      invoke: async () => ({
+        ok: true as const,
+        value: {
+          ok: false,
+          operation: "start",
+          code: "WAYLINE_ACTION_REJECTED",
+          platformError: { code: "WAYPOINT_MISSION_BUSY", description: "The mission manager is busy" },
+        },
+      }),
+      snapshot: () => ({}),
+      subscribe: () => () => undefined,
+      dispose: () => undefined,
+    }, journal);
+
+    await gateway.invoke("mission.start", { deviceId: "phone-1", confirmationId: "confirm-1" });
+
+    await journal.flush();
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/WARN uplink MISSION_START_WAYLINE_ACTION_REJECTED/);
+    expect(log).toContain("djiErrorCode=WAYPOINT_MISSION_BUSY");
+    expect(log).toContain("djiErrorDescription=The mission manager is busy");
+  });
+
   it("把低延迟控制记为下行，并忽略低延迟周期刷新", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
@@ -193,6 +221,48 @@ describe("事故日志", () => {
     expect(log).toMatch(/downlink STREAM_LIVE/);
     expect(log).toMatch(/downlink VIDEO_PLAYING/);
     expect(log).toMatch(/downlink MEDIA_PUBLISHER_READY/);
+    stop();
+  });
+
+  it("把手机任务执行状态和 DJI 原始航线状态记为上行", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    let listener: ((snapshot: unknown) => void) | undefined;
+    const stop = watchApplication({
+      snapshot: () => ({
+        workflow: {
+          devices: [{
+            deviceId: "phone-1",
+            connection: { missionExecution: "NOT_STARTED", missionDjiExecutionState: "READY" },
+            mission: { phase: "uploaded" },
+            stream: { phase: "idle" },
+            video: { phase: "idle" },
+          }],
+        },
+        runtime: {},
+      }),
+      subscribe: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    }, journal);
+    listener?.({
+      workflow: {
+        devices: [{
+          deviceId: "phone-1",
+          connection: { missionExecution: "STARTING", missionDjiExecutionState: "ENTER_WAYLINE" },
+          mission: { phase: "starting" },
+          stream: { phase: "idle" },
+          video: { phase: "idle" },
+        }],
+      },
+      runtime: {},
+    });
+    await journal.flush();
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/uplink MISSIONEXECUTION_STARTING/);
+    expect(log).toMatch(/uplink MISSIONDJIEXECUTIONSTATE_ENTER_WAYLINE/);
     stop();
   });
 

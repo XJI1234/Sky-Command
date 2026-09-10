@@ -55,9 +55,9 @@ describe("操作台投影", () => {
 
   it("飞行页状态刷新失败不能跳过图传挂载", () => {
     const source = renderer();
-    expect(source).toMatch(/try \{\s*renderFlight\(view\);\s*\} catch/);
-    expect(source).toContain("await ensurePlayback(view, signal)");
-    expect(source.indexOf("try { renderFlight(view); }")).toBeLessThan(source.indexOf("await ensurePlayback(view, signal)"));
+    const paint = source.slice(source.indexOf("const paintOnce"));
+    expect(paint).toMatch(/try \{\s*renderFlight\(view\);\s*\} catch/);
+    expect(paint).toContain("void ensurePlayback(");
   });
 
   it("图传必须在 MediaSource/视频元数据就绪后重试播放，不能只在 load 后调用一次 play", () => {
@@ -88,16 +88,33 @@ describe("操作台投影", () => {
     expect(source).toContain('await run("mission-start", "mission-start", { deviceId: intent.deviceId }, view);');
   });
 
-  it("飞行页本地确认创建后必须进入右栏当前可视区域且契约禁止自动下发", () => {
+  it("飞行页危险动作在同一按钮上两下确认，不弹出确认框也不滚动定位", () => {
     const source = renderer();
     const contract = readFileSync(new URL("../src/production/operator-console/CONTRACT.md", import.meta.url), "utf8");
 
-    expect(source).toContain("const revealFlightConfirmation");
-    expect(source).toContain("confirmation.scrollIntoView");
-    expect(source).toContain("revealFlightConfirmation(confirm, confirmation.confirmationId)");
-    expect(source).toContain("revealFlightConfirmation(missionConfirm,");
-    expect(contract).toContain("同一确认只能主动定位一次");
-    expect(contract).toContain("不得自动确认、发送 DJI 指令");
+    expect(source).toContain("interpretArmClick");
+    expect(source).toContain("ARM_HOLD_MS");
+    expect(source).toContain("isSameClickFlightConfirm");
+    expect(source).not.toContain("confirmation.scrollIntoView");
+    expect(source).not.toContain("const revealFlightConfirmation");
+    expect(contract).toContain("同一格点一下变成「确认××」");
+    expect(contract).toContain("不得再弹出独立确认框");
+    expect(page()).not.toContain('id="mission-confirm"');
+    expect(page()).not.toContain('id="confirm-yes"');
+  });
+
+  it("飞行页不得用残留确认发出另一种 MSDK 动作，也不得在意图未建立时武装执行航线", () => {
+    const source = renderer();
+    const contract = readFileSync(new URL("../src/production/operator-console/CONTRACT.md", import.meta.url), "utf8");
+
+    expect(source).toContain("sameClickConfirmDispatch");
+    expect(source).toContain("flightConfirmDispatch");
+    expect(source).toContain("adoptPendingConfirmation");
+    expect(source).toContain("confirmationMatchesClick");
+    expect(source).not.toContain("if (view.confirmation !== null) pendingFlightConfirmation = view.confirmation");
+    expect(source).toContain("await requestMissionStartConfirmation(view);\n        if (pendingMissionStart === null) {\n          armedCommand = null;");
+    expect(source).toContain("if (dispatch.kind === \"wait\") return;");
+    expect(contract).toContain("只能消费本次点击新建且动作匹配的待确认");
   });
 
   it.each(["flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"] as const)("收尾动作 %s 不由页面上的遥控器、飞控或飞行状态推断拦截", (action) => {
@@ -212,13 +229,14 @@ describe("操作台投影", () => {
     expect(source).toContain("上次更新于");
   });
 
-  it("直接飞行在不重复原始 Key 的前提下汇总本次降落的持续结果", () => {
+  it("直接飞行在不重复原始 Key 的前提下把过程写进现在行", () => {
     const source = renderer();
     const html = page();
 
     expect(html).toContain('id="landing-status"');
-    expect(html).toContain("降落过程");
-    expect(source).toContain("const landingProgressStatus");
+    expect(html).toContain("当前过程");
+    expect(source).toContain("directProcessStatus");
+    expect(source).toContain("landingProgressStatus");
     expect(source).toContain('protection === "NOT_SAFE_TO_LAND"');
     expect(source).toContain("DJI 降落保护报告当前不适合降落，自动降落已暂停");
     expect(source).toContain('mode === "AUTO_LANDING"');
@@ -227,13 +245,11 @@ describe("操作台投影", () => {
     expect(source).toContain("DJI 正在确认继续降落，等待持续飞行状态确认");
     expect(source).toContain('flying === "grounded" && motorsOn === false');
     expect(source).toContain("已确认落地（MSDK 持续状态：未飞行且电机关闭）");
-    expect(source).toContain("landingProgressStatus(landingPhase, landingDevice)");
   });
 
-  it("renderFlight 用已定义的 landingDevice 更新降落过程，不引用未声明变量", () => {
+  it("renderFlight 用已定义的 landingDevice 更新降落保护，不引用未声明变量", () => {
     const flight = renderer().slice(renderer().indexOf("function renderFlight"));
     expect(flight).toContain("const landingDevice = devices.find");
-    expect(flight).toContain("landingProgressStatus(landingPhase, landingDevice)");
     expect(flight).not.toContain("landingProgressStatus(landingPhase, missionDevice)");
   });
 
@@ -611,13 +627,16 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("mission-pause", running)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-stop", running)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-resume", running)).toEqual({ ok: false, reason: "当前阶段不能恢复" });
+    expect(OperatorConsole.evaluate("mission-start", running)).toEqual({ ok: false, reason: "请先将当前航线上传到所选飞机" });
 
     const paused = flight({ mission: { phase: "paused", routeId: "route-1" } });
     expect(OperatorConsole.evaluate("mission-resume", paused)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-stop", paused)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-pause", paused)).toEqual({ ok: false, reason: "当前阶段不能暂停" });
+    expect(OperatorConsole.evaluate("mission-start", paused)).toEqual({ ok: false, reason: "请先将当前航线上传到所选飞机" });
 
     const starting = flight({ mission: { phase: "starting", routeId: "route-1" } });
+    expect(OperatorConsole.evaluate("mission-start", starting)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-stop", starting)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-pause", starting)).toEqual({ ok: false, reason: "当前阶段不能暂停" });
 
@@ -625,9 +644,11 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("mission-stop", stopping)).toEqual({ ok: true });
 
     const pausing = flight({ mission: { phase: "pausing", routeId: "route-1" } });
+    expect(OperatorConsole.evaluate("mission-start", pausing)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-stop", pausing)).toEqual({ ok: true });
 
     const resuming = flight({ mission: { phase: "resuming", routeId: "route-1" } });
+    expect(OperatorConsole.evaluate("mission-start", resuming)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-stop", resuming)).toEqual({ ok: true });
 
     const controlInterrupted = flight({
@@ -963,9 +984,8 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain("pendingMissionStart");
     expect(source).toContain("confirmMissionStart");
     expect(source).toContain("intent.missionId");
-    expect(page()).toContain('id="mission-confirm"');
-    expect(page()).toContain('id="mission-confirm-yes"');
-    expect(page()).toContain('id="mission-confirm-no"');
+    expect(page()).toContain('data-action="mission-start"');
+    expect(page()).not.toContain('id="mission-confirm-yes"');
   });
 
   it("将航线操作呈现为准备、上传、执行三个不可混淆的阶段", () => {
@@ -976,7 +996,7 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain('data-mission-step="execute"');
     expect(source).toContain('仅传输到手机并校验文件');
     expect(source).toContain('手机将已校验文件交给飞机');
-    expect(source).toContain('执行前会再次要求确认');
+    expect(source).toContain('同一键再点确认');
     expect(source).toContain("flight-safety-controls");
     expect(source).not.toContain('>传输到手机<');
     expect(source).not.toContain('>开始<');
@@ -990,10 +1010,10 @@ describe("航线操作台渲染契约", () => {
       expect(pageSource).toContain(`data-flight-panel-view="${panel}"`);
     }
     for (const status of [
-      "stream-relay", "stream-msdk", "stream-air-link", "stream-camera",
-      "mission-relay", "mission-msdk", "mission-phase", "mission-phone-execution",
-      "direct-relay", "direct-msdk", "direct-remote-controller", "direct-flight-controller",
-      "direct-flight-state", "direct-motors", "direct-battery", "direct-landing-protection",
+      "stream-reach", "stream-push", "stream-paint", "stream-msdk-runtime-error",
+      "mission-reach", "mission-execution-now", "mission-upload-or-action", "mission-wayline-interrupt",
+      "direct-reach", "direct-process", "direct-landing-protection", "direct-landing-confirmation",
+      "direct-low-battery-rth", "direct-alert",
     ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
     expect(rendererSource).toContain('flightPanel: FlightPanelName');
     expect(rendererSource).toContain('renderFlightPanelStatus');
@@ -1007,40 +1027,56 @@ describe("航线操作台渲染契约", () => {
     expect(pageSource).not.toContain('<h2>飞行操作</h2>');
     expect(pageSource).not.toContain('图传、航线和直接飞行分别操作。设备页保留全量状态；此处只显示当前操作有关的事实和回执。');
     expect(pageSource).toMatch(/\.flight-controls\s*\{\s*display:\s*grid;/);
-    expect(pageSource).toMatch(/\.flight-panel-content\s*\{\s*min-height:\s*0;\s*overflow:\s*auto;/);
+    expect(pageSource).toMatch(/\.flight-panel-content\s*\{[^}]*overflow:\s*hidden;/);
   });
 
-  it("图传和起飞按钮紧跟可达性状态，不被观测详情挤出可视区", () => {
+  it("任务手机选择在图传页与图传手机分行，航线页不再重复选机也不滚动", () => {
     const pageSource = page();
-    const streamStart = pageSource.indexOf('data-action="stream-start"');
-    const streamFrames = pageSource.indexOf("图像源帧事实");
-    const streamDesktop = pageSource.indexOf("电脑媒体接收与播放事实");
-    expect(streamStart).toBeGreaterThan(-1);
-    expect(streamFrames).toBeGreaterThan(-1);
-    expect(streamStart).toBeLessThan(streamFrames);
-    expect(streamStart).toBeLessThan(streamDesktop);
-
-    const takeoff = pageSource.indexOf('data-action="flight-takeoff"');
-    const confirm = pageSource.indexOf('id="confirm"');
-    const flightFacts = pageSource.indexOf("DJI 飞行事实");
-    expect(takeoff).toBeGreaterThan(-1);
-    expect(confirm).toBeGreaterThan(-1);
-    expect(takeoff).toBeLessThan(flightFacts);
-    expect(confirm).toBeLessThan(flightFacts);
-    expect(pageSource).toMatch(/\.flight-panel-actions\s*\{[^}]*position:\s*sticky;/);
+    const flight = pageSource.slice(pageSource.indexOf('id="workspace-flight"'));
+    const stream = flight.slice(flight.indexOf('id="flight-panel-stream"'), flight.indexOf('id="flight-panel-mission"'));
+    const mission = flight.slice(flight.indexOf('id="flight-panel-mission"'), flight.indexOf('id="flight-panel-direct-flight"'));
+    expect(stream).toContain('id="stream-select"');
+    expect(stream).toContain('id="mission-select"');
+    expect(stream).toContain("图传手机");
+    expect(stream).toContain("任务手机");
+    expect(stream).toContain('class="flight-panel-phones"');
+    expect(stream.indexOf("图传手机")).toBeLessThan(stream.indexOf("任务手机"));
+    expect(pageSource).toMatch(/\.flight-panel-phones\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+    expect(pageSource).not.toMatch(/\.flight-panel-phones\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\);/);
+    expect(mission).not.toContain('id="mission-select"');
+    expect(mission).not.toContain("<select");
+    expect(pageSource).toMatch(/\.flight-panel-view\s*\{[^}]*overflow:\s*hidden;/);
+    expect(pageSource).not.toMatch(/\.flight-panel-actions\s*\{[^}]*overflow-y:\s*auto;/);
   });
 
-  it("图传页和设备页逐项展示手机帧、桌面服务和播放器事实，不把它们合成一个图传状态", () => {
+  it("图传和起飞按钮跟在预留的现在行后面，不跟设备页 Key 清单", () => {
+    const pageSource = page();
+    const flight = pageSource.slice(pageSource.indexOf('id="workspace-flight"'));
+    const streamStart = flight.indexOf('data-action="stream-start"');
+    const streamNow = flight.indexOf('data-flight-status="stream-reach"');
+    expect(streamStart).toBeGreaterThan(-1);
+    expect(streamNow).toBeGreaterThan(-1);
+    expect(streamNow).toBeLessThan(streamStart);
+    expect(flight).not.toContain("图像源帧事实");
+    expect(flight).not.toContain("电脑媒体接收与播放事实");
+
+    const takeoff = flight.indexOf('data-action="flight-takeoff"');
+    const process = flight.indexOf('data-flight-status="direct-process"');
+    expect(takeoff).toBeGreaterThan(-1);
+    expect(process).toBeGreaterThan(-1);
+    expect(process).toBeLessThan(takeoff);
+    expect(flight).not.toContain('id="confirm"');
+  });
+
+  it("图传页只保留压缩的现在行，帧和桌面媒体细节仍由设备页逐项展示", () => {
     const pageSource = page();
     const rendererSource = renderer();
-    for (const status of [
-      "stream-camera-frame-state", "stream-camera-frame-count", "stream-camera-frame-age",
-      "stream-camera-frame-generation", "stream-camera-frame-format", "stream-msdk-push", "stream-msdk-resolution",
-      "stream-msdk-fps", "stream-msdk-bitrate", "stream-msdk-rtt", "stream-msdk-packet-loss",
-      "stream-msdk-packet-cache", "stream-msdk-runtime-error",
-      "stream-rtmp-service", "stream-http-flv-service", "stream-rtmp-arrival",
-      "stream-player-source", "stream-player-rendering",
-    ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
+    expect(pageSource).toContain('data-flight-status="stream-reach"');
+    expect(pageSource).toContain('data-flight-status="stream-push"');
+    expect(pageSource).toContain('data-flight-status="stream-paint"');
+    expect(pageSource).toContain('data-flight-status="stream-msdk-runtime-error"');
+    expect(pageSource).not.toContain('data-flight-status="stream-camera-frame-state"');
+    expect(pageSource).not.toContain('data-flight-status="stream-rtmp-service"');
     expect(rendererSource).toContain("cameraFrameStatus");
     expect(rendererSource).toContain("desktopMediaServiceStatus");
     expect(rendererSource).toContain("cameraFrameStatusRows(connection)");
@@ -1051,32 +1087,29 @@ describe("航线操作台渲染契约", () => {
     expect(rendererSource).toContain("等待媒体数据");
   });
 
-  it("直接飞行页补齐独立的飞行动态事实与降落效果观察，不用按钮回执替代遥测", () => {
+  it("直接飞行页用预留现在行和视频 HUD，不把设备页 Key 清单再抄一遍", () => {
     const pageSource = page();
     const rendererSource = renderer();
     for (const status of [
-      "direct-flight-mode", "direct-altitude", "direct-position", "direct-gps-signal",
-      "direct-gps-satellites", "direct-battery-link", "direct-vision-sensor", "direct-vision-warning",
-      "direct-vision-positioning", "direct-low-battery-rth", "direct-remaining-flight-time",
-      "direct-takeoff-failure", "direct-motor-start-failure", "direct-takeoff-observation",
-      "direct-landing-observation", "direct-return-home-observation",
+      "direct-reach", "direct-process", "direct-landing-protection", "direct-landing-confirmation",
+      "direct-low-battery-rth", "direct-alert",
     ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
-    expect(rendererSource).toContain("directFlightObservationStatus");
-    expect(rendererSource).toContain('renderFlightStatus("direct-flight-mode"');
+    for (const hud of ["flying", "motors", "battery", "altitude", "gps", "mode"]) {
+      expect(pageSource).toContain(`data-flight-hud="${hud}"`);
+    }
+    expect(pageSource).not.toContain('data-flight-status="direct-position"');
+    expect(rendererSource).toContain("directProcessStatus");
+    expect(rendererSource).toContain("hudFlying");
   });
 
-  it("将航线事实按来源分开显示，不把上传、DJI 原始状态、里程碑和桌面工作流混为一谈", () => {
+  it("航线页现在行分开执行、上传或动作和中断，设备页仍按来源展示完整清单", () => {
     const pageSource = page();
     const rendererSource = renderer();
-    for (const heading of [
-      "命令可达性", "DJI 设备事实", "任务对象与手机暂存", "上传至飞机",
-      "DJI 航线执行观测", "DJI 可信里程碑", "桌面任务工作流",
-    ]) expect(pageSource).toContain(`<h4>${heading}</h4>`);
-    for (const status of [
-      "mission-selected-route", "mission-phone-file", "mission-phone-execution", "mission-revision",
-      "mission-device-generation", "mission-upload-progress", "mission-dji-execution-state",
-      "mission-start-point-reached", "mission-route-execution-started",
-    ]) expect(pageSource).toContain(`data-flight-status="${status}"`);
+    expect(pageSource).toContain('data-flight-status="mission-execution-now"');
+    expect(pageSource).toContain('data-flight-status="mission-upload-or-action"');
+    expect(pageSource).toContain('data-flight-status="mission-wayline-interrupt"');
+    expect(pageSource).not.toContain("<h4>DJI 可信里程碑</h4>");
+    expect(pageSource).not.toContain("<h4>桌面任务工作流</h4>");
     expect(rendererSource).toContain("missionUploadProgressStatus");
     expect(rendererSource).toContain("missionDjiExecutionStatus");
     expect(rendererSource).toContain("missionMilestoneStatus");
@@ -1098,23 +1131,17 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain("DJI MSDK 回调");
   });
 
-  it("飞行页三个子页都固定一块当前进度，操作中只看命令、效果和下一步", () => {
+  it("飞行页不展示当前进度块，投影仍保留命令效果和下一步", () => {
     const pageSource = page();
     const rendererSource = renderer();
     const contract = readFileSync(new URL("../src/production/operator-console/CONTRACT.md", import.meta.url), "utf8");
-    for (const lane of ["stream", "mission", "flight"] as const) {
-      expect(pageSource).toContain(`data-progress="${lane}"`);
-    }
-    expect(pageSource).toContain('data-progress-field="headline"');
-    expect(pageSource).toContain('data-progress-field="command"');
-    expect(pageSource).toContain('data-progress-field="effect"');
-    expect(pageSource).toContain('data-progress-field="next"');
-    expect(rendererSource).toContain("const renderLaneProgress");
-    expect(contract).toContain("当前进度");
-    expect(contract).toContain("命令、效果和下一步");
+    expect(pageSource).not.toContain('data-progress="stream"');
+    expect(pageSource).not.toContain('data-progress-field="headline"');
+    expect(rendererSource).not.toContain("const renderLaneProgress");
+    expect(contract).toContain("飞行页不展示「当前进度」");
   });
 
-  it("航线启动已受理时把命令接受和飞机进航线拆开，并只允许停止", () => {
+  it("航线启动已受理时把命令接受和飞机进航线拆开，并允许再点执行或停止", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
         mission: { phase: "starting", routeId: "route-1", lastResult: { operation: "start", ok: true, code: null }, startPointReached: false, routeExecutionStarted: false },
@@ -1127,13 +1154,39 @@ describe("航线操作台渲染契约", () => {
       headline: "启动已受理，等待飞机实际进入航线",
       command: "DJI 已接受执行航线，不等于飞机已进入航线",
       effect: "尚未收到当前任务的航线实际开始执行",
-      next: "等待进入航线。现在只能停止，不能再点执行",
+      next: "等待进入航线。可停止，也可再点执行",
     });
-    expect(view.missionActions.start.enabled).toBe(false);
+    expect(view.missionActions.start.enabled).toBe(true);
     expect(view.missionActions.stop.enabled).toBe(true);
   });
 
-  it("航线启动未确认时禁止重发执行，只指出可以停止", () => {
+  it("航线暂停或恢复未确认时仍允许再点执行，也可以停止，但不得重复同一命令", () => {
+    const pausedUnconfirmed = OperatorConsole.project({
+      snapshot: snapshot([device({
+        mission: { phase: "pausing", routeId: "route-1", lastResult: { operation: "pause", ok: false, code: "WAYLINE_PAUSE_UNCONFIRMED" }, failureCode: "WAYLINE_PAUSE_UNCONFIRMED" },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(pausedUnconfirmed.progress.mission.next).toContain("可再点执行");
+    expect(pausedUnconfirmed.progress.mission.next).toContain("停止");
+    expect(pausedUnconfirmed.missionActions.start.enabled).toBe(true);
+    expect(pausedUnconfirmed.missionActions.pause.enabled).toBe(false);
+    expect(pausedUnconfirmed.missionActions.stop.enabled).toBe(true);
+
+    const resumedUnconfirmed = OperatorConsole.project({
+      snapshot: snapshot([device({
+        mission: { phase: "resuming", routeId: "route-1", lastResult: { operation: "resume", ok: false, code: "WAYLINE_RESUME_UNCONFIRMED" }, failureCode: "WAYLINE_RESUME_UNCONFIRMED" },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(resumedUnconfirmed.missionActions.start.enabled).toBe(true);
+    expect(resumedUnconfirmed.missionActions.resume.enabled).toBe(false);
+    expect(resumedUnconfirmed.missionActions.stop.enabled).toBe(true);
+  });
+
+  it("航线启动未确认时仍允许再点执行，也可以停止", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
         mission: { phase: "starting", routeId: "route-1", lastResult: { operation: "start", ok: false, code: "WAYLINE_START_UNCONFIRMED" }, failureCode: "WAYLINE_START_UNCONFIRMED" },
@@ -1142,9 +1195,9 @@ describe("航线操作台渲染契约", () => {
       workspace: "flight",
     });
     expect(view.progress.mission.command).toContain("结果未确认");
-    expect(view.progress.mission.next).toContain("不得再点执行");
+    expect(view.progress.mission.next).toContain("可再点执行");
     expect(view.progress.mission.next).toContain("停止");
-    expect(view.missionActions.start.enabled).toBe(false);
+    expect(view.missionActions.start.enabled).toBe(true);
     expect(view.missionActions.stop.enabled).toBe(true);
   });
 
@@ -1181,11 +1234,23 @@ describe("航线操作台渲染契约", () => {
   it("渲染器合并重入的状态轮询与用户触发重绘，避免无限堆积异步 DOM 更新", () => {
     const source = renderer();
 
-    expect(source).toContain('import { createRenderScheduler, RenderDeadlineExceededError } from "./render-scheduler.js";');
-    expect(source).toContain("const renderOnce");
-    expect(source).toContain("const renderScheduler = createRenderScheduler");
-    expect(source).toContain("renderScheduler.request()");
-    expect(source).toContain("awaitCurrentRender");
-    expect(source).toContain("deadlineMs: 5_000");
+    expect(source).toContain('import { createBackgroundRefresh, createRenderScheduler');
+    expect(source).toContain("const paintOnce");
+    expect(source).toContain("const paintScheduler = createRenderScheduler");
+    expect(source).toContain("createBackgroundRefresh");
+    expect(source).toContain("paintScheduler.request()");
+    expect(source).not.toContain("window.setTimeout(() => { void tick(); }, 800)");
+    expect(source).not.toMatch(/await bridge\(\)\.invoke\("stream-refresh"\);\s*await render\(\)/);
+  });
+
+  it("DOM 写入不得等待主进程快照或图传刷新", () => {
+    const source = renderer();
+    const paintStart = source.indexOf("const paintOnce");
+    const paintSlice = paintStart >= 0 ? source.slice(paintStart, source.indexOf("const paintScheduler", paintStart)) : "";
+    expect(paintSlice).toContain("const paintOnce");
+    expect(paintSlice).not.toContain('invoke("state-snapshot")');
+    expect(paintSlice).not.toContain('invoke("network-hint")');
+    expect(paintSlice).not.toContain('invoke("stream-refresh")');
+    expect(paintSlice).not.toContain('invoke("video-playback")');
   });
 });

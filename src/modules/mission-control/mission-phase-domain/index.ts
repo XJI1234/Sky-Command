@@ -102,6 +102,7 @@ const includes = (values: readonly MissionPhase[], value: MissionPhase): boolean
 function create(initial?: MissionPhaseState): MissionPhaseMachine {
   let current = idleState();
   let stoppedFrom: MissionPhase | null = null;
+  let startRetry = false;
   try {
     if (validState(initial)) current = makeState(initial.missionId, initial.phase, initial.failureCode);
   } catch {
@@ -115,11 +116,13 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
     const type = parsedType.type;
 
     try {
-      if (type === "reset") { stoppedFrom = null; current = idleState(); return success(current); }
+      if (type === "reset") { stoppedFrom = null; startRetry = false; current = idleState(); return success(current); }
       if (type === "stage-requested") {
         const missionId = (event as unknown as { missionId?: unknown }).missionId;
         if (!validText(missionId)) return error("INVALID_MISSION_ID", current.phase, "Mission ID is invalid");
         if (!includes(STAGEABLE, current.phase)) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        stoppedFrom = null;
+        startRetry = false;
         current = makeState(missionId, "staging", null); return success(current);
       }
       if (current.missionId === null) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
@@ -143,8 +146,18 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         current = makeState(current.missionId, "staged", null); return success(current);
       }
       if (type === "start-requested") {
-        if (current.phase !== "uploaded") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
-        current = makeState(current.missionId, "starting", null); return success(current);
+        if (current.phase === "uploaded") {
+          startRetry = false;
+          current = makeState(current.missionId, "starting", null); return success(current);
+        }
+        if (current.phase === "starting" || current.phase === "pausing" || current.phase === "resuming") {
+          startRetry = true;
+          if (current.phase !== "starting") {
+            current = makeState(current.missionId, "starting", null);
+          }
+          return success(current);
+        }
+        return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
       }
       if (type === "start-succeeded") {
         if (current.phase !== "starting") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
@@ -152,6 +165,7 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
       }
       if (type === "start-rejected") {
         if (current.phase !== "starting") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        if (startRetry) return success(current);
         current = makeState(current.missionId, "uploaded", null); return success(current);
       }
       if (type === "pause-requested") {
@@ -186,6 +200,7 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
       if (type === "stop-succeeded") {
         if (current.phase !== "stopping") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         stoppedFrom = null;
+        startRetry = false;
         current = idleState(); return success(current);
       }
       if (type === "stop-rejected") {
@@ -197,6 +212,7 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
       if (type === "mission-completed") {
         if (current.phase !== "starting" && current.phase !== "running" && current.phase !== "disconnected") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         stoppedFrom = null;
+        startRetry = false;
         current = makeState(current.missionId, "completed", null); return success(current);
       }
       if (type === "operation-failed") {
@@ -204,11 +220,13 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         if (!validText(code)) return error("INVALID_EVENT", current.phase, "Mission event is invalid");
         if (!includes(FAILUREABLE, current.phase)) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         stoppedFrom = null;
+        startRetry = false;
         current = makeState(current.missionId, "failed", code); return success(current);
       }
       if (type === "connection-lost") {
         if (!includes(DISCONNECTABLE, current.phase)) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         stoppedFrom = null;
+        startRetry = false;
         current = makeState(current.missionId, "disconnected", null); return success(current);
       }
       return error("INVALID_EVENT", current.phase, "Mission event is invalid");

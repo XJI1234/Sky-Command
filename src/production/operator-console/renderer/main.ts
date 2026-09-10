@@ -1,8 +1,37 @@
 import flvjs from "flv.js";
 import { OperatorConsole } from "../index.js";
+import {
+  ARM_HOLD_MS,
+  adoptPendingConfirmation,
+  buttonLabel,
+  confirmationMatchesClick,
+  expireArm,
+  flightConfirmDispatch,
+  interpretArmClick,
+  isArmableAction,
+  isSameClickFlightConfirm,
+  sameClickConfirmDispatch,
+  type ArmedCommand,
+} from "../action-arm/index.js";
+import {
+  commandReachStatus,
+  directAlertStatus,
+  directProcessStatus,
+  hudAltitude,
+  hudBattery,
+  hudFlying,
+  hudMotors,
+  hudText,
+  interruptStatus,
+  missionExecutionNowStatus,
+  missionUploadOrActionStatus,
+  streamErrorStatus,
+  streamPaintStatus,
+  streamPushStatus,
+} from "../flight-now-status/index.js";
 import { operationFeedback, type OperationFeedback } from "./operation-feedback.js";
-import { createRenderScheduler, RenderDeadlineExceededError } from "./render-scheduler.js";
-import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, resizeRouteMap, routeMapNotice, showRoutePreview, type RouteMapPreview } from "./route-map.js";
+import { createBackgroundRefresh, createRenderScheduler } from "./render-scheduler.js";
+import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, routeMapNotice, setRouteMapVisible, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight";
 type FlightPanelName = "stream" | "mission" | "direct-flight";
@@ -28,6 +57,12 @@ const state: { workspace: WorkspaceName; flightPanel: FlightPanelName; missionDe
   missionDeviceId: null,
   streamDeviceId: null,
 };
+
+let lastSnapshot: unknown = {};
+let lastRelayHint = "";
+let lastRoutePreview: { readonly routeId: string; readonly preview: RouteMapPreview } | null = null;
+let lastDeviceDetailHtml: string | null = null;
+let lastPlaybackIdentity = "off";
 
 const bridge = (): RendererBridge => {
   const api = (window as unknown as { skyCommand?: RendererBridge }).skyCommand;
@@ -246,100 +281,149 @@ const missionDjiExecutionStatus = (device: Record<string, unknown> | undefined):
   if (value === null) return "当前任务暂无 DJI 执行观察";
   return missionDjiExecutionLabels[value] === undefined ? `DJI 返回未识别执行状态（${value}）` : `${missionDjiExecutionLabels[value]}（${value}）`;
 };
+const missionWaypointIndexStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), "currentWaypointIndex");
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? `航点 ${value}` : "尚未取得";
+};
+const missionWaylineIdStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const value = read(connectionOf(device), "waylineId");
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : "尚未取得";
+};
+const missionExecutingFileStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  return text(read(connectionOf(device), "waylineExecutingMissionFileName")) ?? "尚未取得";
+};
+const missionWaypointActionStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const connection = connectionOf(device);
+  const phase = text(read(connection, "waypointActionPhase"));
+  const actionId = read(connection, "waypointActionId");
+  if (phase === null || typeof actionId !== "number" || !Number.isSafeInteger(actionId) || actionId < 0) return "尚未取得";
+  const group = read(connection, "waypointActionGroup");
+  const groupText = typeof group === "number" && Number.isSafeInteger(group) && group >= 0 ? `动作组 ${group} / ` : "";
+  const phaseText = phase === "START" ? "进行中" : phase === "FINISH" ? "已结束" : phase;
+  const errorCode = text(read(connection, "waypointActionErrorCode"));
+  const errorDescription = text(read(connection, "waypointActionErrorDescription"));
+  const errorText = errorCode !== null ? `；${errorCode}${errorDescription !== null ? ` ${errorDescription}` : ""}` : "";
+  return `${groupText}动作 ${actionId} · ${phaseText}${errorText}`;
+};
+const missionWaylineInterruptStatus = (device: Record<string, unknown> | undefined): string => {
+  if (device === undefined) return "未选择手机";
+  const code = text(read(connectionOf(device), "waylineInterruptErrorCode"));
+  const description = text(read(connectionOf(device), "waylineInterruptErrorDescription"));
+  if (code === null && description === null) return "尚未取得";
+  return [code, description].filter((part): part is string => part !== null).join(" ");
+};
 const missionMilestoneStatus = (view: ReturnType<typeof OperatorConsole.project>, field: "startPointReached" | "routeExecutionStarted"): string => {
   if (view.missionDeviceId === null) return "未选择手机";
   const mission = read(view, "mission");
   if (mission === null || typeof mission !== "object") return "当前没有桌面任务";
   return read(mission, field) === true ? "DJI 已确认" : "尚未确认";
 };
-const renderLaneProgress = (lane: "stream" | "mission" | "flight", progress: { readonly headline: string; readonly command: string; readonly effect: string; readonly next: string }): void => {
-  const root = document.querySelector(`[data-progress="${lane}"]`);
-  if (!(root instanceof HTMLElement)) return;
-  for (const field of ["headline", "command", "effect", "next"] as const) {
-    const node = root.querySelector(`[data-progress-field="${field}"]`);
-    if (node instanceof HTMLElement) node.textContent = progress[field];
-  }
-};
+const knownStatus = (value: string): string | null =>
+  value === "尚未取得" || value === "未选择手机" || value === "未报告上传" || value === "当前任务暂无 DJI 执行观察" ? null : value;
 
 const renderFlightStatus = (name: string, value: string): void => {
   const node = document.querySelector(`[data-flight-status="${name}"]`);
   if (node instanceof HTMLElement) node.textContent = value;
 };
+const renderFlightHud = (name: string, value: string): void => {
+  const node = document.querySelector(`[data-flight-hud="${name}"]`);
+  if (node instanceof HTMLElement) node.textContent = value;
+};
 function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project>): void {
   const streamDevice = selectedFlightDevice(view, view.streamDeviceId);
   const missionDevice = selectedFlightDevice(view, view.missionDeviceId);
-  renderFlightStatus("stream-relay", relayStatus(streamDevice));
-  renderFlightStatus("stream-msdk", msdkStatus(streamDevice));
-  renderFlightStatus("stream-air-link", linkStatus(streamDevice, "airLink"));
-  renderFlightStatus("stream-camera", linkStatus(streamDevice, "camera"));
   const streamConnection = connectionOf(streamDevice);
-  renderFlightStatus("stream-camera-frame-state", streamDevice === undefined ? "未选择手机" : cameraFrameStatus(streamConnection));
-  renderFlightStatus("stream-camera-frame-generation", streamDevice === undefined ? "未选择手机" : cameraFrameGenerationStatus(streamConnection));
-  renderFlightStatus("stream-camera-frame-count", streamDevice === undefined ? "未选择手机" : cameraFrameCountStatus(streamConnection));
-  renderFlightStatus("stream-camera-frame-age", streamDevice === undefined ? "未选择手机" : cameraFrameAgeStatus(streamConnection));
-  renderFlightStatus("stream-camera-frame-format", streamDevice === undefined ? "未选择手机" : cameraFrameFormatStatus(streamConnection));
-  renderFlightStatus("stream-msdk-push", liveStreamingStatus(streamDevice));
-  renderFlightStatus("stream-msdk-resolution", liveMetricStatus(streamDevice, "resolution"));
-  renderFlightStatus("stream-msdk-fps", liveMetricStatus(streamDevice, "fps", " fps"));
-  renderFlightStatus("stream-msdk-bitrate", liveMetricStatus(streamDevice, "videoBitrateKbps", " Kbps"));
-  renderFlightStatus("stream-msdk-rtt", liveMetricStatus(streamDevice, "rttMillis", " ms"));
-  renderFlightStatus("stream-msdk-packet-loss", liveMetricStatus(streamDevice, "packetLoss"));
-  renderFlightStatus("stream-msdk-packet-cache", liveMetricStatus(streamDevice, "packetCacheLength"));
-  renderFlightStatus("stream-msdk-runtime-error", streamDevice === undefined ? "未选择手机" : liveRuntimeErrorStatus(streamConnection));
-  renderFlightStatus("stream-rtmp-service", desktopMediaServiceStatus(view, "rtmpIngest"));
-  renderFlightStatus("stream-http-flv-service", desktopMediaServiceStatus(view, "httpFlv"));
-  renderFlightStatus("stream-rtmp-arrival", rtmpArrivalStatus(streamDevice));
-  renderFlightStatus("stream-player-source", desktopPlayerSourceStatus(streamDevice));
-  renderFlightStatus("stream-player-rendering", streamDevice === undefined ? "未选择手机" : playbackRuntimeLabel(streamDevice, view.streamDeviceId));
-  renderFlightStatus("stream-runtime", streamDevice === undefined ? "未选择手机" : view.streamLabel);
+  const live = read(streamConnection, "live");
+  const streaming = read(live, "streaming");
+  const player = document.getElementById("video");
+  const painting = streamDevice !== undefined && player instanceof HTMLVideoElement && isPainting(player);
+  renderFlightStatus("stream-reach", commandReachStatus({
+    selected: streamDevice !== undefined,
+    relayOnline: relayStatus(streamDevice) === "在线",
+    msdkReady: msdkStatus(streamDevice) === "已就绪",
+    airLinkConnected: linkStatus(streamDevice, "airLink") === "已连接",
+    cameraConnected: linkStatus(streamDevice, "camera") === "已连接",
+  }));
+  renderFlightStatus("stream-push", streamPushStatus({
+    selected: streamDevice !== undefined,
+    streaming: streaming === true ? true : streaming === false ? false : null,
+    resolution: text(read(live, "resolution")),
+    fps: typeof read(live, "fps") === "number" || typeof read(live, "fps") === "string" ? read(live, "fps") as string | number : null,
+  }));
+  renderFlightStatus("stream-paint", streamPaintStatus({ selected: streamDevice !== undefined, painting }));
+  const runtimeError = read(live, "runtimeError");
+  renderFlightStatus("stream-msdk-runtime-error", streamErrorStatus({
+    selected: streamDevice !== undefined,
+    code: text(read(runtimeError, "code")),
+    description: text(read(runtimeError, "description")),
+  }));
 
-  renderFlightStatus("mission-relay", relayStatus(missionDevice));
-  renderFlightStatus("mission-msdk", msdkStatus(missionDevice));
-  renderFlightStatus("mission-remote-controller", linkStatus(missionDevice, "remoteController"));
-  renderFlightStatus("mission-flight-controller", linkStatus(missionDevice, "flightController"));
-  renderFlightStatus("mission-selected-route", selectedRouteStatus(view));
-  renderFlightStatus("mission-assigned-route", assignedMissionRouteStatus(view));
-  renderFlightStatus("mission-phone-file", enumStatus(missionDevice, "missionFileName"));
-  renderFlightStatus("mission-phone-execution", missionPhoneExecutionStatus(missionDevice));
-  renderFlightStatus("mission-revision", missionIntegerStatus(missionDevice, "missionRevision"));
-  renderFlightStatus("mission-device-generation", missionIntegerStatus(missionDevice, "missionDeviceGeneration"));
-  renderFlightStatus("mission-upload-progress", missionUploadProgressStatus(missionDevice));
-  renderFlightStatus("mission-dji-execution-state", missionDjiExecutionStatus(missionDevice));
-  renderFlightStatus("mission-start-point-reached", missionMilestoneStatus(view, "startPointReached"));
-  renderFlightStatus("mission-route-execution-started", missionMilestoneStatus(view, "routeExecutionStarted"));
-  renderFlightStatus("mission-phase", missionDevice === undefined ? "未选择手机" : view.missionLabel);
+  const missionConnection = connectionOf(missionDevice);
+  renderFlightStatus("mission-reach", commandReachStatus({
+    selected: missionDevice !== undefined,
+    relayOnline: relayStatus(missionDevice) === "在线",
+    msdkReady: msdkStatus(missionDevice) === "已就绪",
+  }));
+  renderFlightStatus("mission-execution-now", missionExecutionNowStatus({
+    selected: missionDevice !== undefined,
+    execution: knownStatus(missionDjiExecutionStatus(missionDevice)),
+    waypoint: knownStatus(missionWaypointIndexStatus(missionDevice)),
+    fileName: knownStatus(missionExecutingFileStatus(missionDevice)),
+  }));
+  const uploadRaw = read(missionConnection, "missionUploadProgress");
+  renderFlightStatus("mission-upload-or-action", missionUploadOrActionStatus({
+    selected: missionDevice !== undefined,
+    uploadPercent: typeof uploadRaw === "number" && Number.isSafeInteger(uploadRaw) ? uploadRaw : null,
+    action: knownStatus(missionWaypointActionStatus(missionDevice)),
+  }));
+  renderFlightStatus("mission-wayline-interrupt", interruptStatus({
+    selected: missionDevice !== undefined,
+    code: text(read(missionConnection, "waylineInterruptErrorCode")),
+    description: text(read(missionConnection, "waylineInterruptErrorDescription")),
+  }));
 
-  renderFlightStatus("direct-relay", relayStatus(missionDevice));
-  renderFlightStatus("direct-msdk", msdkStatus(missionDevice));
-  renderFlightStatus("direct-remote-controller", linkStatus(missionDevice, "remoteController"));
-  renderFlightStatus("direct-flight-controller", linkStatus(missionDevice, "flightController"));
-  renderFlightStatus("direct-flight-state", flightStateStatus(missionDevice));
-  renderFlightStatus("direct-motors", booleanStatus(missionDevice, "motorsOn", "已启动", "未启动"));
-  renderFlightStatus("direct-battery-link", linkStatus(missionDevice, "battery"));
-  renderFlightStatus("direct-battery", batteryStatus(missionDevice));
-  renderFlightStatus("direct-landing-protection", enumStatus(missionDevice, "landingProtectionState"));
-  renderFlightStatus("direct-landing-confirmation", booleanStatus(missionDevice, "landingConfirmationNeeded", "需要确认", "不需要确认"));
-  renderFlightStatus("direct-flight-mode", enumStatus(missionDevice, "flightMode"));
   const directConnection = connectionOf(missionDevice);
-  const directPose = read(directConnection, "pose");
-  const directAltitude = finiteNumber(read(directPose, "altitudeMeters"));
-  const directLatitude = finiteNumber(read(directPose, "latitude"));
-  const directLongitude = finiteNumber(read(directPose, "longitude"));
+  const flying = text(read(directConnection, "flightState"));
+  const motorsOn = read(directConnection, "motorsOn");
   const directRthState = read(directConnection, "lowBatteryRthState");
-  renderFlightStatus("direct-altitude", directAltitude === null ? "尚未取得" : `${directAltitude.toFixed(1)} 米`);
-  renderFlightStatus("direct-position", directLatitude === null || directLongitude === null ? "尚未取得" : `${directLatitude.toFixed(5)}, ${directLongitude.toFixed(5)}`);
-  renderFlightStatus("direct-gps-signal", enumStatus(missionDevice, "gpsSignalLevel"));
-  renderFlightStatus("direct-gps-satellites", missionIntegerStatus(missionDevice, "gpsSatelliteCount"));
-  renderFlightStatus("direct-vision-sensor", booleanStatus(missionDevice, "visionSensorUsed", "正在使用", "未使用"));
-  renderFlightStatus("direct-vision-warning", enumStatus(missionDevice, "visionSystemWarning"));
-  renderFlightStatus("direct-vision-positioning", booleanStatus(missionDevice, "visionPositioningEnabled", "已启用", "未启用"));
-  renderFlightStatus("direct-low-battery-rth", directRthState === "UNKNOWN" ? "未知（MSDK 返回 UNKNOWN）" : lowBatteryRthLabel(directRthState) ?? "尚未取得");
-  renderFlightStatus("direct-remaining-flight-time", directRthState === "UNKNOWN" ? "不适用（返航状态未知）" : durationLabel(read(directConnection, "remainingFlightTimeSeconds")) ?? "尚未取得");
-  renderFlightStatus("direct-takeoff-failure", enumStatus(missionDevice, "takeoffFailureError"));
-  renderFlightStatus("direct-motor-start-failure", enumStatus(missionDevice, "motorStartFailureError"));
-  renderFlightStatus("direct-takeoff-observation", directFlightObservationStatus(missionDevice, "takeoff"));
-  renderFlightStatus("direct-landing-observation", directFlightObservationStatus(missionDevice, "landing"));
-  renderFlightStatus("direct-return-home-observation", directFlightObservationStatus(missionDevice, "return-home"));
+  renderFlightStatus("direct-reach", commandReachStatus({
+    selected: missionDevice !== undefined,
+    relayOnline: relayStatus(missionDevice) === "在线",
+    msdkReady: msdkStatus(missionDevice) === "已就绪",
+  }));
+  renderFlightStatus("direct-process", directProcessStatus({
+    selected: missionDevice !== undefined,
+    flying,
+    motorsOn: motorsOn === true ? true : motorsOn === false ? false : null,
+    flightMode: text(read(directConnection, "flightMode")),
+    landingConfirmationNeeded: read(directConnection, "landingConfirmationNeeded") === true,
+    lowBatteryRthState: text(directRthState),
+  }));
+  renderFlightStatus("direct-landing-protection", enumStatus(missionDevice, "landingProtectionState") === "尚未取得" ? "—" : enumStatus(missionDevice, "landingProtectionState"));
+  renderFlightStatus("direct-landing-confirmation", booleanStatus(missionDevice, "landingConfirmationNeeded", "需要确认", "不需要"));
+  const rthLabel = directRthState === "UNKNOWN"
+    ? "未知（MSDK 返回 UNKNOWN）"
+    : lowBatteryRthLabel(directRthState);
+  const rthRemain = directRthState === "UNKNOWN" ? null : durationLabel(read(directConnection, "remainingFlightTimeSeconds"));
+  renderFlightStatus("direct-low-battery-rth", rthLabel === null ? "—" : rthRemain === null ? rthLabel : `${rthLabel} · ${rthRemain}`);
+  renderFlightStatus("direct-alert", directAlertStatus({
+    selected: missionDevice !== undefined,
+    takeoffFailure: knownStatus(enumStatus(missionDevice, "takeoffFailureError")),
+    motorStartFailure: knownStatus(enumStatus(missionDevice, "motorStartFailureError")),
+    visionWarning: knownStatus(enumStatus(missionDevice, "visionSystemWarning")),
+  }));
+
+  const pose = read(directConnection, "pose");
+  renderFlightHud("flying", hudFlying(flying));
+  renderFlightHud("motors", hudMotors(motorsOn === true ? true : motorsOn === false ? false : null));
+  renderFlightHud("battery", hudBattery(read(directConnection, "batteryPercent")));
+  renderFlightHud("altitude", hudAltitude(read(pose, "altitudeMeters")));
+  renderFlightHud("gps", hudText(read(directConnection, "gpsSignalLevel")));
+  renderFlightHud("mode", hudText(read(directConnection, "flightMode")));
 }
 
 function renderFlightPanelVisibility(): void {
@@ -353,48 +437,46 @@ function renderFlightPanelVisibility(): void {
   });
 }
 
-const revealedFlightConfirmations = new WeakMap<HTMLElement, string>();
-const revealFlightConfirmation = (confirmation: HTMLElement, token: string): void => {
-  if (confirmation.hidden || revealedFlightConfirmations.get(confirmation) === token) return;
-  revealedFlightConfirmations.set(confirmation, token);
-  window.requestAnimationFrame(() => {
-    if (confirmation.hidden || !confirmation.isConnected || revealedFlightConfirmations.get(confirmation) !== token) return;
-    confirmation.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
-  });
-};
-const forgetFlightConfirmationReveal = (confirmation: HTMLElement): void => { revealedFlightConfirmations.delete(confirmation); };
-
 const renderFlightConfirmationFallback = (): void => {
-  const intent = pendingFlightConfirmation;
-  const confirmation = document.getElementById("confirm");
-  if (!(confirmation instanceof HTMLElement)) return;
-  if (intent === null || intent.expiresAtMs <= Date.now()) {
-    pendingFlightConfirmation = null;
-    confirmation.hidden = true;
-    forgetFlightConfirmationReveal(confirmation);
-    return;
-  }
-  confirmation.hidden = false;
-  const textNode = document.getElementById("confirm-text");
-  if (textNode !== null) textNode.textContent = `确认让 ${intent.deviceId} ${flightActionLabel(intent.action)}？此操作会立刻下发到飞控；命令完成不等于飞机状态已经改变。`;
-  confirmation.dataset.deviceId = intent.deviceId;
-  confirmation.dataset.confirmationId = intent.confirmationId;
-  revealFlightConfirmation(confirmation, intent.confirmationId);
+  pendingFlightConfirmation = adoptPendingConfirmation(pendingFlightConfirmation, null, Date.now());
 };
 
 const renderMissionStartConfirmationFallback = (): void => {
-  const intent = pendingMissionStart;
-  const confirmation = document.getElementById("mission-confirm");
-  if (!(confirmation instanceof HTMLElement)) return;
-  if (intent === null) {
-    confirmation.hidden = true;
-    forgetFlightConfirmationReveal(confirmation);
+  /* 确认意图保留在 pendingMissionStart / armedCommand，不再写入独立确认框。 */
+};
+
+const clearArmTimer = (): void => {
+  if (armExpiryTimer !== null) {
+    window.clearTimeout(armExpiryTimer);
+    armExpiryTimer = null;
+  }
+};
+
+const scheduleArmExpiry = (): void => {
+  clearArmTimer();
+  if (armedCommand === null) return;
+  const remain = ARM_HOLD_MS - (Date.now() - armedCommand.armedAtMs);
+  armExpiryTimer = window.setTimeout(() => { void expireArmedCommand(); }, Math.max(0, remain));
+};
+
+const cancelArmedBackend = async (): Promise<void> => {
+  if (armedCommand === null) return;
+  if (armedCommand.action === "mission-start") {
+    pendingMissionStart = null;
     return;
   }
-  confirmation.hidden = false;
-  const textNode = document.getElementById("mission-confirm-text");
-  if (textNode !== null) textNode.textContent = `确认让 ${intent.deviceId} 执行航线「${intent.routeName}」？手机会在调用 DJI 前再次检查设备状态。`;
-  revealFlightConfirmation(confirmation, `${intent.deviceId}:${intent.missionId}:${intent.routeId}`);
+  const confirmation = pendingFlightConfirmation;
+  if (confirmation === null) return;
+  pendingFlightConfirmation = null;
+  await run("flight-cancel", "flight-cancel", { deviceId: confirmation.deviceId, confirmationId: confirmation.confirmationId }, undefined, `flight-${confirmation.action}`);
+};
+
+const expireArmedCommand = async (): Promise<void> => {
+  if (armedCommand === null) return;
+  await cancelArmedBackend();
+  armedCommand = null;
+  clearArmTimer();
+  await render();
 };
 
 type OperationFeedbackRecord = Readonly<{
@@ -513,6 +595,8 @@ let lastSeenCurrentTime = 0;
 let selectedPlaybackDeviceId: string | null = null;
 let pendingMissionStart: MissionStartIntent | null = null;
 let pendingFlightConfirmation: FlightConfirmationIntent | null = null;
+let armedCommand: ArmedCommand | null = null;
+let armExpiryTimer: number | null = null;
 let videoPlayRetryTimer: number | null = null;
 let videoPlayEventsBoundTo: HTMLVideoElement | null = null;
 const phoneLinkProbes = new Map<string, PhoneLinkProbeCacheEntry>();
@@ -582,6 +666,7 @@ const detachVideo = (): void => {
     flvPlayer = null;
   }
   attachedUrl = null;
+  lastPlaybackIdentity = "off";
   attachedAtMs = 0;
   lastPaintAtMs = 0;
   lastSeenCurrentTime = 0;
@@ -769,11 +854,13 @@ const playbackUrl = (value: unknown): string | null => {
 };
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, signal?: AbortSignal): Promise<void> {
-  if (!view.playbackReady) {
+  if (!view.playbackReady || view.streamDeviceId === null) {
+    lastPlaybackIdentity = "off";
     if (attachedUrl !== null) detachVideo();
     return;
   }
-  if (view.streamDeviceId === null) return;
+  const identity = `on:${view.streamDeviceId}`;
+  if (identity === lastPlaybackIdentity && attachedUrl !== null && flvPlayer !== null) return;
   const playbackResult = await safeRenderInvoke("video-playback", { deviceId: view.streamDeviceId }, signal);
   if (playbackResult === null) return;
   const url = playbackUrl(playbackResult);
@@ -785,6 +872,7 @@ async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, 
     if (!accepted(selected)) return;
     selectedPlaybackDeviceId = view.streamDeviceId;
   }
+  lastPlaybackIdentity = identity;
   watchPlaybackStall(el("video") as HTMLVideoElement);
 }
 
@@ -1113,22 +1201,37 @@ const desktopMediaStatusRows = (view: ReturnType<typeof OperatorConsole.project>
 
 const runtimeStatusRows = (view: ReturnType<typeof OperatorConsole.project>, device: Record<string, unknown>, streamDeviceId: string | null): string => [
   statusRow("任务 [手机任务运行状态]", missionRuntimeLabel(read(device, "mission")), false),
+  statusRow("当前航点 [WaylineExecutingInfo.getCurrentWaypointIndex]", missionWaypointIndexStatus(device), false),
+  statusRow("航线 ID [WaylineExecutingInfo.getWaylineID]", missionWaylineIdStatus(device), false),
+  statusRow("飞机正在执行的文件 [WaylineExecutingInfo.getMissionFileName]", missionExecutingFileStatus(device), false),
+  statusRow("航点动作 [WaypointActionListener]", missionWaypointActionStatus(device), false),
+  statusRow("航线中断原因 [WaylineExecutingInfoListener]", missionWaylineInterruptStatus(device), false),
   statusRow("手机推流 [手机图传运行状态]", streamRuntimeLabel(device), false),
 ].join("") + desktopMediaStatusRows(view, device, streamDeviceId);
 
 async function projectView(signal?: AbortSignal): Promise<ReturnType<typeof OperatorConsole.project>> {
   const snapshotResult = unwrap(await awaitCurrentRender(bridge().invoke("state-snapshot"), signal));
-  const snapshot = unwrap(snapshotResult) ?? {};
-  const hintResult = unwrap(await awaitCurrentRender(bridge().invoke("network-hint"), signal));
-  const listed = read(hintResult, "hints");
-  const liveHints = Array.isArray(listed) ? listed.filter((item): item is string => typeof item === "string" && item.startsWith("ws://")) : [];
-  return OperatorConsole.project({
-    snapshot,
-    selection: { missionDeviceId: state.missionDeviceId, streamDeviceId: state.streamDeviceId },
-    workspace: state.workspace,
-    relayHint: liveHints.length > 0 ? liveHints.join(" 或 ") : bridge().relayHint,
-  });
+  lastSnapshot = unwrap(snapshotResult) ?? lastSnapshot;
+  try {
+    const hintResult = unwrap(await awaitCurrentRender(bridge().invoke("network-hint"), signal));
+    const listed = read(hintResult, "hints");
+    const liveHints = Array.isArray(listed) ? listed.filter((item): item is string => typeof item === "string" && item.startsWith("ws://")) : [];
+    if (liveHints.length > 0) lastRelayHint = liveHints.join(" 或 ");
+  } catch {
+    /* keep the last reachable hint */
+  }
+  const view = projectCached();
+  state.missionDeviceId = view.missionDeviceId;
+  state.streamDeviceId = view.streamDeviceId;
+  return view;
 }
+
+const projectCached = (): ReturnType<typeof OperatorConsole.project> => OperatorConsole.project({
+  snapshot: lastSnapshot,
+  selection: { missionDeviceId: state.missionDeviceId, streamDeviceId: state.streamDeviceId },
+  workspace: state.workspace,
+  relayHint: lastRelayHint.length > 0 ? lastRelayHint : bridge().relayHint,
+});
 
 const blocked = (action: string, reason: string, deviceId: string | null = null, connectionEpoch: number | null = null): void => {
   const feedback = captureFeedback(action, deviceId, connectionEpoch, { ok: false, code: "DESKTOP_BLOCKED", reason });
@@ -1246,7 +1349,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const connection = inspected === undefined ? {} : inspected.connection as Record<string, unknown> ?? {};
   const msdk = msdkFact(connection);
   const pairing = pairingFact(connection);
-  el("device-detail").innerHTML = inspected === undefined
+  const html = inspected === undefined
     ? "从左侧选择已连接的手机。"
     : `<p class="muted">编号 ${escapeHtml(String(inspected.deviceId))}</p>
       <h3 class="device-status-heading">连接状态</h3>
@@ -1270,6 +1373,10 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
       <h3 class="device-status-heading">运行状态</h3>
       <div class="connection-status-list" aria-label="运行状态">${runtimeStatusRows(view, inspected, view.streamDeviceId)}</div>
       <p class="muted">对频仅用于新增飞机或更换遥控器。这里只显示手机回报的结果。</p>`;
+  if (html !== lastDeviceDetailHtml) {
+    el("device-detail").innerHTML = html;
+    lastDeviceDetailHtml = html;
+  }
   el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在手机上开始对频。电脑关掉后，需要在手机上重新连接。`;
 }
 
@@ -1330,28 +1437,8 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("direct-flight-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
-  const progress = view.progress;
-  if (progress !== undefined) {
-    renderLaneProgress("mission", pendingMissionStart !== null && pendingMissionStart.deviceId === view.missionDeviceId
-      ? {
-        headline: `等待人工确认：执行航线「${pendingMissionStart.routeName}」尚未调用 DJI`,
-        command: "执行航线尚未调用 DJI，只生成了本地确认",
-        effect: progress.mission.effect,
-        next: "看确认框：确认后才会发给手机，取消则不发送",
-      }
-      : progress.mission);
-    renderLaneProgress("stream", progress.stream);
-    renderLaneProgress("flight", progress.flight);
-  }
   renderFlightPanelStatus(view);
   renderFlightPanelVisibility();
-  el("mission-label").textContent = view.missionDeviceId === null ? "未选择任务机" : `${view.missionDeviceId} · ${view.missionLabel}`;
-  const activeRoute = view.missionRoute;
-  el("flight-route").textContent = activeRoute === null
-    ? view.selectedRoute === null
-      ? "尚未在航线页选择可执行 KMZ"
-      : `待准备航线：${view.selectedRoute.displayName} · ${view.selectedRoute.executable ? "可提交" : view.selectedRoute.blockedReason}`
-    : `当前任务航线：${activeRoute.displayName}${view.selectedRoute?.routeId === activeRoute.routeId ? "" : `（航线页当前选择：${view.selectedRoute?.displayName ?? "无"}）`}`;
   const missionButtonActions = Object.freeze({
     stage: "mission-stage",
     upload: "mission-upload",
@@ -1372,34 +1459,15 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   const streamHasDjiRuntimeError = view.streamLabel.startsWith("DJI MSDK 图传运行回调：");
   el("stream-label").textContent = view.streamLabel;
   el("stream-label").classList.toggle("ok", !streamStopping && !streamHasDjiRuntimeError && (view.playbackReady || view.streamCanStart));
-  const streamReady = el("stream-ready");
-  if (streamStopping) {
-    streamReady.textContent = view.streamCanStart
-      ? "正在等待手机确认停止。可点「停止后重启图传」，确认后才会重新启动。"
-      : "正在等待手机确认停止。停止完成后才能重新启动图传。";
-    streamReady.classList.remove("ok");
-  } else if (streamHasDjiRuntimeError) {
-    streamReady.textContent = view.streamLabel;
-    streamReady.classList.remove("ok");
-  } else if (view.playbackReady || view.streamCanStop) {
-    streamReady.textContent = view.playbackReady
-      ? "画面已就绪。要结束请点「停止图传」"
-      : `${view.streamLabel}。要结束请点「停止图传」`;
-    streamReady.classList.add("ok");
-  } else if (view.streamCanStart) {
-    streamReady.textContent = "图传可请求启动：手机中继、MSDK、AirLink 和主相机均已就绪；发送前会检查电脑接收端，实际推流和出画仍分别确认";
-    streamReady.classList.add("ok");
-  } else {
-    streamReady.textContent = view.streamLabel.startsWith("图传未就绪")
-      ? view.streamLabel
-      : `现在不能启动图传：${view.streamLabel}`;
-    streamReady.classList.remove("ok");
-  }
   const startButton = document.querySelector('button[data-action="stream-start"]');
   if (startButton instanceof HTMLButtonElement) {
     startButton.disabled = !view.streamCanStart;
     startButton.textContent = streamStopping && view.streamCanStart ? "停止后重启图传" : "启动图传";
-    startButton.title = view.streamCanStart ? streamStopping ? "手机确认停止后自动重新启动图传" : "启动图传" : view.streamLabel;
+    startButton.title = view.streamCanStart
+      ? streamStopping
+        ? "手机确认停止后自动重新启动图传"
+        : "图传可请求启动：手机中继、MSDK、AirLink 和主相机均已就绪；发送前会检查电脑接收端，实际推流和出画仍分别确认"
+      : view.streamLabel;
   }
   const stopButton = document.querySelector('button[data-action="stream-stop"]');
   if (stopButton instanceof HTMLButtonElement) {
@@ -1409,51 +1477,42 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   }
   renderOperationFeedback("stream-start", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
   renderOperationFeedback("stream-stop", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
-  const guidance = view.guidance as { message?: string } | null;
-  el("guidance").textContent = guidance?.message ?? "";
-  for (const action of ["flight-takeoff", "flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"]) {
+  armedCommand = expireArm(armedCommand, Date.now());
+  if (armedCommand === null) clearArmTimer();
+  for (const action of ["flight-takeoff", "flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"] as const) {
     const button = document.querySelector(`button[data-action="${action}"]`);
     if (!(button instanceof HTMLButtonElement)) continue;
     const decision = OperatorConsole.evaluate(action, view);
     button.disabled = !decision.ok;
+    if (isArmableAction(action)) {
+      button.textContent = buttonLabel(action, armedCommand);
+      button.dataset.arm = armedCommand?.action === action ? "armed" : "idle";
+    }
     button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
     renderOperationFeedback(action, view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
   }
-  const landingDevice = devices.find((device) => device.deviceId === view.missionDeviceId);
-  const landing = read(landingDevice, "landing");
-  const landingPhase = text(read(landing, "phase"));
-  const landingStatus = document.getElementById("landing-status");
-  if (landingStatus !== null) landingStatus.textContent = landingProgressStatus(landingPhase, landingDevice);
-  const confirm = el("confirm");
-  if (view.confirmation !== null) pendingFlightConfirmation = view.confirmation;
-  if (pendingFlightConfirmation !== null && pendingFlightConfirmation.expiresAtMs <= Date.now()) pendingFlightConfirmation = null;
-  const confirmation = view.confirmation ?? (pendingFlightConfirmation !== null && pendingFlightConfirmation.deviceId === view.missionDeviceId ? pendingFlightConfirmation : null);
-  if (confirmation !== null) {
-    confirm.hidden = false;
-    el("confirm-text").textContent = `确认让 ${confirmation.deviceId} ${flightActionLabel(confirmation.action)}？此操作会立刻下发到飞控；命令完成不等于飞机状态已经改变。`;
-    confirm.dataset.deviceId = confirmation.deviceId;
-    confirm.dataset.confirmationId = confirmation.confirmationId;
-    revealFlightConfirmation(confirm, confirmation.confirmationId);
-  } else {
-    confirm.hidden = true;
-    forgetFlightConfirmationReveal(confirm);
+  const startMission = document.querySelector('button[data-action="mission-start"]');
+  if (startMission instanceof HTMLButtonElement) {
+    startMission.textContent = buttonLabel("mission-start", armedCommand);
+    startMission.dataset.arm = armedCommand?.action === "mission-start" ? "armed" : "idle";
   }
-  const missionConfirm = el("mission-confirm");
+  const landingDevice = devices.find((device) => device.deviceId === view.missionDeviceId);
+  void landingDevice;
+  pendingFlightConfirmation = adoptPendingConfirmation(pendingFlightConfirmation, view.confirmation, Date.now());
   const intent = pendingMissionStart;
   const currentMissionId = text(read(view.mission, "missionId"));
   if (
-    intent === null ||
-    view.missionDeviceId !== intent.deviceId ||
-    currentMissionId !== intent.missionId ||
-    view.missionRoute?.routeId !== intent.routeId
+    intent !== null && (
+      view.missionDeviceId !== intent.deviceId ||
+      currentMissionId !== intent.missionId ||
+      view.missionRoute?.routeId !== intent.routeId
+    )
   ) {
     pendingMissionStart = null;
-    missionConfirm.hidden = true;
-    forgetFlightConfirmationReveal(missionConfirm);
-  } else {
-    missionConfirm.hidden = false;
-    el("mission-confirm-text").textContent = `确认让 ${intent.deviceId} 执行航线「${intent.routeName}」？手机会在调用 DJI 前再次检查设备状态。`;
-    revealFlightConfirmation(missionConfirm, `${intent.deviceId}:${intent.missionId}:${intent.routeId}`);
+    if (armedCommand?.action === "mission-start") {
+      armedCommand = null;
+      clearArmTimer();
+    }
   }
 }
 
@@ -1495,60 +1554,94 @@ const previewGeometry = (value: unknown): { polyline: RouteMapPreview["polyline"
   return points.length >= 2 && start !== null && end !== null ? { polyline: points, startMarker: start, endMarker: end } : null;
 };
 
-async function syncRouteMap(view: ReturnType<typeof OperatorConsole.project>, signal?: AbortSignal): Promise<void> {
-  if (state.workspace !== "routes") return;
-  await awaitCurrentRender(ensureRouteMap(el("map")), signal);
-  resizeRouteMap();
-  el("map-notice").textContent = routeMapNotice();
+const settledInvoke = async (name: string, input: unknown, signal: AbortSignal): Promise<unknown> => {
+  try {
+    return await awaitCurrentRender(bridge().invoke(name, input), signal);
+  } catch {
+    return undefined;
+  }
+};
+
+async function fetchOnce(signal: AbortSignal): Promise<void> {
+  const snapshotTask = settledInvoke("state-snapshot", undefined, signal);
+  const hintTask = settledInvoke("network-hint", undefined, signal);
+  const streamTask = settledInvoke("stream-refresh", undefined, signal);
+  const [snapshotResult, hintResult] = await Promise.all([snapshotTask, hintTask, streamTask]);
+  if (signal.aborted) return;
+  const snapshot = unwrap(unwrap(snapshotResult));
+  if (snapshot !== undefined && snapshot !== null) lastSnapshot = snapshot;
+  const listed = read(unwrap(hintResult), "hints");
+  const liveHints = Array.isArray(listed) ? listed.filter((item): item is string => typeof item === "string" && item.startsWith("ws://")) : [];
+  if (liveHints.length > 0) lastRelayHint = liveHints.join(" 或 ");
+  const view = projectCached();
+  state.missionDeviceId = view.missionDeviceId;
+  state.streamDeviceId = view.streamDeviceId;
   const routeId = view.selectedRoute?.routeId ?? null;
-  if (routeId === null) {
-    if (drawnPreviewId() !== null) clearRoutePreview();
-    return;
+  if (state.workspace === "routes" && routeId !== null && lastRoutePreview?.routeId !== routeId) {
+    const preview = previewGeometry(await settledInvoke("route-preview", { routeId }, signal));
+    if (preview !== null) lastRoutePreview = { routeId, preview };
   }
-  if (drawnPreviewId() === routeId) {
-    el("route-summary").textContent = `${view.selectedRoute?.displayName ?? ""} · ${routeMapNotice()}`;
-    return;
-  }
-  const preview = previewGeometry(await awaitCurrentRender(bridge().invoke("route-preview", { routeId }), signal));
-  if (preview === null) {
-    clearRoutePreview();
-    el("map-notice").textContent = "当前航线没有可预览的航迹。";
-    return;
-  }
-  showRoutePreview(routeId, preview);
-  el("map-notice").textContent = routeMapNotice();
-  el("route-summary").textContent = `${view.selectedRoute?.displayName ?? ""} · ${preview.polyline.length} 个航点`;
 }
 
-const renderOnce = async (signal: AbortSignal): Promise<void> => {
+function applyRouteMap(view: ReturnType<typeof OperatorConsole.project>): void {
+  const visible = state.workspace === "routes";
+  setRouteMapVisible(visible);
+  if (!visible) return;
+  void ensureRouteMap(el("map")).then(() => {
+    if (state.workspace !== "routes") {
+      setRouteMapVisible(false);
+      return;
+    }
+    setRouteMapVisible(true);
+    el("map-notice").textContent = routeMapNotice();
+    const routeId = view.selectedRoute?.routeId ?? null;
+    if (routeId === null) {
+      if (drawnPreviewId() !== null) clearRoutePreview();
+      return;
+    }
+    const cached = lastRoutePreview?.routeId === routeId ? lastRoutePreview.preview : null;
+    if (cached === null) {
+      el("route-summary").textContent = `${view.selectedRoute?.displayName ?? ""} · ${routeMapNotice()}`;
+      return;
+    }
+    if (drawnPreviewId() !== routeId) showRoutePreview(routeId, cached);
+    el("map-notice").textContent = routeMapNotice();
+    el("route-summary").textContent = `${view.selectedRoute?.displayName ?? ""} · ${cached.polyline.length} 个航点`;
+  }).catch((error: unknown) => { console.error("[sky-render]", error); });
+}
+
+const paintOnce = (): void => {
   document.querySelectorAll("nav button").forEach((button) => {
     button.classList.toggle("active", (button as HTMLButtonElement).dataset.workspace === state.workspace);
   });
   document.querySelectorAll("main").forEach((node) => {
     node.classList.toggle("active", node.id === `workspace-${state.workspace}`);
   });
-  const view = await projectView(signal);
+  const view = projectCached();
   state.missionDeviceId = view.missionDeviceId;
   state.streamDeviceId = view.streamDeviceId;
   try { renderDevices(view); } catch (error) { console.error("[sky-render]", error); }
   try { renderRoutes(view); } catch (error) { console.error("[sky-render]", error); }
   try { renderFlight(view); } catch (error) { console.error("[sky-render]", error); }
-  try { await syncRouteMap(view, signal); } catch (error) { console.error("[sky-render]", error); }
-  await ensurePlayback(view, signal);
+  try { applyRouteMap(view); } catch (error) { console.error("[sky-render]", error); }
+  void ensurePlayback(view);
 };
 
-const renderScheduler = createRenderScheduler(renderOnce, { deadlineMs: 5_000 });
+const paintScheduler = createRenderScheduler(async () => { paintOnce(); }, { deadlineMs: 60_000 });
+const snapshotRefresh = createBackgroundRefresh(fetchOnce, {
+  deadlineMs: 5_000,
+  intervalMs: 1_000,
+  onFetched: () => { void paintScheduler.request(); },
+});
 const render = async (): Promise<void> => {
   try {
-    await renderScheduler.request();
+    await paintScheduler.request();
   } catch (error) {
     console.error("[sky-render]", error);
-    show(error instanceof RenderDeadlineExceededError
-      ? "界面读取超时，正在自动重试"
-      : "界面刷新失败，请检查手机是否仍连接；若持续出现请重启软件");
     renderFlightConfirmationFallback();
     renderMissionStartConfirmationFallback();
   }
+  void snapshotRefresh.request();
 };
 
 document.querySelectorAll("nav button").forEach((button) => {
@@ -1562,7 +1655,9 @@ document.querySelectorAll("nav button").forEach((button) => {
 document.querySelectorAll<HTMLButtonElement>("[data-flight-panel]").forEach((button) => {
   button.addEventListener("click", () => {
     const panel = button.dataset.flightPanel;
-    if (panel === "stream" || panel === "mission" || panel === "direct-flight") state.flightPanel = panel;
+    if (panel !== "stream" && panel !== "mission" && panel !== "direct-flight") return;
+    if (panel !== state.flightPanel && armedCommand !== null) void expireArmedCommand();
+    state.flightPanel = panel;
     void render();
   });
 });
@@ -1673,9 +1768,50 @@ el("route-remove").addEventListener("click", async () => {
       renderMissionStartConfirmationFallback();
       return;
     }
-    if (action === "mission-start") {
-      await requestMissionStartConfirmation(view);
+    const armDecision = interpretArmClick(armedCommand, action, Date.now());
+    if (isArmableAction(action)) {
+      if (armDecision.kind === "ignore") return;
+      if (armDecision.kind === "confirm") {
+        if (action === "mission-start") {
+          if (pendingMissionStart === null) return;
+          armedCommand = null;
+          clearArmTimer();
+          await confirmMissionStart();
+          return;
+        }
+        const dispatch = flightConfirmDispatch(pendingFlightConfirmation, {
+          deviceId: view.missionDeviceId,
+          uiAction: action,
+          nowMs: Date.now(),
+        });
+        if (dispatch.kind === "wait") return;
+        armedCommand = null;
+        clearArmTimer();
+        await run("flight-confirm", "flight-confirm", { deviceId: dispatch.confirmation.deviceId, confirmationId: dispatch.confirmation.confirmationId }, undefined, action);
+        return;
+      }
+      if (armDecision.kind !== "arm") return;
+      if (armedCommand !== null && armedCommand.action !== action) await cancelArmedBackend();
+      armedCommand = armDecision.next;
+      if (action === "mission-start") {
+        await requestMissionStartConfirmation(view);
+        if (pendingMissionStart === null) {
+          armedCommand = null;
+          clearArmTimer();
+        } else scheduleArmExpiry();
+        return;
+      }
+      await run(action, "flight-request", { deviceId: view.missionDeviceId, action: action.replace("flight-", "") }, view);
+      if (!confirmationMatchesClick(pendingFlightConfirmation, { deviceId: view.missionDeviceId, uiAction: action, nowMs: Date.now() })) {
+        armedCommand = null;
+        clearArmTimer();
+      } else scheduleArmExpiry();
       return;
+    }
+    if (armedCommand !== null) {
+      await cancelArmedBackend();
+      armedCommand = null;
+      clearArmTimer();
     }
     const streamAction = action.startsWith("stream-");
     const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
@@ -1688,16 +1824,12 @@ el("route-remove").addEventListener("click", async () => {
     const names: Record<string, string> = {
       "mission-stage": "mission-stage",
       "mission-upload": "mission-upload",
-      "mission-start": "mission-start",
       "mission-pause": "mission-pause",
       "mission-resume": "mission-resume",
       "mission-stop": "mission-stop",
       "stream-start": "stream-start",
       "stream-stop": "stream-stop",
-      "flight-takeoff": "flight-request",
-      "flight-land": "flight-request",
       "flight-confirm-landing": "flight-request",
-      "flight-return-home": "flight-request",
       "flight-stop-takeoff": "flight-request",
       "flight-stop-auto-landing": "flight-request",
     };
@@ -1713,45 +1845,19 @@ el("route-remove").addEventListener("click", async () => {
         return;
       }
     }
+    const previousConfirmationId = pendingFlightConfirmation?.confirmationId ?? null;
     await run(action, invokeName, input, view);
+    if (isSameClickFlightConfirm(action)) {
+      const dispatch = sameClickConfirmDispatch(pendingFlightConfirmation, previousConfirmationId, {
+        deviceId,
+        uiAction: action,
+        nowMs: Date.now(),
+      });
+      if (dispatch.kind === "dispatch") {
+        await run("flight-confirm", "flight-confirm", { deviceId: dispatch.confirmation.deviceId, confirmationId: dispatch.confirmation.confirmationId }, undefined, action);
+      }
+    }
   });
 });
 
-el("confirm-yes").addEventListener("click", async () => {
-  let view: ReturnType<typeof OperatorConsole.project>;
-  try { view = await projectView(); }
-  catch { show("界面读取失败，确认未发送；请确认手机仍连接后重试"); renderFlightConfirmationFallback(); return; }
-  const deviceId = el("confirm").dataset.deviceId;
-  const originalAction = view.confirmation?.action ?? pendingFlightConfirmation?.action;
-  await run("flight-confirm", "flight-confirm", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, undefined, originalAction === undefined ? "flight-confirm" : `flight-${originalAction}`);
-});
-el("confirm-no").addEventListener("click", async () => {
-  let view: ReturnType<typeof OperatorConsole.project>;
-  try { view = await projectView(); }
-  catch { show("界面读取失败，取消未发送；请确认手机仍连接后重试"); renderFlightConfirmationFallback(); return; }
-  const deviceId = el("confirm").dataset.deviceId;
-  const originalAction = view.confirmation?.action ?? pendingFlightConfirmation?.action;
-  await run("flight-cancel", "flight-cancel", { deviceId, confirmationId: el("confirm").dataset.confirmationId }, undefined, originalAction === undefined ? "flight-cancel" : `flight-${originalAction}`);
-});
-el("mission-confirm-yes").addEventListener("click", () => { void confirmMissionStart(); });
-el("mission-confirm-no").addEventListener("click", () => {
-  const intent = pendingMissionStart;
-  pendingMissionStart = null;
-  if (intent !== null) {
-    captureFeedback("mission-start", intent.deviceId, null, { ok: false, code: "DESKTOP_BLOCKED", reason: "已取消执行航线" });
-    show("未调用 DJI MSDK：已取消执行航线");
-  }
-  void render();
-});
-
-const tick = async (): Promise<void> => {
-   try {
-     await bridge().invoke("stream-refresh");
-     await render();
-  } catch (error) {
-    console.error("[sky-tick]", error);
-    show("界面刷新失败，请检查手机是否仍连接；若持续出现请重启软件");
-  }
-  window.setTimeout(() => { void tick(); }, 800);
-};
-void tick();
+void snapshotRefresh.request();

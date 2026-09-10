@@ -52,7 +52,7 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).not.toContain('from "hls.js"');
     expect(source).not.toContain('invoke("webrtc-refresh")');
     expect(source).not.toContain("图传已在独立窗口播放");
-    expect(page).toContain("启动图传要求手机中继、MSDK、AirLink 和主相机均已就绪；DJI 回调、推流状态和实际出画仍需分别确认。");
+    expect(page).toContain('data-flight-status="stream-reach"');
     expect(page).toContain("#workspace-flight video");
     expect(page.slice(page.indexOf('id="workspace-flight"'))).toContain('<video id="video"');
   });

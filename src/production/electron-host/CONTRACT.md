@@ -18,7 +18,7 @@ Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡�
 
 宿主在构造 `DesktopApplication` 时必须注入 `hardwareReadiness`：已选首选私网 IPv4 表示 `lanAddressAvailable: true`；生产装配将 `legacyMediaAvailable` 固定为 `true`（经典图传走 node-media-server + HTTP-FLV，不再依赖本机 FFmpeg 可执行文件）。这些桌面事实只供工作流报告旧图传的本机接收条件；不得替代 Relay/MSDK 可达性门禁，不得作为 DJI 设备安全退出条件，不得停止既有图传，也不得阻止已存在飞控确认的停止/取消动作。手机中继连接经过的时间不能替代 MSDK Key 观察。
 
-事故日志写在 `%LOCALAPPDATA%\Sky Command\diagnostics\`：`incident.log` 给人读，`incident.ndjson` 给检索。同一目录的 `relay-events.ndjson` 仍是手机上报原件。日志按链路标记 `phone-pc`（配对/连接）、`uplink`（飞控/航线/设置命令）、`downlink`（图传 RTMP/HTTP-FLV 画面）、`phone`（手机上报），记录配对、命令结局、图传画面，以及操作台拦住未发出的动作。不记录密钥、路径、RTMP URL 或原始异常。连接类事实（SDK/遥控/飞控/飞机/对频）须连续两次快照一致才落盘；`unknown` 不写 WARN，避免遥测闪断误判为多次断连。
+事故日志写在 `%LOCALAPPDATA%\Sky Command\diagnostics\`：`incident.log` 给人读，`incident.ndjson` 给检索。同一目录的 `relay-events.ndjson` 仍是手机上报原件。日志按链路标记 `phone-pc`（配对/连接）、`uplink`（飞控/航线/设置命令）、`downlink`（图传 RTMP/HTTP-FLV 画面）、`phone`（手机上报），记录配对、命令结局（含 DJI `errorCode`/`errorDescription`）、手机任务执行状态、DJI 原始航线状态、图传画面，以及操作台拦住未发出的动作。不记录密钥、路径、RTMP URL 或原始异常。连接类事实（SDK/遥控/飞控/飞机/对频）须连续两次快照一致才落盘；`unknown` 不写 WARN，避免遥测闪断误判为多次断连。手机任务执行状态与 DJI 原始航线状态随快照立即落盘，不走连接去抖。
 
 `IncidentJournal` 是观察者，接口为 `record(record): void` 和 `flush(): Promise<void>`。`record` 只能做脱敏、格式化和有界内存入队，绝不得在 Electron 主进程同步创建目录或写入文件；单一后台写入器必须保持两份日志的记录顺序。最多保留 512 条等待当前写入器的记录，外加最多一份已摘出、正在异步写入的批次（批次至多 512 条），故任何时刻内存中的未落盘记录不超过 1024 条。容量压力优先丢弃等待队列中最早的低优先级 INFO；新的 INFO 在没有可替换项时被丢弃，新的 WARN/ERROR 必须保留，并在后续日志留下安全的丢失计数。诊断积压不得影响 IPC、WebSocket、媒体接收或 DJI 命令。宿主正常关闭必须按“外壳释放、应用对象图完全释放、`flush` 完成、进程退出”的顺序执行；任一前置释放失败也不得跳过后续应用释放、日志刷出和退出。手机上报原件的确认不依赖此观察日志，而只依赖 `node-diagnostic-store` 异步持久化成功。
 

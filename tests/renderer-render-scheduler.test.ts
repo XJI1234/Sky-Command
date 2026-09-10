@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRenderScheduler } from "../src/production/operator-console/renderer/render-scheduler.js";
+import { createBackgroundRefresh, createRenderScheduler } from "../src/production/operator-console/renderer/render-scheduler.js";
 
 class ManualDeadlineScheduler {
   readonly callbacks: Array<() => void> = [];
@@ -77,5 +77,64 @@ describe("renderer render scheduler", () => {
     releases[0]!();
     releases[1]!();
     await expect(retry).resolves.toBeUndefined();
+  });
+
+  it("background fetch timeout discards that fetch and does not prevent the next fetch", async () => {
+    const deadlines = new ManualDeadlineScheduler();
+    const intervals: Array<() => void> = [];
+    let fetches = 0;
+    const refresh = createBackgroundRefresh(async (signal) => {
+      fetches += 1;
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = (): void => reject(new DOMException("aborted", "AbortError"));
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+    }, {
+      deadlineMs: 5_000,
+      intervalMs: 1_000,
+      deadlines,
+      setInterval: (callback) => {
+        intervals.push(callback);
+        return intervals.length;
+      },
+      clearInterval: () => undefined,
+    });
+
+    const first = refresh.request();
+    deadlines.fireNext();
+    await expect(first).resolves.toBeUndefined();
+    expect(fetches).toBe(1);
+
+    const second = refresh.request();
+    expect(fetches).toBe(2);
+    refresh.dispose();
+    await second.catch(() => undefined);
+  });
+
+  it("interval fetch does not wait for a slow paint callback", async () => {
+    const paints: Array<() => void> = [];
+    let fetches = 0;
+    const refresh = createBackgroundRefresh(async () => {
+      fetches += 1;
+    }, {
+      deadlineMs: 5_000,
+      intervalMs: 1_000,
+      onFetched: () => new Promise<void>((resolve) => { paints.push(resolve); }),
+      setInterval: () => 1,
+      clearInterval: () => undefined,
+    });
+
+    await refresh.request();
+    expect(fetches).toBe(1);
+    expect(paints).toHaveLength(1);
+    await refresh.request();
+    expect(fetches).toBe(2);
+    paints[0]!();
+    paints[1]!();
+    refresh.dispose();
   });
 });

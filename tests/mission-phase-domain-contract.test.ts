@@ -89,6 +89,34 @@ describe("mission phase domain contract", () => {
     });
   });
 
+  it("allows another start from starting and keeps starting when that retry is rejected", () => {
+    const machine = MissionPhaseDomain.create();
+    stageAndUpload(machine);
+    expect(transition(machine, { type: "start-requested" }).phase).toBe("starting");
+    expect(transition(machine, { type: "start-requested" }).phase).toBe("starting");
+    expect(transition(machine, { type: "start-rejected" } as never).phase).toBe("starting");
+  });
+
+  it("allows start from an unconfirmed pause or resume and keeps starting if that start is rejected", () => {
+    const fromPause = MissionPhaseDomain.create();
+    stageAndUpload(fromPause);
+    transition(fromPause, { type: "start-requested" });
+    transition(fromPause, { type: "start-succeeded" });
+    transition(fromPause, { type: "pause-requested" });
+    expect(transition(fromPause, { type: "start-requested" }).phase).toBe("starting");
+    expect(transition(fromPause, { type: "start-rejected" } as never).phase).toBe("starting");
+
+    const fromResume = MissionPhaseDomain.create();
+    stageAndUpload(fromResume);
+    transition(fromResume, { type: "start-requested" });
+    transition(fromResume, { type: "start-succeeded" });
+    transition(fromResume, { type: "pause-requested" });
+    transition(fromResume, { type: "pause-succeeded" });
+    transition(fromResume, { type: "resume-requested" });
+    expect(transition(fromResume, { type: "start-requested" }).phase).toBe("starting");
+    expect(transition(fromResume, { type: "start-rejected" } as never).phase).toBe("starting");
+  });
+
   it("allows one explicit stop after the desktop loses and regains session knowledge", () => {
     const machine = MissionPhaseDomain.create();
     stageAndUpload(machine);

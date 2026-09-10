@@ -29,7 +29,7 @@ const direct: Readonly<Partial<Record<MissionModelEvent, Readonly<Partial<Record
   "stage-succeeded": Object.freeze({ staging: "staged" }),
   "upload-requested": Object.freeze({ staged: "uploading" }),
   "upload-succeeded": Object.freeze({ uploading: "uploaded" }),
-  "start-requested": Object.freeze({ uploaded: "starting" }),
+  "start-requested": Object.freeze({ uploaded: "starting", starting: "starting", pausing: "starting", resuming: "starting" }),
   "start-succeeded": Object.freeze({ starting: "running" }),
   "pause-requested": Object.freeze({ running: "pausing" }),
   "pause-succeeded": Object.freeze({ pausing: "paused" }),

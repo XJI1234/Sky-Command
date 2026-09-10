@@ -118,6 +118,17 @@ export interface DesktopRelayTelemetryPayload {
   /** Raw Android MissionSnapshot upload progress, bounded to 0..100. */
   readonly missionUploadProgress?: number;
   readonly missionFileName?: string;
+  /** DJI WaylineExecutingInfo.getMissionFileName; may omit `.kmz`. */
+  readonly waylineExecutingMissionFileName?: string;
+  readonly waylineId?: number;
+  readonly currentWaypointIndex?: number;
+  readonly waypointActionGroup?: number;
+  readonly waypointActionId?: number;
+  readonly waypointActionPhase?: "START" | "FINISH";
+  readonly waypointActionErrorCode?: string;
+  readonly waypointActionErrorDescription?: string;
+  readonly waylineInterruptErrorCode?: string;
+  readonly waylineInterruptErrorDescription?: string;
 }
 
 export interface DesktopRelayTelemetry {
@@ -202,6 +213,7 @@ const privateIpv4 = (value: unknown): value is string => {
   return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
 };
 const validMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && value.toLowerCase().endsWith(".kmz") && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value);
+const validExecutingMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !value.includes("..") && !/[\\/\p{Cc}\\/]/u.test(value);
 const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const nonNegativeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const nonNegativeFinite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -412,6 +424,17 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   if (missionDjiExecutionState === "IDLE" || missionDjiExecutionState === "READY" || missionDjiExecutionState === "UPLOADING" || missionDjiExecutionState === "PREPARING" || missionDjiExecutionState === "RECOVERING" || missionDjiExecutionState === "ENTER_WAYLINE" || missionDjiExecutionState === "EXECUTING" || missionDjiExecutionState === "PAUSED" || missionDjiExecutionState === "INTERRUPTED" || missionDjiExecutionState === "FINISHED" || missionDjiExecutionState === "RETURN_TO_START_POINT" || missionDjiExecutionState === "DISCONNECTED" || missionDjiExecutionState === "NOT_SUPPORTED" || missionDjiExecutionState === "UNKNOWN") outputPayload.missionDjiExecutionState = missionDjiExecutionState;
   const missionUploadProgress = boundedInteger(payload.missionUploadProgress, 0, 100); if (missionUploadProgress !== undefined) outputPayload.missionUploadProgress = missionUploadProgress;
   const missionFileName = string(payload.missionFileName); if (validMissionFileName(missionFileName)) outputPayload.missionFileName = missionFileName;
+  const waylineExecutingMissionFileName = string(payload.waylineExecutingMissionFileName); if (validExecutingMissionFileName(waylineExecutingMissionFileName)) outputPayload.waylineExecutingMissionFileName = waylineExecutingMissionFileName;
+  const waylineId = boundedInteger(payload.waylineId, 0, 10_000); if (waylineId !== undefined) outputPayload.waylineId = waylineId;
+  const currentWaypointIndex = boundedInteger(payload.currentWaypointIndex, 0, 100_000); if (currentWaypointIndex !== undefined) outputPayload.currentWaypointIndex = currentWaypointIndex;
+  const waypointActionGroup = boundedInteger(payload.waypointActionGroup, 0, 100_000); if (waypointActionGroup !== undefined) outputPayload.waypointActionGroup = waypointActionGroup;
+  const waypointActionId = boundedInteger(payload.waypointActionId, 0, 100_000); if (waypointActionId !== undefined) outputPayload.waypointActionId = waypointActionId;
+  const waypointActionPhase = string(payload.waypointActionPhase);
+  if (waypointActionPhase === "START" || waypointActionPhase === "FINISH") outputPayload.waypointActionPhase = waypointActionPhase;
+  const waypointActionErrorCode = safeText(string(payload.waypointActionErrorCode)); if (waypointActionErrorCode !== undefined) outputPayload.waypointActionErrorCode = waypointActionErrorCode;
+  const waypointActionErrorDescription = safeText(string(payload.waypointActionErrorDescription), 512); if (waypointActionErrorDescription !== undefined) outputPayload.waypointActionErrorDescription = waypointActionErrorDescription;
+  const waylineInterruptErrorCode = safeText(string(payload.waylineInterruptErrorCode)); if (waylineInterruptErrorCode !== undefined) outputPayload.waylineInterruptErrorCode = waylineInterruptErrorCode;
+  const waylineInterruptErrorDescription = safeText(string(payload.waylineInterruptErrorDescription), 512); if (waylineInterruptErrorDescription !== undefined) outputPayload.waylineInterruptErrorDescription = waylineInterruptErrorDescription;
   const missionRevision = positiveIntegerValue(payload.missionRevision); if (missionRevision !== undefined) outputPayload.missionRevision = missionRevision;
   const missionDeviceGeneration = nonNegativeIntegerValue(payload.missionDeviceGeneration); if (missionDeviceGeneration !== undefined) outputPayload.missionDeviceGeneration = missionDeviceGeneration;
   const liveVideo = boolean(capabilities.liveVideo); if (liveVideo !== undefined) outputCapabilities.liveVideo = liveVideo;

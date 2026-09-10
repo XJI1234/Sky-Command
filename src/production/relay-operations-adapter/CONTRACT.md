@@ -53,7 +53,7 @@ instance.dispose() -> void
 
 手机端 `TelemetryFrameMapper` 是唯一来源。适配器只接受下列已知字段；缺失、JSON null、类型不匹配或未知枚举不得推测为成功。
 
-航线遥测必须逐字段保留手机已经验证并经受限协议编码的事实：`missionFileName`、`missionRevision`、`missionDeviceGeneration`、`missionUploadProgress`、`missionExecution` 与 `missionDjiExecutionState`。`missionUploadProgress` 只能是 0..100 的整数；`missionDjiExecutionState` 只能是协议闭集中的原始 DJI 航线状态或空值。适配器只校验和投影，绝不将它们推断为桌面工作流状态、按钮回执或新的操作门禁。
+航线遥测必须逐字段保留手机已经验证并经受限协议编码的事实：`missionFileName`、`missionRevision`、`missionDeviceGeneration`、`missionUploadProgress`、`missionExecution`、`missionDjiExecutionState`，以及现场进度 `waylineExecutingMissionFileName`、`waylineId`、`currentWaypointIndex`、`waypointActionGroup`、`waypointActionId`、`waypointActionPhase`、`waypointActionErrorCode`、`waypointActionErrorDescription`、`waylineInterruptErrorCode`、`waylineInterruptErrorDescription`。`missionUploadProgress` 只能是 0..100 的整数；`missionDjiExecutionState` 只能是协议闭集中的原始 DJI 航线状态或空值。`waylineExecutingMissionFileName` 可以没有 `.kmz`。适配器只校验和投影，绝不将它们推断为桌面工作流状态、按钮回执或新的操作门禁。
 
 | Android 协议字段 | 桌面投影字段 | 转换规则 |
 | --- | --- | --- |

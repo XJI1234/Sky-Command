@@ -84,7 +84,7 @@ interface MissionDispatchSnapshot {
 
 `phase`、`missionId`、`failureCode` 只镜像该轨道状态机。`routeId` 在暂存被接受时设置，并跨终态保留以便界面解释。`startPointReached` 与 `routeExecutionStarted` 是两个独立、单调的当前任务事实，分别只由受控 `START_POINT_REACHED` 与 `ROUTE_EXECUTION_STARTED` 里程碑置为 `true`；后一个绝不覆盖前一个。`lastResult` 仅为 `{ operation, ok, code }`，不得包含手机详情、路径、字节、令牌、连接/会话 ID 或堆栈。
 
-设备轨道相互独立，不同设备可并发操作；同一轨道同时只能有一个异步操作，后续调用返回 `OPERATION_IN_PROGRESS` 且不产生网络效果。`forget` 仅允许删除 `idle`、`completed`、`failed` 或 `disconnected` 轨道，不发送停止命令；新的 `stage` 会创建新轨道。
+设备轨道相互独立，不同设备可并发操作；同一轨道同时只能有一个普通异步操作，后续启动、暂停、恢复、上传或暂存返回 `OPERATION_IN_PROGRESS` 且不产生网络效果。`stop` 可以抢占仍在等待 DJI 回执的启动、暂停或恢复，立即发送 `wayline.stop`；当前停止尚未离开轨道时，第二次停止仍返回 `OPERATION_IN_PROGRESS`。`forget` 仅允许删除 `idle`、`completed`、`failed` 或 `disconnected` 轨道，不发送停止命令；新的 `stage` 会创建新轨道。
 
 ## 5. 操作语义
 
@@ -102,13 +102,13 @@ interface MissionDispatchSnapshot {
 
 ### 启动
 
-本节中“控制遥测/完整控制快照”仅表示读取当前会话的遥测入口；实现不得要求遥控器、飞控或动态 Key 齐全。启动门禁只保留 Relay、MSDK 可达性和 `uploaded` 阶段，设备安全条件交由 DJI `startMission` 回调。
+本节中“控制遥测/完整控制快照”仅表示读取当前会话的遥测入口；实现不得要求遥控器、飞控或动态 Key 齐全。启动门禁只保留 Relay、MSDK 可达性，以及任务已经上传、已在 `starting`，或暂停/恢复回执未确认因而文件身份仍然有效；设备安全条件交由 DJI `startMission` 回调。
 
-`start` 仅允许从 `uploaded` 执行。在任何出站命令前，它读取当前会话遥测并调用 `PreflightCheck.evaluate`；预检只要求中继与 MSDK 已知可达，并保留 `uploaded` 任务身份。它绝不从 WebSocket 或会话对象推导飞机连接状态，也不以遥控器、飞控、机型能力、电量、地面、飞行或电机状态替 DJI 拒绝。预检阻塞时返回 `PREFLIGHT_BLOCKED`，保持 `uploaded` 且不发送命令。通过后进入 `starting`，发送 `wayline.start`。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到带任务身份的 `ROUTE_EXECUTION_STARTED` 后才进入 `running`。DJI 明确 `onFailure` 证明本次启动未被接受，调度器必须保留受限错误并以 `start-rejected` 恢复 `uploaded`，返回 `WAYLINE_ACTION_REJECTED`。没有 DJI 错误的调用异常或失败无法证明 `startMission` 未产生设备端效果，必须保持 `starting` 并按 `WAYLINE_START_UNCONFIRMED` 处理，禁止重发启动，只允许停止。启动回执超时、取消、断开或传输失败同样不能证明 DJI 未接受请求。若可信的 `ROUTE_EXECUTION_STARTED` 已先到达而后收到迟到失败，不能回退已经进入 `running` 的任务。
+`start` 允许从 `uploaded`、`starting`、`pausing` 或 `resuming` 执行。在任何出站命令前，它读取当前会话遥测并调用 `PreflightCheck.evaluate`；预检只要求中继与 MSDK 已知可达，并在这些阶段上保留已上传任务身份。不得从已确认的 `running` 或 `paused` 发送启动。它绝不从 WebSocket 或会话对象推导飞机连接状态，也不以遥控器、飞控、机型能力、电量、地面、飞行或电机状态替 DJI 拒绝。预检阻塞时返回 `PREFLIGHT_BLOCKED`，不发送命令。从 `uploaded` 通过后进入 `starting` 并发送 `wayline.start`；已在 `starting` 时再次发送 `wayline.start`，阶段保持 `starting`。从 `pausing` 或 `resuming` 通过后同样进入 `starting` 并发送 `wayline.start`；若该次启动被 DJI 明确拒绝，保持 `starting` 以便仍可停止。命令成功只表示手机端已确认 DJI 接受启动调用；只有当前任务收到带任务身份的 `ROUTE_EXECUTION_STARTED` 后才进入 `running`。DJI 明确 `onFailure` 证明本次启动未被接受：首次启动拒绝恢复 `uploaded` 并返回 `WAYLINE_ACTION_REJECTED`；已经处于 `starting` 的再次启动被拒绝时保持 `starting`，以便仍可停止。没有 DJI 错误的调用异常或失败无法证明 `startMission` 未产生设备端效果，必须保持 `starting` 并按 `WAYLINE_START_UNCONFIRMED` 处理，但允许再次发送启动。启动回执超时、取消、断开或传输失败同样不能证明 DJI 未接受请求。若可信的 `ROUTE_EXECUTION_STARTED` 已先到达而后收到迟到失败，不能回退已经进入 `running` 的任务。
 
 ### 暂停、恢复和停止
 
-`pause` 只允许 `running -> pausing -> paused`；`resume` 只允许 `paused -> resuming -> running`；`stop` 允许从 `starting`、`running`、`pausing`、`paused`、`resuming`、`stopping` 或重连后的 `disconnected` 进入或保持 `stopping`，成功后回到 `idle`。其中 `pausing` 和 `resuming` 表示等待手机端确认 DJI 调用，不能显示成最终状态。它们均先确认当前 Relay 在线且 MSDK 已就绪，再发送相应命令和 `{ confirm: true }`；这条门禁只保证命令能够安全到达 MSDK，不检查电量、飞控、飞行模式或其它设备安全事实。DJI 明确 `onFailure` 时，手机必须回传受限的 `{ domain: "wayline", outcome: "ACTION_REJECTED", errorCode, errorDescription }`；调度器返回 `WAYLINE_ACTION_REJECTED` 与冻结的 `platformError`，并恢复请求前阶段。适配器同步异常或未携带 DJI 错误的明确失败回传 `INVOCATION_FAILED`，调度器返回 `WAYLINE_ACTION_INVOCATION_FAILED` 并恢复请求前阶段。暂停、继续或停止回执超时、断开、传输失败、取消或缺少有效终态时，必须保留相应中间阶段并返回 `WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_UNCONFIRMED` 或 `WAYLINE_STOP_UNCONFIRMED`；暂停和继续不得重发。暂停/继续不确定时只允许一次停止作为保守处置；停止不确定时，待原停止命令已离开同设备串行轨道且 Relay/MSDK 重新可达，允许再次发送 `wayline.stop`，但不得暂存替换或发送其它控制命令。上传完成但尚未启动时不得发送 `wayline.stop`，因为飞机端执行器此时仍是未开始。`starting` 期间允许停止，以便中止已接受但尚未进入执行回报的航线。`ROUTE_EXECUTION_STARTED` 可在启动命令仍在等待结果时把任务从 `starting` 转入 `running`；此后迟到的启动失败不得把已在执行的任务写成失败。
+`pause` 只允许 `running -> pausing -> paused`；`resume` 只允许 `paused -> resuming -> running`；`stop` 允许从 `starting`、`running`、`pausing`、`paused`、`resuming`、`stopping` 或重连后的 `disconnected` 进入或保持 `stopping`，成功后回到 `idle`。其中 `pausing` 和 `resuming` 表示等待手机端确认 DJI 调用，不能显示成最终状态。它们均先确认当前 Relay 在线且 MSDK 已就绪，再发送相应命令和 `{ confirm: true }`；这条门禁只保证命令能够安全到达 MSDK，不检查电量、飞控、飞行模式或其它设备安全事实。DJI 明确 `onFailure` 时，手机必须回传受限的 `{ domain: "wayline", outcome: "ACTION_REJECTED", errorCode, errorDescription }`；调度器返回 `WAYLINE_ACTION_REJECTED` 与冻结的 `platformError`，并恢复请求前阶段。适配器同步异常或未携带 DJI 错误的明确失败回传 `INVOCATION_FAILED`，调度器返回 `WAYLINE_ACTION_INVOCATION_FAILED` 并恢复请求前阶段。暂停、继续或停止回执超时、断开、传输失败、取消或缺少有效终态时，必须保留相应中间阶段并返回 `WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_UNCONFIRMED` 或 `WAYLINE_STOP_UNCONFIRMED`；暂停和继续不得重发。暂停/继续不确定时允许发送启动或一次停止，不得把已确认的 `running`/`paused` 当成可启动；停止不确定时，待原停止命令已离开同设备串行轨道且 Relay/MSDK 重新可达，允许再次发送 `wayline.stop`，但不得暂存替换或发送其它控制命令。上传完成但尚未启动时不得发送 `wayline.stop`，因为飞机端执行器此时仍是未开始。`starting` 期间允许停止，即使 `wayline.start` 仍在等待 DJI 回执，以便中止已经发出、电机可能已经在转的航线。`ROUTE_EXECUTION_STARTED` 可在启动命令仍在等待结果时把任务从 `starting` 转入 `running`；此后迟到的启动失败不得把已在执行的任务写成失败。
 
 ## 6. 断线和遥测
 
@@ -124,7 +124,7 @@ type DispatchResult =
   | { readonly ok: false; readonly operation: DispatchOperation; readonly code: DispatchErrorCode; readonly state: MissionDispatchSnapshot | null; readonly blockers?: readonly PreflightBlocker[] };
 ```
 
-错误码固定为：`INVALID_DEVICE_ID`、`INVALID_ROUTE_ID`、`ROUTE_UNAVAILABLE`、`MISSION_ID_UNAVAILABLE`、`ILLEGAL_PHASE`、`OPERATION_IN_PROGRESS`、`DEPENDENCY_FAILURE`、`MISSION_TRANSFER_FAILED`、`WAYLINE_UPLOAD_FAILED`、`PREFLIGHT_BLOCKED`、`WAYLINE_START_FAILED`、`WAYLINE_START_UNCONFIRMED`、`WAYLINE_PAUSE_FAILED`、`WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_FAILED`、`WAYLINE_RESUME_UNCONFIRMED`、`WAYLINE_STOP_FAILED`、`WAYLINE_STOP_UNCONFIRMED`、`WAYLINE_ACTION_REJECTED`、`WAYLINE_ACTION_INVOCATION_FAILED`。`platformError` 仅可出现于 `WAYLINE_ACTION_REJECTED`，固定为已验证且冻结的 `{ code, description }`；不得包含 DJI 对象、异常、路径或原始帧。上传的 DJI 明确拒绝恢复 `staged`，启动的 DJI 明确拒绝恢复 `uploaded`；暂停、继续和停止的 DJI 明确拒绝恢复各自请求前阶段。启动没有 DJI 错误的调用失败仍按未确认处理，不得借此允许重发。
+错误码固定为：`INVALID_DEVICE_ID`、`INVALID_ROUTE_ID`、`ROUTE_UNAVAILABLE`、`MISSION_ID_UNAVAILABLE`、`ILLEGAL_PHASE`、`OPERATION_IN_PROGRESS`、`DEPENDENCY_FAILURE`、`MISSION_TRANSFER_FAILED`、`WAYLINE_UPLOAD_FAILED`、`PREFLIGHT_BLOCKED`、`WAYLINE_START_FAILED`、`WAYLINE_START_UNCONFIRMED`、`WAYLINE_PAUSE_FAILED`、`WAYLINE_PAUSE_UNCONFIRMED`、`WAYLINE_RESUME_FAILED`、`WAYLINE_RESUME_UNCONFIRMED`、`WAYLINE_STOP_FAILED`、`WAYLINE_STOP_UNCONFIRMED`、`WAYLINE_ACTION_REJECTED`、`WAYLINE_ACTION_INVOCATION_FAILED`。`platformError` 仅可出现于 `WAYLINE_ACTION_REJECTED`，固定为已验证且冻结的 `{ code, description }`；不得包含 DJI 对象、异常、路径或原始帧。上传的 DJI 明确拒绝恢复 `staged`，首次启动的 DJI 明确拒绝恢复 `uploaded`，已经处于 `starting` 的再次启动被拒绝时保持 `starting`；暂停、继续和停止的 DJI 明确拒绝恢复各自请求前阶段。启动没有 DJI 错误的调用失败仍按未确认处理，并允许再次发送启动。
 
 `blockers` 只出现在 `PREFLIGHT_BLOCKED`，以 `PreflightCheck` 给出的稳定顺序复制并冻结。任何拒绝都不自动重试；只有已经尝试出站效果且收到非成功结果时才进入 `failed`。
 

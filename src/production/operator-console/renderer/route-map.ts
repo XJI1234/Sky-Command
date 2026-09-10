@@ -72,6 +72,15 @@ export function resizeRouteMap(): void {
   viewer.resize();
 }
 
+export function setRouteMapVisible(visible: boolean): void {
+  if (viewer === undefined || viewer.isDestroyed()) return;
+  viewer.useDefaultRenderLoop = visible;
+  if (visible) {
+    viewer.resize();
+    viewer.scene.requestRender();
+  }
+}
+
 export function showRoutePreview(routeId: string, preview: RouteMapPreview, fly = true): void {
   const Cesium = cesium();
   if (viewer === undefined || viewer.isDestroyed()) return;

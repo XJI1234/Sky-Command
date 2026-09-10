@@ -14,7 +14,7 @@ describe("Electron 生产图传渲染", () => {
 
   it("渲染器仍只使用 HTTP-FLV 播放并保留恢复策略", () => {
     const source = renderer();
-    expect(source).toContain('bridge().invoke("stream-refresh")');
+    expect(source).toContain('"stream-refresh"');
     expect(source).toContain("flvjs.createPlayer");
     expect(source).toContain("chaseLiveEdge");
     expect(source).toContain("recoverStuckFlv");
@@ -44,7 +44,8 @@ describe("Electron 生产图传渲染", () => {
     expect(page).toContain('data-action="flight-takeoff"');
     expect(page).not.toContain('data-action="stream-select"');
     expect(page).not.toContain("启动低延迟");
-    expect(page).toContain("启动图传要求手机中继、MSDK、AirLink 和主相机均已就绪；DJI 回调、推流状态和实际出画仍需分别确认。");
+    expect(page).toContain('data-flight-status="stream-reach"');
+    expect(page).toContain('data-flight-status="stream-paint"');
     expect(renderer()).toContain("图传可请求启动：手机中继、MSDK、AirLink 和主相机均已就绪；发送前会检查电脑接收端，实际推流和出画仍分别确认");
     expect(renderer()).toContain("playVideo");
     expect(renderer()).toContain("flvjs");

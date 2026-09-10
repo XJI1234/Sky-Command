@@ -165,6 +165,18 @@ function invokeEvent(method: string, result: GatewayResult): string {
   return `${name}_OK`;
 }
 
+function platformErrorParts(value: Record<string, unknown> | null): readonly string[] {
+  const nested = asRecord(value?.value);
+  const error = asRecord(value?.platformError) ?? asRecord(nested?.platformError);
+  if (error === null) return [];
+  const parts: string[] = [];
+  const code = text(error.code);
+  const description = text(error.description);
+  if (code !== null) parts.push(`djiErrorCode=${code}`);
+  if (description !== null) parts.push(`djiErrorDescription=${description}`);
+  return parts;
+}
+
 function invokeDetail(method: string, input: unknown, result: GatewayResult): string {
   const source = asRecord(input);
   const parts = [method];
@@ -185,6 +197,7 @@ function invokeDetail(method: string, input: unknown, result: GatewayResult): st
     if (typeof status === "string") parts.push(status);
     const detail = text(nested?.detail) ?? text(value?.detail);
     if (detail !== null) parts.push(detail);
+    parts.push(...platformErrorParts(value));
   }
   return parts.join(" ");
 }
@@ -277,7 +290,7 @@ function connectionFacts(value: unknown): Readonly<Record<string, string>> {
   const connection = asRecord(asRecord(value)?.connection);
   if (connection === null) return {};
   const facts: Record<string, string> = {};
-  for (const key of ["sdk", "remoteController", "flightController", "aircraft", "pairingState"]) {
+  for (const key of ["sdk", "remoteController", "flightController", "aircraft", "pairingState", "missionExecution", "missionDjiExecutionState"]) {
     const current = connection[key];
     if (typeof current === "string") facts[key] = current;
   }
@@ -338,7 +351,9 @@ export function watchApplication(application: { snapshot: () => unknown; subscri
           }
           delete nextPending[key];
         }
-        const link: IncidentLink = key === "mission" ? "uplink" : key === "stream" || key === "video" || key === "media" ? "downlink" : "phone-pc";
+        const link: IncidentLink = key === "mission" || key === "missionExecution" || key === "missionDjiExecutionState"
+          ? "uplink"
+          : key === "stream" || key === "video" || key === "media" ? "downlink" : "phone-pc";
         const level: IncidentLevel = value === "failed" || value === "disconnected" || value === "not-ready" ? "WARN" : "INFO";
         journal.record({
           link,

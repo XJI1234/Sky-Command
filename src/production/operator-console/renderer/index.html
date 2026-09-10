@@ -32,21 +32,54 @@
       border-right: 1px solid var(--line);
       overflow: hidden;
     }
-     #workspace-flight .flight-controls {
-       display: grid;
-       grid-template-rows: auto minmax(0, 1fr) auto;
-       min-height: 0;
-       overflow: hidden;
-       padding: 0;
-       background: var(--panel-strong);
-     }
+    .flight-video-stage {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 280px;
+      display: flex;
+      flex-direction: column;
+    }
+    .flight-hud {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(4.8em, 1fr));
+      gap: 8px;
+      flex: 0 0 52px;
+      margin: 0 0 8px;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      background: #0d1418;
+    }
+    .flight-hud span { display: grid; gap: 2px; min-width: 0; }
+    .flight-hud small { color: var(--muted); font-size: 10px; letter-spacing: 0.04em; }
+    .flight-hud strong {
+      color: var(--text);
+      font: 12px/1.2 monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     #workspace-flight video {
       width: 100%;
       flex: 1 1 auto;
-      min-height: 280px;
+      min-height: 0;
       background: #000;
       display: block;
       object-fit: contain;
+    }
+    #stream-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+    #workspace-flight .flight-controls {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-height: 0;
+      overflow: hidden;
+      padding: 0;
+      background: var(--panel-strong);
     }
     section { padding: 16px; border-right: 1px solid var(--line); overflow: auto; }
     section:last-child { border-right: 0; }
@@ -102,19 +135,53 @@
     .remove-route { border: 1px solid #704044; background: #161013; color: #ff9d9d; }
     .route-mission-control > p { margin: 12px 0 0; color: #93a1a4; font: 11px/1.5 monospace; }
     .flight-controls h2, .flight-controls h3, .flight-controls p { margin-top: 0; }
-     .flight-panel-tabs-shell { position: sticky; top: 0; z-index: 2; background: var(--panel-strong); }
+     .flight-panel-tabs-shell { z-index: 2; background: var(--panel-strong); }
      .flight-panel-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
      .flight-panel-tab { min-height: 42px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
      .flight-panel-tab:last-child { border-right: 0; }
      .flight-panel-tab.active { background: #182126; color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
      .flight-panel-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-     .flight-panel-content { min-height: 0; overflow: auto; }
-     .flight-panel-actions { position: sticky; top: 0; z-index: 1; margin-top: 12px; padding: 12px 0 10px; background: var(--panel-strong); border-bottom: 1px solid var(--line); }
-     .operation-progress { margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--line); background: #10171b; }
-     .operation-progress h4 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.04em; }
-     .operation-progress-headline { margin: 0 0 10px; font-weight: 600; color: var(--text); }
-     .operation-progress .operation-state-row span { min-width: 3.5em; }
-     .flight-panel-view[hidden] { display: none; }
+     .flight-panel-content { position: relative; min-height: 0; overflow: hidden; }
+     .flight-panel-view {
+       position: absolute;
+       inset: 0;
+       display: grid;
+       grid-template-rows: auto auto minmax(0, 1fr);
+       gap: 0;
+       padding: 12px 16px 8px;
+       overflow: hidden;
+     }
+     .flight-panel-view[data-flight-panel-view="mission"] { grid-template-rows: auto minmax(0, 1fr); }
+     .flight-panel-view[data-flight-panel-view="mission"] .flight-now { margin-top: 0; }
+     .flight-panel-view[hidden] { display: grid !important; visibility: hidden; pointer-events: none; }
+     .flight-now {
+       display: grid;
+       margin: 10px 0 0;
+       border-top: 1px solid var(--line);
+     }
+     .flight-now-row {
+       display: grid;
+       grid-template-columns: 5.5em minmax(0, 1fr);
+       gap: 10px;
+       align-items: center;
+       height: 36px;
+       border-bottom: 1px solid var(--line);
+     }
+     .flight-now-row span { color: var(--muted); font-size: 11px; }
+     .flight-now-row strong {
+       min-width: 0;
+       color: var(--text);
+       font: 11px/1.3 monospace;
+       text-align: right;
+       white-space: nowrap;
+       overflow: hidden;
+       text-overflow: ellipsis;
+     }
+     .flight-panel-actions { min-height: 0; margin-top: 12px; overflow: hidden; }
+     .flight-controls button[data-action] { min-width: 8.5em; }
+     .flight-controls button[data-action="mission-start"],
+     .flight-controls button[data-action="stream-start"] { min-width: 9.6em; }
+     .flight-controls button[data-arm="armed"] { border-color: #d8b456; color: #f3d58d; }
     .control-block { padding: 16px 20px; border-bottom: 1px solid var(--line); }
     .control-block:last-of-type { border-bottom: 0; }
     .control-block-header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
@@ -123,6 +190,7 @@
     .control-block-note { flex: 0 0 auto; margin: 1px 0 0; color: var(--muted); font: 10px/1.5 monospace; text-align: right; }
     .device-select-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 14px; }
     .device-select { display: grid; gap: 6px; color: var(--muted); font: 11px/1.4 monospace; }
+    .flight-panel-phones { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
     .operation-state-panel { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
     .operation-state-panel h4 { margin: 0 0 5px; color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: 0; }
     .operation-state-panel > p { margin: 0; }
@@ -142,8 +210,14 @@
     .mission-step-detail { color: var(--muted); font-size: 11px; line-height: 1.45; }
     .mission-step button { min-width: 116px; }
     .mission-step button:not(:disabled) { border-color: var(--accent); background: #1d2915; color: var(--accent); font-weight: 600; }
-    .operation-feedback { min-height: 1.5em; margin: 7px 0 0; color: var(--muted); font: 10px/1.5 monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
-    .operation-feedback:empty { display: none; }
+    .operation-feedback {
+      min-height: 2.7em;
+      max-height: 2.7em;
+      margin: 7px 0 0;
+      color: var(--muted);
+      font: 10px/1.35 monospace;
+      overflow: hidden;
+    }
     .mission-secondary-actions, .stream-controls, .direct-flight-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
     .operation-action { min-width: 112px; flex: 1 1 112px; }
     .operation-action button { width: 100%; }
@@ -160,13 +234,23 @@
     .direct-flight-actions button[data-action="flight-takeoff"] { border-color: #668661; }
     .direct-flight-actions button[data-action="flight-land"], .direct-flight-actions button[data-action="flight-return-home"] { border-color: #704044; color: var(--danger); }
     .direct-flight-actions button[data-action="flight-stop-takeoff"], .direct-flight-actions button[data-action="flight-stop-auto-landing"] { border-color: #d8b456; color: #f3d58d; }
-    .operation-status { margin: 0; padding: 13px 20px 18px; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+    .operation-status {
+      margin: 0;
+      padding: 8px 16px;
+      height: 40px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 24px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     @media (max-width: 860px) {
       body { overflow: auto; }
       #workspace-flight { display: block; overflow: visible; }
        #workspace-flight .flight-video { min-height: 420px; border-right: 0; border-bottom: 1px solid var(--line); }
        #workspace-flight .flight-controls { display: block; overflow: visible; }
-       #workspace-flight .flight-panel-content { overflow: visible; }
+       #workspace-flight .flight-panel-content { overflow: hidden; }
      }
     @media (max-width: 520px) {
       .connection-status-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr); gap: 10px; }
@@ -246,11 +330,21 @@
     </section>
   </main>
 
-  <main id="workspace-flight">
+    <main id="workspace-flight">
      <section class="flight-video">
       <h2>图传画面</h2>
-      <p id="stream-label" class="notice"></p>
-      <video id="video" controls muted autoplay playsinline></video>
+      <div class="flight-video-stage">
+        <div id="flight-hud" class="flight-hud" aria-label="飞行现场">
+          <span><small>飞/停</small><strong data-flight-hud="flying">—</strong></span>
+          <span><small>电机</small><strong data-flight-hud="motors">—</strong></span>
+          <span><small>电量</small><strong data-flight-hud="battery">—</strong></span>
+          <span><small>高度</small><strong data-flight-hud="altitude">—</strong></span>
+          <span><small>GPS</small><strong data-flight-hud="gps">—</strong></span>
+          <span><small>模式</small><strong data-flight-hud="mode">—</strong></span>
+        </div>
+        <video id="video" controls muted autoplay playsinline></video>
+        <p id="stream-label" class="notice"></p>
+      </div>
      </section>
      <section class="flight-controls" aria-label="飞行操作">
        <div class="flight-panel-tabs-shell">
@@ -263,44 +357,23 @@
 
        <div class="flight-panel-content">
          <div id="flight-panel-stream" class="flight-panel-view" data-flight-panel-view="stream" role="tabpanel">
-        <div class="control-block">
-          <div class="control-block-header">
-            <div>
-              <h3>图传控制</h3>
-              <p class="muted">只选择用于图传的手机；可与航线任务机不同。</p>
-            </div>
+          <div class="flight-panel-phones">
+            <label class="device-select">
+              <span>图传手机</span>
+              <select id="stream-select"></select>
+            </label>
+            <label class="device-select">
+              <span>任务手机</span>
+              <select id="mission-select"></select>
+            </label>
           </div>
-          <label class="device-select" style="margin-top: 14px;">
-            <span>图传手机</span>
-            <select id="stream-select"></select>
-          </label>
-          <div class="operation-state-panel">
-            <h4>启动前置状态</h4>
-            <p class="muted">启动图传要求手机中继、MSDK、AirLink 和主相机均已就绪；DJI 回调、推流状态和实际出画仍需分别确认。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>手机中继<small>[桌面 Relay 会话]</small></span><strong data-flight-status="stream-relay">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK<small>[DJISDKInitEvent]</small></span><strong data-flight-status="stream-msdk">尚未取得</strong></div>
-              <div class="operation-state-row"><span>AirLink<small>[AirLinkKey.KeyConnection]</small></span><strong data-flight-status="stream-air-link">尚未取得</strong></div>
-              <div class="operation-state-row"><span>主相机<small>[CameraKey.KeyConnection, LEFT_OR_MAIN]</small></span><strong data-flight-status="stream-camera">尚未取得</strong></div>
-            </div>
+          <div class="flight-now" aria-label="现在">
+            <div class="flight-now-row"><span>链路</span><strong id="stream-ready" data-flight-status="stream-reach">—</strong></div>
+            <div class="flight-now-row"><span>推流</span><strong data-flight-status="stream-push">—</strong></div>
+            <div class="flight-now-row"><span>出画</span><strong data-flight-status="stream-paint">—</strong></div>
+            <div class="flight-now-row"><span>运行错误</span><strong data-flight-status="stream-msdk-runtime-error">—</strong></div>
           </div>
           <div class="flight-panel-actions">
-            <div class="operation-progress" data-progress="stream" aria-live="polite">
-              <h4>当前进度</h4>
-              <p class="operation-progress-headline" data-progress-field="headline"></p>
-              <div class="operation-state-list">
-                <div class="operation-state-row"><span>命令</span><strong data-progress-field="command"></strong></div>
-                <div class="operation-state-row"><span>效果</span><strong data-progress-field="effect"></strong></div>
-                <div class="operation-state-row"><span>下一步</span><strong data-progress-field="next"></strong></div>
-              </div>
-            </div>
-            <div class="operation-state-panel" style="margin-top: 0; padding-top: 0; border-top: 0;">
-              <h4>图传控制状态</h4>
-              <p id="stream-ready" class="notice"></p>
-              <div class="operation-state-list">
-                <div class="operation-state-row"><span>图传控制工作流<small>[桌面 stream-control]</small></span><strong data-flight-status="stream-runtime">尚未取得</strong></div>
-              </div>
-            </div>
             <div class="row stream-controls">
               <div class="operation-action">
                 <button data-action="stream-start">启动图传</button>
@@ -312,76 +385,16 @@
               </div>
             </div>
           </div>
-          <div class="operation-state-panel">
-            <h4>图像源帧事实</h4>
-            <p class="muted">只读观察手机 MSDK 是否真的交付过相机编码字节；未观察到帧不等于 DJI Key 已断开。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>相机编码帧状态<small>[ICameraStreamManager.ReceiveStreamListener]</small></span><strong data-flight-status="stream-camera-frame-state">尚未取得</strong></div>
-              <div class="operation-state-row"><span>帧观察代次<small>[生产 RTMP 会话代次]</small></span><strong data-flight-status="stream-camera-frame-generation">尚未取得</strong></div>
-              <div class="operation-state-row"><span>有效编码帧数量<small>[ReceiveStreamListener]</small></span><strong data-flight-status="stream-camera-frame-count">尚未取得</strong></div>
-              <div class="operation-state-row"><span>最新帧年龄<small>[手机本地单调时钟]</small></span><strong data-flight-status="stream-camera-frame-age">尚未取得</strong></div>
-              <div class="operation-state-row"><span>最新帧格式<small>[DJI StreamInfo]</small></span><strong data-flight-status="stream-camera-frame-format">尚未取得</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>手机端推流事实</h4>
-            <p class="muted">这些是 <code>LiveStreamStatus</code> 的运行期观测，不是启动或停止按钮的完成回执。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>MSDK 推流状态<small>[LiveStreamStatus.isStreaming]</small></span><strong data-flight-status="stream-msdk-push">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK 分辨率<small>[LiveStreamStatus.resolution]</small></span><strong data-flight-status="stream-msdk-resolution">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK 帧率<small>[LiveStreamStatus.fps]</small></span><strong data-flight-status="stream-msdk-fps">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK 码率<small>[LiveStreamStatus.vbps]</small></span><strong data-flight-status="stream-msdk-bitrate">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK RTT<small>[LiveStreamStatus.rtt]</small></span><strong data-flight-status="stream-msdk-rtt">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK 丢包<small>[LiveStreamStatus.packetLoss]</small></span><strong data-flight-status="stream-msdk-packet-loss">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK 缓存长度<small>[LiveStreamStatus.packetCacheLen]</small></span><strong data-flight-status="stream-msdk-packet-cache">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK 运行期错误<small>[LiveStreamStatusListener.onError]</small></span><strong data-flight-status="stream-msdk-runtime-error">尚未取得</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>电脑媒体接收与播放事实</h4>
-            <p class="muted">共享服务就绪、当前设备 RTMP 到达、播放器选源和实际出画各自独立，不能互相推导。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>RTMP 接收服务<small>[桌面 media-pipeline]</small></span><strong data-flight-status="stream-rtmp-service">尚未取得</strong></div>
-              <div class="operation-state-row"><span>HTTP-FLV 服务<small>[桌面 media-pipeline]</small></span><strong data-flight-status="stream-http-flv-service">尚未取得</strong></div>
-              <div class="operation-state-row"><span>当前设备 RTMP 接收<small>[桌面 rtmp-ingest]</small></span><strong data-flight-status="stream-rtmp-arrival">尚未取得</strong></div>
-              <div class="operation-state-row"><span>播放器数据源<small>[桌面 video-player]</small></span><strong data-flight-status="stream-player-source">尚未取得</strong></div>
-              <div class="operation-state-row"><span>实际渲染<small>[HTMLVideoElement]</small></span><strong data-flight-status="stream-player-rendering">尚未取得</strong></div>
-            </div>
-          </div>
-        </div>
          </div>
 
          <div id="flight-panel-mission" class="flight-panel-view" data-flight-panel-view="mission" role="tabpanel" hidden>
-        <div class="control-block">
-          <div class="control-block-header">
-            <div>
-              <h3>航线任务</h3>
-              <p class="muted">准备、上传和执行是三个独立步骤，不会自动连续下发。</p>
-            </div>
-            <p class="control-block-note">不会自动上传或执行</p>
-          </div>
-          <label class="device-select" style="margin-top: 14px;">
-            <span>任务手机</span>
-            <select id="mission-select"></select>
-          </label>
-          <div class="operation-state-panel">
-            <h4>命令可达性</h4>
-            <p class="muted">仅用于确认桌面命令能否送到手机 MSDK；不会替 DJI 判断航线是否可执行。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>手机中继<small>[桌面 Relay 会话]</small></span><strong data-flight-status="mission-relay">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK<small>[DJISDKInitEvent]</small></span><strong data-flight-status="mission-msdk">尚未取得</strong></div>
-            </div>
+          <div class="flight-now" aria-label="现在">
+            <div class="flight-now-row"><span>可达</span><strong data-flight-status="mission-reach">—</strong></div>
+            <div class="flight-now-row"><span>执行</span><strong id="mission-label" data-flight-status="mission-execution-now">—</strong></div>
+            <div class="flight-now-row"><span>上传/动作</span><strong data-flight-status="mission-upload-or-action">—</strong></div>
+            <div class="flight-now-row"><span>中断</span><strong data-flight-status="mission-wayline-interrupt">—</strong></div>
           </div>
           <div class="flight-panel-actions">
-            <div class="operation-progress" data-progress="mission" aria-live="polite">
-              <h4>当前进度</h4>
-              <p class="operation-progress-headline" data-progress-field="headline"></p>
-              <div class="operation-state-list">
-                <div class="operation-state-row"><span>命令</span><strong data-progress-field="command"></strong></div>
-                <div class="operation-state-row"><span>效果</span><strong data-progress-field="effect"></strong></div>
-                <div class="operation-state-row"><span>下一步</span><strong data-progress-field="next"></strong></div>
-              </div>
-            </div>
             <div class="mission-flow">
               <div class="mission-step" data-mission-step="prepare">
                 <div class="mission-step-copy">
@@ -402,7 +415,7 @@
               <div class="mission-step" data-mission-step="execute">
                 <div class="mission-step-copy">
                   <span class="mission-step-name">执行航线</span>
-                  <span class="mission-step-detail">执行前会再次要求确认</span>
+                  <span class="mission-step-detail">同一键再点确认</span>
                   <p class="operation-feedback" data-operation-feedback="mission-start" aria-live="polite"></p>
                 </div>
                 <button data-action="mission-start">执行航线</button>
@@ -422,98 +435,23 @@
                 <p class="operation-feedback" data-operation-feedback="mission-stop" aria-live="polite"></p>
               </div>
             </div>
-            <div id="mission-confirm" class="mission-confirmation" hidden>
-              <p id="mission-confirm-text"></p>
-              <div class="confirmation-actions">
-                <button id="mission-confirm-yes">确认执行</button>
-                <button id="mission-confirm-no">取消</button>
-              </div>
-            </div>
           </div>
-          <div class="operation-state-panel">
-            <h4>DJI 设备事实</h4>
-            <p class="muted">当前手机订阅的 DJI Key；它们是观察事实，不是桌面额外添加的航线门禁。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>遥控器<small>[RemoteControllerKey.KeyConnection]</small></span><strong data-flight-status="mission-remote-controller">尚未取得</strong></div>
-              <div class="operation-state-row"><span>飞行控制器<small>[FlightControllerKey.KeyConnection]</small></span><strong data-flight-status="mission-flight-controller">尚未取得</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>任务对象与手机暂存</h4>
-            <p class="muted">桌面航线选择、手机当前暂存任务和手机任务状态分别保留，不把手机收到文件误写成飞机已接收。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>当前桌面选择航线<small>[route-library]</small></span><strong data-flight-status="mission-selected-route">尚未选择</strong></div>
-              <div class="operation-state-row"><span>当前桌面任务航线<small>[mission-control]</small></span><strong data-flight-status="mission-assigned-route">当前没有桌面任务</strong></div>
-              <div class="operation-state-row"><span>手机暂存文件<small>[MissionSnapshot.file]</small></span><strong data-flight-status="mission-phone-file">尚未取得</strong></div>
-              <div class="operation-state-row"><span>手机任务状态<small>[MissionSnapshot.execution]</small></span><strong data-flight-status="mission-phone-execution">尚未取得</strong></div>
-              <div class="operation-state-row"><span>任务代际<small>[MissionSnapshot.missionRevision]</small></span><strong data-flight-status="mission-revision">尚未取得</strong></div>
-              <div class="operation-state-row"><span>设备运行代际<small>[MissionSnapshot.deviceGeneration]</small></span><strong data-flight-status="mission-device-generation">尚未取得</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>上传至飞机</h4>
-            <p class="muted">只显示 DJI 上传进度；100% 只说明上传进度已报告完成，不代表航线已经执行。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>DJI 上传进度<small>[WaypointMissionManager.pushKMZFileToAircraft]</small></span><strong data-flight-status="mission-upload-progress">未报告上传</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>DJI 航线执行观测</h4>
-            <p class="muted">一对一显示 <code>WaypointMissionExecuteStateListener</code> 的当前原始状态；不由此改变按钮可用性。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>原始 DJI 执行状态<small>[WaypointMissionExecuteStateListener]</small></span><strong data-flight-status="mission-dji-execution-state">当前任务暂无 DJI 执行观察</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>DJI 可信里程碑</h4>
-            <p class="muted">仅记录已由手机绑定当前任务身份的 DJI 执行事件，不由按钮成功回执推导。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>已进入首航点<small>[ENTER_WAYLINE]</small></span><strong data-flight-status="mission-start-point-reached">尚未确认</strong></div>
-              <div class="operation-state-row"><span>航线实际开始执行<small>[EXECUTING]</small></span><strong data-flight-status="mission-route-execution-started">尚未确认</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>桌面任务工作流</h4>
-            <p class="muted">桌面自己的任务阶段；它与手机原始 DJI 状态和每个按钮的回执分别显示。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>桌面任务阶段<small>[mission-control]</small></span><strong data-flight-status="mission-phase">尚未取得</strong></div>
-            </div>
-            <p id="mission-label" class="mission-status"></p>
-            <p id="flight-route" class="mission-route"></p>
-          </div>
-        </div>
          </div>
 
          <div id="flight-panel-direct-flight" class="flight-panel-view" data-flight-panel-view="direct-flight" role="tabpanel" hidden>
-        <div class="control-block flight-safety-controls">
-          <div class="control-block-header">
-            <div>
-              <h3>直接飞行控制</h3>
-              <p class="muted">起飞、降落、返航和停止动作均经独立确认。MSDK 是最终安全裁决者。</p>
-            </div>
-          </div>
-          <label class="device-select" style="margin-top: 14px;">
+          <label class="device-select">
             <span>直接飞行任务机</span>
             <select id="direct-flight-select"></select>
           </label>
-          <div class="operation-state-panel">
-            <h4>命令可达性</h4>
-            <p class="muted">仅手机中继和 MSDK 就绪决定是否可以调用 DJI；以下 DJI 状态为操作员事实，不在桌面端替 DJI 拒绝动作。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>手机中继<small>[桌面 Relay 会话]</small></span><strong data-flight-status="direct-relay">尚未取得</strong></div>
-              <div class="operation-state-row"><span>MSDK<small>[DJISDKInitEvent]</small></span><strong data-flight-status="direct-msdk">尚未取得</strong></div>
-            </div>
+          <div class="flight-now" aria-label="现在">
+            <div class="flight-now-row"><span>可达</span><strong data-flight-status="direct-reach">—</strong></div>
+            <div class="flight-now-row"><span>当前过程</span><strong id="landing-status" data-flight-status="direct-process">—</strong></div>
+            <div class="flight-now-row"><span>降落保护</span><strong data-flight-status="direct-landing-protection">—</strong></div>
+            <div class="flight-now-row"><span>确认降落</span><strong data-flight-status="direct-landing-confirmation">—</strong></div>
+            <div class="flight-now-row"><span>低电量返航</span><strong data-flight-status="direct-low-battery-rth">—</strong></div>
+            <div class="flight-now-row"><span>告警</span><strong data-flight-status="direct-alert">—</strong></div>
           </div>
           <div class="flight-panel-actions">
-            <div class="operation-progress" data-progress="flight" aria-live="polite">
-              <h4>当前进度</h4>
-              <p class="operation-progress-headline" data-progress-field="headline"></p>
-              <div class="operation-state-list">
-                <div class="operation-state-row"><span>命令</span><strong data-progress-field="command"></strong></div>
-                <div class="operation-state-row"><span>效果</span><strong data-progress-field="effect"></strong></div>
-                <div class="operation-state-row"><span>下一步</span><strong data-progress-field="next"></strong></div>
-              </div>
-            </div>
             <div class="direct-flight-actions">
               <div class="operation-action">
                 <button data-action="flight-takeoff">起飞</button>
@@ -540,52 +478,7 @@
                 <p class="operation-feedback" data-operation-feedback="flight-stop-auto-landing" aria-live="polite"></p>
               </div>
             </div>
-            <div id="confirm" class="flight-confirmation" hidden>
-              <p id="confirm-text"></p>
-              <div class="confirmation-actions">
-                <button id="confirm-yes">确认</button>
-                <button id="confirm-no">取消</button>
-              </div>
-            </div>
-            <p id="guidance" class="notice" style="margin: 12px 0 0;"></p>
           </div>
-          <div class="operation-state-panel">
-            <h4>DJI 飞行事实</h4>
-            <p class="muted">这些值来自当前手机的 MSDK 观测；按钮回调只表示 API 调用结果，不等于飞机的物理状态已改变。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>遥控器<small>[RemoteControllerKey.KeyConnection]</small></span><strong data-flight-status="direct-remote-controller">尚未取得</strong></div>
-              <div class="operation-state-row"><span>飞行控制器<small>[FlightControllerKey.KeyConnection]</small></span><strong data-flight-status="direct-flight-controller">尚未取得</strong></div>
-              <div class="operation-state-row"><span>飞行状态<small>[FlightControllerKey.KeyIsFlying]</small></span><strong data-flight-status="direct-flight-state">尚未取得</strong></div>
-              <div class="operation-state-row"><span>电机<small>[FlightControllerKey.KeyAreMotorsOn]</small></span><strong data-flight-status="direct-motors">尚未取得</strong></div>
-              <div class="operation-state-row"><span>主电池连接<small>[BatteryKey.KeyConnection, LEFT_OR_MAIN]</small></span><strong data-flight-status="direct-battery-link">尚未取得</strong></div>
-              <div class="operation-state-row"><span>主电池<small>[BatteryKey.KeyChargeRemainingInPercent, LEFT_OR_MAIN]</small></span><strong data-flight-status="direct-battery">尚未取得</strong></div>
-              <div class="operation-state-row"><span>降落保护<small>[FlightAssistantKey.KeyLandingProtectionState]</small></span><strong data-flight-status="direct-landing-protection">尚未取得</strong></div>
-              <div class="operation-state-row"><span>需要确认降落<small>[FlightControllerKey.KeyIsLandingConfirmationNeeded]</small></span><strong data-flight-status="direct-landing-confirmation">尚未取得</strong></div>
-              <div class="operation-state-row"><span>飞行模式<small>[FlightControllerKey.KeyFCFlightMode]</small></span><strong data-flight-status="direct-flight-mode">尚未取得</strong></div>
-              <div class="operation-state-row"><span>相对起飞点高度<small>[FlightControllerKey.KeyAltitude]</small></span><strong data-flight-status="direct-altitude">尚未取得</strong></div>
-              <div class="operation-state-row"><span>位置<small>[FlightControllerKey.KeyAircraftLocation]</small></span><strong data-flight-status="direct-position">尚未取得</strong></div>
-              <div class="operation-state-row"><span>GPS 信号<small>[FlightControllerKey.KeyGPSSignalLevel]</small></span><strong data-flight-status="direct-gps-signal">尚未取得</strong></div>
-              <div class="operation-state-row"><span>GPS 卫星数<small>[FlightControllerKey.KeyGPSSatelliteCount]</small></span><strong data-flight-status="direct-gps-satellites">尚未取得</strong></div>
-              <div class="operation-state-row"><span>视觉传感器使用<small>[FlightControllerKey.KeyIsVisionSensorUsed]</small></span><strong data-flight-status="direct-vision-sensor">尚未取得</strong></div>
-              <div class="operation-state-row"><span>视觉系统警告<small>[FlightAssistantKey.KeyVisionSystemWarning]</small></span><strong data-flight-status="direct-vision-warning">尚未取得</strong></div>
-              <div class="operation-state-row"><span>视觉定位<small>[FlightAssistantKey.KeyVisionPositioningEnabled]</small></span><strong data-flight-status="direct-vision-positioning">尚未取得</strong></div>
-              <div class="operation-state-row"><span>低电量返航状态<small>[FlightControllerKey.KeyLowBatteryRTHInfo]</small></span><strong data-flight-status="direct-low-battery-rth">尚未取得</strong></div>
-              <div class="operation-state-row"><span>低电量返航预估<small>[FlightControllerKey.KeyLowBatteryRTHInfo]</small></span><strong data-flight-status="direct-remaining-flight-time">尚未取得</strong></div>
-              <div class="operation-state-row"><span>起飞失败原因<small>[FlightControllerKey.KeyTakeoffFailureError]</small></span><strong data-flight-status="direct-takeoff-failure">尚未取得</strong></div>
-              <div class="operation-state-row"><span>电机启动失败原因<small>[FlightControllerKey.KeyMotorStartFailureError]</small></span><strong data-flight-status="direct-motor-start-failure">尚未取得</strong></div>
-            </div>
-          </div>
-          <div class="operation-state-panel">
-            <h4>操作效果观察</h4>
-            <p class="muted">只由后续持续遥测确认，绝不由某次按钮的 <code>onSuccess</code> 推断。</p>
-            <div class="operation-state-list">
-              <div class="operation-state-row"><span>起飞效果<small>[KeyIsFlying + KeyAreMotorsOn]</small></span><strong data-flight-status="direct-takeoff-observation">尚未取得</strong></div>
-              <div class="operation-state-row"><span>降落效果<small>[KeyIsFlying + KeyAreMotorsOn]</small></span><strong data-flight-status="direct-landing-observation">尚未取得</strong></div>
-              <div class="operation-state-row"><span>降落过程<small>[本次命令 + MSDK 持续状态]</small></span><strong id="landing-status">未请求降落</strong></div>
-              <div class="operation-state-row"><span>返航效果<small>[KeyFCFlightMode + KeyAircraftLocation]</small></span><strong data-flight-status="direct-return-home-observation">尚未取得</strong></div>
-            </div>
-          </div>
-        </div>
          </div>
        </div>
        <p id="status" class="operation-status" aria-live="polite"></p>

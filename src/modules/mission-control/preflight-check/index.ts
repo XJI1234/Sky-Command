@@ -131,7 +131,12 @@ function evaluate(input: PreflightInput, _policy?: PreflightPolicy): PreflightRe
   const codes: PreflightBlockerCode[] = [];
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
   if (!sdkReady(normalized)) codes.push("SDK_NOT_READY");
-  if (normalized.missionPhase !== "uploaded") codes.push("MISSION_NOT_UPLOADED");
+  if (
+    normalized.missionPhase !== "uploaded"
+    && normalized.missionPhase !== "starting"
+    && normalized.missionPhase !== "pausing"
+    && normalized.missionPhase !== "resuming"
+  ) codes.push("MISSION_NOT_UPLOADED");
   return result(codes);
 }
 

@@ -366,10 +366,10 @@ const missionEffectOf = (mission: unknown, phase: string | null): string => {
   return "等待手机确认此次命令的设备效果";
 };
 const missionNextOf = (actions: OperatorMissionActions, phase: string | null, unconfirmedOperation: string | null): string => {
-  if (unconfirmedOperation === "start") return "不得再点执行。可停止航线";
-  if (unconfirmedOperation === "pause" || unconfirmedOperation === "resume") return "不得重复同一命令。可停止航线";
+  if (unconfirmedOperation === "start") return "可再点执行。也可停止航线";
+  if (unconfirmedOperation === "pause" || unconfirmedOperation === "resume") return "不得重复同一命令。可再点执行，也可停止航线";
   if (unconfirmedOperation === "stop") return "停止结果未确认。恢复手机和 MSDK 后可再次尝试停止";
-  if (phase === "starting") return "等待进入航线。现在只能停止，不能再点执行";
+  if (phase === "starting") return "等待进入航线。可停止，也可再点执行";
   if (actions.upload.enabled) return "下一步：点「上传至飞机」";
   if (actions.start.enabled) return "下一步：点「执行航线」";
   if (actions.pause.enabled) return "下一步：可暂停或停止航线";
@@ -617,7 +617,7 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   }
   if (name !== "mission-start") return reject("未知操作");
   const phase = text(read(current.mission, "phase"));
-  if (phase !== "uploaded") return reject("请先将当前航线上传到所选飞机");
+  if (phase !== "uploaded" && phase !== "starting" && phase !== "pausing" && phase !== "resuming") return reject("请先将当前航线上传到所选飞机");
   const msdkIssue = msdkInvocationIssue(device);
   return msdkIssue === null ? accept() : reject(msdkIssue);
 }

@@ -32,6 +32,9 @@ describe("preflight check contract", () => {
     expect(result).toEqual({ ok: true, blockers: [] });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.blockers)).toBe(true);
+    expect(PreflightCheck.evaluate(withInput({ missionPhase: "starting" }))).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluate(withInput({ missionPhase: "pausing" }))).toEqual({ ok: true, blockers: [] });
+    expect(PreflightCheck.evaluate(withInput({ missionPhase: "resuming" }))).toEqual({ ok: true, blockers: [] });
   });
 
   it("ignores retained ProductKey compatibility telemetry in every flight precheck", () => {
