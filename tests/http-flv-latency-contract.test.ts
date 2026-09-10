@@ -67,13 +67,16 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(detach).toBeGreaterThan(reuse);
   });
 
-  it("慢速 HTTP-FLV 播放客户端达到写入上限时关闭整个会话，而不无限积压视频帧", () => {
+  it("慢速 HTTP-FLV 播放客户端达到写入上限时丢掉直到下一关键帧，不断开会话", () => {
     const source = mediaPorts();
 
     expect(source).toContain("MAX_FLV_PENDING_BYTES");
     expect(source).toContain("res.writableLength");
-    expect(source).toContain("session.stop()");
-    expect(source).toContain("res.destroy()");
+    expect(source).toContain("skipUntilKeyframe");
+    expect(source).toContain("isAvcSyncTag");
+    expect(source).toContain("http-flv-client-backpressure");
+    expect(source).not.toContain("res.destroy()");
+    expect(source).not.toContain("terminateSlowPlayer");
   });
 
   it("HTTP-FLV 写出时把无音轨流的 FLV 头标成有视频，避免 flv.js 探测成空轨", () => {

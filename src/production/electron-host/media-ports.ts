@@ -81,31 +81,56 @@ function markFlvHeaderHasVideo(chunk: Buffer): void {
   chunk[4] |= 0x01;
 }
 
-/** 只过滤 SEI-only 等无图像 AVC 包；慢播放器直接断开重连，绝不选择性丢 P 帧。 */
-function filterSeiOnlyWrites(res: ServerResponse, onBackpressureLimit: () => void): void {
+function isAvcSyncTag(payload: Buffer): boolean {
+  if (payload.length < 2) return false;
+  if ((payload[0] & 0x0f) !== 7) return true;
+  const packetType = payload[1];
+  if (packetType === 0) return true;
+  if (packetType !== 1) return false;
+  let offset = 5;
+  while (offset + 4 <= payload.length) {
+    const nalSize = payload.readUInt32BE(offset);
+    offset += 4;
+    if (nalSize <= 0 || offset + nalSize > payload.length) break;
+    const nalType = payload[offset]! & 0x1f;
+    if (nalType === 5) return true;
+    offset += nalSize;
+  }
+  return false;
+}
+
+function finishWrite(encoding?: unknown, cb?: unknown): true {
+  if (typeof encoding === "function") (encoding as () => void)();
+  else if (typeof cb === "function") (cb as () => void)();
+  return true;
+}
+
+/** 只过滤 SEI-only 等无图像 AVC 包；播放器积压时丢掉直到下一关键帧，不断开会话。 */
+function filterSeiOnlyWrites(res: ServerResponse, onBackpressureSkip: () => void): void {
   const write = res.write.bind(res);
-  let exceeded = false;
-  const terminateSlowPlayer = (): void => {
-    if (exceeded) return;
-    exceeded = true;
-    try { onBackpressureLimit(); } catch { /* cleanup must not make a video write fail */ }
-    try { res.destroy(); } catch { /* the request close handler also releases the NMS session */ }
-  };
+  let skipUntilKeyframe = false;
+  let reported = false;
   res.write = ((chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
     if (Buffer.isBuffer(chunk)) markFlvHeaderHasVideo(chunk);
     if (Buffer.isBuffer(chunk) && chunk.length >= 11 && chunk[0] === 9) {
       const size = chunk.readUIntBE(1, 3);
       if (Number.isFinite(size) && size >= 0 && 11 + size <= chunk.length) {
         const payload = chunk.subarray(11, 11 + size);
-        if (!keepAvcVideoTag(payload)) {
-          if (typeof encoding === "function") (encoding as () => void)();
-          else if (typeof cb === "function") (cb as () => void)();
-          return true;
-        }
+        if (!keepAvcVideoTag(payload)) return finishWrite(encoding, cb);
+        if (skipUntilKeyframe && !isAvcSyncTag(payload)) return finishWrite(encoding, cb);
+        if (skipUntilKeyframe && isAvcSyncTag(payload)) skipUntilKeyframe = false;
       }
     }
     const accepted = (write as (chunk: unknown, encoding?: unknown, cb?: unknown) => boolean)(chunk, encoding, cb);
-    if (res.writableLength >= MAX_FLV_PENDING_BYTES) terminateSlowPlayer();
+    if (res.writableLength >= MAX_FLV_PENDING_BYTES) {
+      skipUntilKeyframe = true;
+      if (!reported) {
+        reported = true;
+        try { onBackpressureSkip(); } catch { /* diagnostics must not make a video write fail */ }
+      }
+    } else if (res.writableLength < MAX_FLV_PENDING_BYTES / 2) {
+      reported = false;
+    }
     return accepted;
   }) as typeof res.write;
 }
@@ -226,9 +251,7 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
         const session = new NodeFlvSession({}, req, res);
         sessions.set(deviceId, session);
         filterSeiOnlyWrites(res, () => {
-          if (sessions.get(deviceId) === session) sessions.delete(deviceId);
-          try { session.stop(); } catch { /* NMS session cleanup is best effort after socket backpressure */ }
-          try { log?.({ kind: "http-flv-client-backpressure", deviceId, detail: "HTTP-FLV player was disconnected after its output queue reached the limit" }); } catch { /* diagnostics must not affect media */ }
+          try { log?.({ kind: "http-flv-client-backpressure", deviceId, detail: "HTTP-FLV player queue reached the limit; skipped until the next keyframe" }); } catch { /* diagnostics must not affect media */ }
         });
         const clear = (): void => {
           if (sessions.get(deviceId) === session) sessions.delete(deviceId);

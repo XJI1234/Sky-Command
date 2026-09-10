@@ -193,6 +193,13 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       const sink = options.diagnosticSink;
       if (!device || !sink) return;
       const identity = `${diagnosticReport.runId}\u0000${diagnosticReport.events.map((item) => item.sequence).join(",")}`;
+      const allPersisted = diagnosticReport.events.every((item) => persistedDiagnosticKeys.has(diagnosticKey(device.deviceId, diagnosticReport.runId, item.sequence)));
+      if (allPersisted) {
+        const acknowledgedSequence = diagnosticReport.events[diagnosticReport.events.length - 1]!.sequence;
+        const encoded = RelayFrameCodec.encode({ type: "diagnostic-ack", runId: diagnosticReport.runId, acknowledgedSequence });
+        if (encoded.ok) void server.send(event.connectionId, encoded.value);
+        return;
+      }
       const queue = diagnosticQueues.get(event.connectionId) ?? { reports: [], identities: new Set<string>(), running: false };
       if (queue.identities.has(identity) || queue.reports.length >= MAX_QUEUED_DIAGNOSTIC_REPORTS) return;
       diagnosticQueues.set(event.connectionId, queue);

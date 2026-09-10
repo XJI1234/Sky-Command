@@ -557,6 +557,52 @@ describe("relay-link root contract", () => {
     ]);
   });
 
+  it("acknowledges an already persisted diagnostic report even when the inbound queue is full", async () => {
+    const fixture = options();
+    const completions: Array<(result: boolean) => void> = [];
+    (fixture.options as { diagnosticSink?: { persist(input: { events: readonly { sequence: number }[] }): Promise<boolean> } }).diagnosticSink = {
+      persist: () => new Promise<boolean>((resolve) => completions.push(resolve)),
+    };
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+    const event = (sequence: number) => ({
+      sequence,
+      timestampMillis: sequence,
+      level: "INFO" as const,
+      module: "relay-gateway",
+      eventCode: "STARTED",
+      operationId: null,
+      safeDetail: "connected",
+    });
+    const acks = () => phone.sent
+      .map((bytes) => RelayFrameCodec.decode(bytes))
+      .filter((result): result is Extract<typeof result, { kind: "decoded" }> => result.kind === "decoded")
+      .map((result) => result.frame)
+      .filter((frame) => frame.type === "diagnostic-ack");
+
+    phone.emit({ type: "diagnostic-report", runId: "run-1", events: [event(1)] });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    completions[0]!(true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(acks()).toEqual([{ type: "diagnostic-ack", runId: "run-1", acknowledgedSequence: 1 }]);
+
+    for (let sequence = 2; sequence <= 9; sequence += 1) {
+      phone.emit({ type: "diagnostic-report", runId: "run-1", events: [event(sequence)] });
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(acks()).toHaveLength(1);
+
+    phone.emit({ type: "diagnostic-report", runId: "run-1", events: [event(1)] });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(acks()).toEqual([
+      { type: "diagnostic-ack", runId: "run-1", acknowledgedSequence: 1 },
+      { type: "diagnostic-ack", runId: "run-1", acknowledgedSequence: 1 },
+    ]);
+  });
+
   it("未配置日志存储时不确认手机日志", async () => {
     const fixture = options();
     const link = RelayLink.create(fixture.options);
