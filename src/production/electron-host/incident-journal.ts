@@ -297,9 +297,26 @@ function connectionFacts(value: unknown): Readonly<Record<string, string>> {
   return facts;
 }
 
+function integerFact(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function waylineWatchFacts(value: unknown): { readonly waypoint: number | null; readonly interruptCode: string | null; readonly interruptDescription: string | null } {
+  const connection = asRecord(asRecord(value)?.connection);
+  if (connection === null) {
+    return { waypoint: null, interruptCode: null, interruptDescription: null };
+  }
+  return {
+    waypoint: integerFact(connection.currentWaypointIndex),
+    interruptCode: text(connection.waylineInterruptErrorCode),
+    interruptDescription: text(connection.waylineInterruptErrorDescription),
+  };
+}
+
 export function watchApplication(application: { snapshot: () => unknown; subscribe: (listener: (snapshot: unknown) => void) => () => void }, journal: IncidentJournal): () => void {
   let previousDevices = new Set<string>();
   let previousFacts = new Map<string, Record<string, string>>();
+  const previousWayline = new Map<string, { waypoint?: number; interruptCode?: string; interruptDescription?: string }>();
   /** 连接类事实需连续两次快照一致才落盘，压制遥测闪断刷屏。 */
   const pendingConnection = new Map<string, Record<string, string>>();
   const connectionKeys = new Set(["sdk", "remoteController", "flightController", "aircraft", "pairingState"]);
@@ -364,6 +381,37 @@ export function watchApplication(application: { snapshot: () => unknown; subscri
         });
         nextLogged[key] = value;
       }
+      const wayline = waylineWatchFacts(device);
+      const lastWayline = previousWayline.get(deviceId) ?? {};
+      if (wayline.waypoint !== null && wayline.waypoint !== lastWayline.waypoint) {
+        journal.record({
+          link: "uplink",
+          level: "INFO",
+          event: `WAYLINE_WAYPOINT_${wayline.waypoint}`,
+          deviceId,
+          detail: `currentWaypointIndex=${wayline.waypoint}`,
+        });
+      }
+      if (
+        (wayline.interruptCode !== null || wayline.interruptDescription !== null) &&
+        (wayline.interruptCode !== lastWayline.interruptCode || wayline.interruptDescription !== lastWayline.interruptDescription)
+      ) {
+        journal.record({
+          link: "uplink",
+          level: "WARN",
+          event: "WAYLINE_INTERRUPT",
+          deviceId,
+          detail: [
+            wayline.interruptCode === null ? null : `djiErrorCode=${wayline.interruptCode}`,
+            wayline.interruptDescription === null ? null : `djiErrorDescription=${wayline.interruptDescription}`,
+          ].filter((part): part is string => part !== null).join(" "),
+        });
+      }
+      previousWayline.set(deviceId, {
+        waypoint: wayline.waypoint ?? lastWayline.waypoint,
+        interruptCode: wayline.interruptCode ?? lastWayline.interruptCode,
+        interruptDescription: wayline.interruptDescription ?? lastWayline.interruptDescription,
+      });
       if (Object.keys(nextPending).length === 0) pendingConnection.delete(deviceId);
       else pendingConnection.set(deviceId, nextPending);
       previousFacts.set(deviceId, nextLogged);
@@ -372,6 +420,7 @@ export function watchApplication(application: { snapshot: () => unknown; subscri
       if (ids.has(deviceId)) continue;
       journal.record({ link: "phone-pc", level: "WARN", event: "DEVICE_UNPAIRED", deviceId, detail: "Android relay disconnected" });
       previousFacts.delete(deviceId);
+      previousWayline.delete(deviceId);
       pendingConnection.delete(deviceId);
     }
     previousDevices = ids;

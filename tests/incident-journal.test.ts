@@ -224,6 +224,57 @@ describe("事故日志", () => {
     stop();
   });
 
+  it("把航线中断原因和当前航点记为上行", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    let listener: ((snapshot: unknown) => void) | undefined;
+    const stop = watchApplication({
+      snapshot: () => ({
+        workflow: {
+          devices: [{
+            deviceId: "phone-1",
+            connection: { missionExecution: "EXECUTING", missionDjiExecutionState: "EXECUTING", currentWaypointIndex: 11 },
+            mission: { phase: "running" },
+            stream: { phase: "idle" },
+            video: { phase: "idle" },
+          }],
+        },
+        runtime: {},
+      }),
+      subscribe: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    }, journal);
+    listener?.({
+      workflow: {
+        devices: [{
+          deviceId: "phone-1",
+          connection: {
+            missionExecution: "FAILED",
+            missionDjiExecutionState: "INTERRUPTED",
+            currentWaypointIndex: 12,
+            waylineInterruptErrorCode: "RC_PAUSE_STOP",
+            waylineInterruptErrorDescription: "flight pause",
+          },
+          mission: { phase: "failed" },
+          stream: { phase: "idle" },
+          video: { phase: "idle" },
+        }],
+      },
+      runtime: {},
+    });
+    await journal.flush();
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/uplink MISSIONDJIEXECUTIONSTATE_INTERRUPTED/);
+    expect(log).toMatch(/uplink WAYLINE_WAYPOINT_12/);
+    expect(log).toMatch(/WARN uplink WAYLINE_INTERRUPT/);
+    expect(log).toContain("djiErrorCode=RC_PAUSE_STOP");
+    expect(log).toContain("djiErrorDescription=flight pause");
+    stop();
+  });
+
   it("把手机任务执行状态和 DJI 原始航线状态记为上行", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);
