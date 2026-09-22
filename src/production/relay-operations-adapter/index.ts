@@ -150,6 +150,7 @@ export interface RelayOperationsSnapshot {
   readonly devices: readonly DesktopRelayDevice[];
   readonly telemetry: readonly DesktopRelayTelemetry[];
   readonly missionPhases: readonly Readonly<{ readonly deviceId: string; readonly missionRevision: number; readonly deviceGeneration: number; readonly sequence: number; readonly phase: "START_POINT_REACHED" | "ROUTE_EXECUTION_STARTED"; readonly fileName: string }>[];
+  readonly lastDisconnect: Readonly<{ readonly deviceId: string; readonly reason: string }> | null;
 }
 export interface StreamRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
@@ -167,6 +168,10 @@ export interface AdapterFlightRelay extends FlightRelay {
 export interface RelaySettingsGateway {
   readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "device.settings.camera.read" | "device.settings.camera.write" | "device.settings.transmission.read" | "device.settings.transmission.write"; readonly fields: Readonly<Record<string, JsonValue>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail: string; readonly result?: JsonValue }>>;
 }
+export interface PhotoRelayGateway {
+  readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
+}
 export interface RelayOperationsAdapterInstance {
   readonly telemetry: (deviceId: string) => DesktopRelayTelemetry | null;
   readonly controlTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
@@ -179,6 +184,7 @@ export interface RelayOperationsAdapterInstance {
   readonly pairingGateway: () => PairingRelayPort;
   readonly flightGateway: () => AdapterFlightRelay;
   readonly settingsGateway: () => RelaySettingsGateway;
+  readonly photoGateway: () => PhotoRelayGateway;
   readonly refreshTelemetry: (deviceId: string) => Promise<TelemetryRefreshResult>;
   readonly measurePhoneLink: (deviceId: string) => Promise<PhoneLinkProbeReport>;
   readonly dispose: () => void;
@@ -569,7 +575,14 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     }
     return freeze(values);
   };
-  const snapshot = (): RelayOperationsSnapshot => freeze({ devices: devices(), telemetry: freeze(devices().flatMap((device) => { const value = telemetry(device.deviceId); return value === null ? [] : [value]; })), missionPhases: phases() });
+  const lastDisconnect = (): RelayOperationsSnapshot["lastDisconnect"] => {
+    const source = record(read(rawSnapshot, "lastDisconnect"));
+    const deviceId = read(source, "deviceId");
+    const reason = read(source, "reason");
+    if (!validId(deviceId) || typeof reason !== "string" || reason.trim().length === 0 || Array.from(reason).length > 64 || /[\p{Cc}]/u.test(reason)) return null;
+    return freeze({ deviceId, reason });
+  };
+  const snapshot = (): RelayOperationsSnapshot => freeze({ devices: devices(), telemetry: freeze(devices().flatMap((device) => { const value = telemetry(device.deviceId); return value === null ? [] : [value]; })), missionPhases: phases(), lastDisconnect: lastDisconnect() });
   const publish = (): void => { if (disposed) return; const value = snapshot(); for (const listener of [...listeners]) { try { listener(value); } catch { /* subscriber faults are isolated */ } } };
   let unsubscribeRelay = (): void => undefined;
   if (typeof relay.subscribe === "function") {
@@ -652,6 +665,10 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     latestTelemetry: telemetry,
     sendCommand: async (deviceId, request) => (request.name === "flight.takeoff" || request.name === "flight.land" || request.name === "flight.confirm-landing" || request.name === "flight.return-home" || request.name === "flight.stop-takeoff" || request.name === "flight.stop-auto-landing") && request.fields.confirm === true ? send(deviceId, request.name, { confirm: bool(true) }) : commandFailure()
   });
+  const photoGateway: PhotoRelayGateway = freeze({
+    latestTelemetry: telemetry,
+    sendCommand: async (deviceId, request) => (request.name === "camera.photo.capture" || request.name === "camera.photo.fetch") && Object.keys(request.fields).length === 0 ? send(deviceId, request.name, {}) : commandFailure()
+  });
   const settingsGateway: RelaySettingsGateway = freeze({
     sendCommand: async (deviceId, request) => {
       if (request.name !== "device.settings.camera.read" && request.name !== "device.settings.camera.write" && request.name !== "device.settings.transmission.read" && request.name !== "device.settings.transmission.write") return freeze({ status: "rejected" as const, detail: "设置命令无效" });
@@ -712,6 +729,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
     pairingGateway: () => pairingGateway,
     flightGateway: () => flightGateway,
     settingsGateway: () => settingsGateway,
+    photoGateway: () => photoGateway,
     refreshTelemetry,
     measurePhoneLink,
     dispose: () => { if (disposed) return; disposed = true; listeners.clear(); observations.clear(); try { unsubscribeRelay(); } catch { /* adapter teardown is best effort */ } }

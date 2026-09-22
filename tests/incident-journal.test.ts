@@ -347,4 +347,33 @@ describe("事故日志", () => {
     expect(readFileSync(journal.logPath, "utf8")).not.toMatch(/WARN .*AIRCRAFT_UNKNOWN/);
     stop();
   });
+
+  it("把中继断开原因写进 DEVICE_UNPAIRED", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    let listener: ((snapshot: unknown) => void) | undefined;
+    const device = {
+      deviceId: "phone-1",
+      mission: { phase: "idle" },
+      stream: { phase: "idle" },
+      video: { phase: "idle" },
+    };
+    const stop = watchApplication({
+      snapshot: () => ({ workflow: { devices: [device] }, runtime: { relay: { devices: [{ deviceId: "phone-1" }] } } }),
+      subscribe: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+    }, journal);
+    listener?.({
+      workflow: { devices: [] },
+      runtime: { relay: { devices: [], lastDisconnect: { deviceId: "phone-1", reason: "keepalive-timeout" } } },
+    });
+    await journal.flush();
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/DEVICE_UNPAIRED/);
+    expect(log).toContain("keepalive-timeout");
+    stop();
+  });
 });

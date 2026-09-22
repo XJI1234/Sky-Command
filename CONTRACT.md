@@ -67,7 +67,7 @@
 ### 生产图传方案（唯一）
 
 ```text
-手机 DJI -> RTMP -> 电脑 Node Media Server -> 本机 HTTP-FLV -> flv.js
+手机 DJI -> RTMP -> 电脑 Node Media Server -> 本机 HTTP-FLV -> mpegts.js
 ```
 
 WebSocket 只承载 `live-stream.start` / `live-stream.stop`、结果和遥测，绝不承载视频帧。生产组合根、IPC、界面和 APK 只能装配这条链路。WebRTC/WHIP/WHEP 源码和独立测试允许保留在封存目录中，但不得注册命令、创建进程、暴露界面或打入 APK；恢复它必须取得业务批准，并同时修改两端根契约、生产装配与跨端验证。

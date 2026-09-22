@@ -261,6 +261,8 @@ function create(options: RelayServerOptions): RelayServerInstance {
   const enqueueInbound = (entry: InternalConnection, bytes: Uint8Array): void => {
     if (entry.closed) return;
     if (entry.inbound.length >= MAX_PENDING_INBOUND_FRAMES) {
+      const decoded = RelayFrameCodec.decode(bytes);
+      if (decoded.kind === "decoded" && decoded.frame.type === "diagnostic-report") return;
       finish(entry, "inbound-overflow");
       return;
     }

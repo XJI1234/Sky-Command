@@ -13,7 +13,8 @@ if not exist "electron\main.mjs" (
   exit /b 1
 )
 
-rem The installed Sky Command.exe binds 8080/19500 and is a stale package.
+rem Installed Sky Command.exe and a leftover `npm run desktop` both bind 8080.
 taskkill /IM "Sky Command.exe" /F >nul 2>&1
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'Name=''electron.exe''' | Where-Object { $_.CommandLine -like '*Sky Command*node_modules*electron.exe*electron\main.mjs*' -and $_.CommandLine -notlike '*--type=*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 
 start "" "%CD%\node_modules\electron\dist\electron.exe" electron\main.mjs

@@ -266,6 +266,12 @@ function deviceIds(value: unknown): readonly string[] {
   });
 }
 
+function unpairedDetail(relay: Record<string, unknown> | null, deviceId: string): string {
+  const last = asRecord(relay?.lastDisconnect);
+  const reason = last !== null && text(last.deviceId) === deviceId ? text(last.reason) : null;
+  return reason === null ? "Android relay disconnected" : `Android relay disconnected (${reason})`;
+}
+
 function deviceMap(value: unknown): Map<string, Record<string, unknown>> {
   const devices = asRecord(value)?.devices;
   const map = new Map<string, Record<string, unknown>>();
@@ -407,18 +413,27 @@ export function watchApplication(application: { snapshot: () => unknown; subscri
           ].filter((part): part is string => part !== null).join(" "),
         });
       }
-      previousWayline.set(deviceId, {
-        waypoint: wayline.waypoint ?? lastWayline.waypoint,
-        interruptCode: wayline.interruptCode ?? lastWayline.interruptCode,
-        interruptDescription: wayline.interruptDescription ?? lastWayline.interruptDescription,
-      });
+      const nextWayline: { waypoint?: number; interruptCode?: string; interruptDescription?: string } = {};
+      const waypoint = wayline.waypoint ?? lastWayline.waypoint;
+      const interruptCode = wayline.interruptCode ?? lastWayline.interruptCode;
+      const interruptDescription = wayline.interruptDescription ?? lastWayline.interruptDescription;
+      if (waypoint !== undefined) nextWayline.waypoint = waypoint;
+      if (interruptCode !== undefined) nextWayline.interruptCode = interruptCode;
+      if (interruptDescription !== undefined) nextWayline.interruptDescription = interruptDescription;
+      previousWayline.set(deviceId, nextWayline);
       if (Object.keys(nextPending).length === 0) pendingConnection.delete(deviceId);
       else pendingConnection.set(deviceId, nextPending);
       previousFacts.set(deviceId, nextLogged);
     }
     for (const deviceId of previousDevices) {
       if (ids.has(deviceId)) continue;
-      journal.record({ link: "phone-pc", level: "WARN", event: "DEVICE_UNPAIRED", deviceId, detail: "Android relay disconnected" });
+      journal.record({
+        link: "phone-pc",
+        level: "WARN",
+        event: "DEVICE_UNPAIRED",
+        deviceId,
+        detail: unpairedDetail(relay, deviceId),
+      });
       previousFacts.delete(deviceId);
       previousWayline.delete(deviceId);
       pendingConnection.delete(deviceId);

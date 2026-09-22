@@ -94,16 +94,19 @@ describe("跨运行时桌面测试宿主", () => {
       expect(host.geoMap.focus(preview.value.cameraBounds)).toMatchObject({ ok: true });
       expect(host.snapshot().mapFocuses).toEqual([preview.value.cameraBounds]);
 
-      expect(host.workflow.assignRoute(device.deviceId, routeImport.route.routeId).ok).toBe(true);
-      expect((await host.workflow.stage(device.deviceId)).ok).toBe(true);
-      expect((await settleDji(host, host.workflow.upload(device.deviceId))).ok).toBe(true);
-      expect(host.missionControl.get(device.deviceId)).toMatchObject({
-        routeId: routeImport.route.routeId,
-        phase: "uploaded",
-      });
-      expect((await host.relay.sendCommand(device.deviceId, { name: "telemetry.read", fields: {} })).status).toBe("succeeded");
-      await waitUntil(() => host.operations.telemetry(device.deviceId) !== null);
-      const startedMission = await settleDji(host, host.workflow.start(device.deviceId));
+       expect(host.workflow.assignRoute(device.deviceId, routeImport.route.routeId).ok).toBe(true);
+       expect((await host.workflow.stage(device.deviceId)).ok).toBe(true);
+       expect((await host.relay.sendCommand(device.deviceId, { name: "telemetry.read", fields: {} })).status).toBe("succeeded");
+       await waitUntil(() => host.operations.telemetry(device.deviceId) !== null);
+       expect(await settleDji(host, host.workflow.upload(device.deviceId))).toMatchObject({
+         ok: true,
+         value: { ok: true, state: { phase: "uploaded" } },
+       });
+       expect(host.missionControl.get(device.deviceId)).toMatchObject({
+         routeId: routeImport.route.routeId,
+         phase: "uploaded",
+       });
+       const startedMission = await settleDji(host, host.workflow.start(device.deviceId));
       if (!startedMission.ok) throw new Error(JSON.stringify(startedMission));
       expect(startedMission).toMatchObject({
         ok: true,
@@ -404,6 +407,7 @@ describe("跨运行时桌面测试宿主", () => {
       const validFields: Record<string, Record<string, unknown>> = {
         "telemetry.read": {}, "pairing.start": {}, "pairing.stop": {}, "pairing.status": {},
         "live-stream.start": { rtmpUrl: text("rtmp://127.0.0.1/live/extra") }, "live-stream.stop": {},
+        "camera.photo.capture": {}, "camera.photo.fetch": {},
         "flight.takeoff": { confirm: bool(true) }, "flight.land": { confirm: bool(true) }, "flight.return-home": { confirm: bool(true) },
         "device.settings.camera.read": {}, "device.settings.camera.write": { focusMode: text("AUTO") },
         "device.settings.transmission.read": {}, "device.settings.transmission.write": { bandwidth: text("BANDWIDTH_20MHZ") },
@@ -708,10 +712,11 @@ describe("跨运行时桌面测试宿主", () => {
       const device = await host.waitForDevice(30_000);
       expect(device.deviceId).toBe("e2e-relay-1");
 
-      const result = await host.relay.sendCommand(device.deviceId, { name: "telemetry.read", fields: {} });
-      expect(result.status, result.detail).toBe("succeeded");
-      expect(result.result?.fields.sdkAvailability).toEqual({ kind: "string", value: "READY" });
-      expect(host.relay.latestTelemetry(device.deviceId)?.payload.fields.aircraft).toEqual({
+       const result = await host.relay.sendCommand(device.deviceId, { name: "telemetry.read", fields: {} });
+       expect(result.status, result.detail).toBe("succeeded");
+       expect(result.result?.fields.sdkAvailability).toEqual({ kind: "string", value: "READY" });
+       await waitUntil(() => host.relay.latestTelemetry(device.deviceId)?.payload.fields.aircraft !== undefined);
+       expect(host.relay.latestTelemetry(device.deviceId)?.payload.fields.aircraft).toEqual({
         kind: "string",
         value: "CONNECTED",
       });

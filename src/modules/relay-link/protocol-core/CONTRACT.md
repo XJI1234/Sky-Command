@@ -13,7 +13,7 @@ RelayFrameCodec.encode(frame: RelayFrame): ProtocolResult<Uint8Array>;
 RelayFrameCodec.decode(bytes: Uint8Array): DecodeResult;
 ```
 
-公开冻结帧模型与 Android 协议一致：`hello`、`paired`、`telemetry`、`command`、`command-result`、`mission-begin`、`mission-chunk`、`mission-complete`、`mission-result`。`JsonNumber` 保留数字文本，避免转发遥测或命令字段时丢失精度。未知但结构良好的 `type` 返回 `Ignored`，不是错误；错误只含稳定代码和安全消息，不回显输入。
+公开冻结帧模型与 Android 协议一致：`hello`、`paired`、`telemetry`、`command`、`command-result`、`mission-begin`、`mission-chunk`、`mission-complete`、`mission-result`、`mission-phase`、`diagnostic-report`、`diagnostic-ack`、`media-begin`、`media-chunk`、`media-complete`、`media-result`。媒体文件名必须是安全图片基名（`.jpg` / `.jpeg` / `.dng`），大小和分块上限与任务文件相同。`JsonNumber` 保留数字文本，避免转发遥测或命令字段时丢失精度。未知但结构良好的 `type` 返回 `Ignored`，不是错误；错误只含稳定代码和安全消息，不回显输入。媒体四帧在编解码落地前，旧实现必须继续 `Ignored`，不得断开。
 
 `validateJsonObject` 是嵌入式结构化数据的唯一公开验证入口。它接受 `unknown`，仅在值是符合本模块 JSON 限制的 `kind: "object"` 时返回深拷贝且冻结的 `JsonObject`；标量和数组返回 `INVALID_FIELD`，畸形、超限或不可读取数据返回相应协议错误。它不读取、生成或要求任何中继帧字段。
 
@@ -21,7 +21,7 @@ RelayFrameCodec.decode(bytes: Uint8Array): DecodeResult;
 
 帧为紧凑 JSON、严格 UTF-8，字段名/顺序与 Kotlin 编解码器兼容。任务块采用有填充且无空白的标准 Base64，解码字节必须复制。
 
-协议版本为 `"1"`；最大帧 96 KiB，嵌套 32 层，令牌 8192，数字长度 128，JSON 字符串 65,536 码点，字段名/ID 128，类型 64，命令名 64，文件名 128，结果详情 1024，任务 1..100 MiB，任务块 1..48 KiB，SHA-256 为 64 位小写十六进制。ID 不得为空或含控制符；KMZ 文件名不得含路径穿越、斜杠或控制符；命令字段必须是对象且不得含保留 `name`；遥测字段必须是 JSON 对象。
+协议版本为 `"1"`；最大帧 512 KiB，嵌套 32 层，令牌 8192，数字长度 128，JSON 字符串 349,528 码点，字段名/ID 128，类型 64，命令名 64，文件名 128，结果详情 1024，任务 1..100 MiB，任务块 1..256 KiB，SHA-256 为 64 位小写十六进制。ID 不得为空或含控制符；KMZ 文件名不得含路径穿越、斜杠或控制符；命令字段必须是对象且不得含保留 `name`；遥测字段必须是 JSON 对象。
 
 ## 失败与验证
 

@@ -32,10 +32,64 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(launch()).not.toContain("discoverFfmpegCandidates");
   });
 
+  it("及时性优先：timeupdate 发现明显积压才跳一次，跳转中和冷却期内不得再 seek", () => {
+    const source = renderer();
+    const chase = source.slice(source.indexOf("const chaseLiveEdge"), source.indexOf("const scheduleFlvReattach"));
+    const start = source.slice(source.indexOf("const startPlaybackWatch"), source.indexOf("const stopPlaybackWatch"));
+    const bind = source.slice(source.indexOf("const bindVideoPlayEvents"), source.indexOf("const unbindVideoPlayEvents"));
+    const unbind = source.slice(source.indexOf("const unbindVideoPlayEvents"), source.indexOf("const detachVideo"));
+    const stall = source.slice(source.indexOf("const watchPlaybackStall"), source.indexOf("const reportPlaybackHealth"));
+    const attach = source.slice(source.indexOf("const attachVideo"), source.indexOf("const accepted"));
+    const maxLag = Number(/LIVE_EDGE_MAX_LAG_S = ([0-9.]+)/.exec(source)?.[1]);
+    const keep = Number(/LIVE_EDGE_KEEP_S = ([0-9.]+)/.exec(source)?.[1]);
+    const watchMs = Number(/PLAYBACK_WATCH_MS = ([0-9]+)/.exec(source)?.[1]);
+    const cooldown = Number(/LIVE_EDGE_SEEK_COOLDOWN_MS = ([0-9]+)/.exec(source)?.[1]);
+    const maxBackward = Number(/LIVE_BACKWARD_MAX_S = ([0-9.]+)/.exec(source)?.[1]);
+    const minBackward = Number(/LIVE_BACKWARD_KEEP_S = ([0-9.]+)/.exec(source)?.[1]);
+
+    expect(maxLag).toBeGreaterThanOrEqual(1);
+    expect(maxLag).toBeLessThanOrEqual(2);
+    expect(keep).toBeGreaterThanOrEqual(0);
+    expect(keep).toBeLessThanOrEqual(0.15);
+    expect(watchMs).toBeGreaterThanOrEqual(1_000);
+    expect(watchMs).toBeLessThanOrEqual(2_000);
+    expect(cooldown).toBeGreaterThanOrEqual(1_000);
+    expect(maxBackward).toBeGreaterThanOrEqual(3);
+    expect(minBackward).toBeGreaterThanOrEqual(1);
+    expect(chase).toContain("LIVE_EDGE_MAX_LAG_S");
+    expect(chase).toContain("video.seeking");
+    expect(chase).toContain("LIVE_EDGE_SEEK_COOLDOWN_MS");
+    expect(start).toContain("PLAYBACK_WATCH_MS");
+    expect(start).not.toContain("chaseLiveEdge");
+    expect(stall).not.toContain("chaseLiveEdge");
+    expect(bind).toContain("timeupdate");
+    expect(bind).toContain("chaseLiveEdge");
+    expect(unbind).toContain("timeupdate");
+    expect(attach).toContain("autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S");
+    expect(attach).toContain("autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S");
+  });
+
+  it("附着期间周期性追直播前沿，卸载时停掉看门狗", () => {
+    const source = renderer();
+    const start = source.slice(source.indexOf("const startPlaybackWatch"), source.indexOf("const stopPlaybackWatch"));
+    const stop = source.slice(source.indexOf("const stopPlaybackWatch"), source.indexOf("const chaseLiveEdge"));
+    const detach = source.slice(source.indexOf("const detachVideo"), source.indexOf("const playVideo"));
+    const attach = source.slice(source.indexOf("const attachVideo"), source.indexOf("const accepted"));
+
+    expect(start).toContain("setInterval");
+    expect(start).toContain("watchPlaybackStall");
+    expect(stop).toContain("clearInterval");
+    expect(detach).toContain("stopPlaybackWatch");
+    expect(attach).toContain("startPlaybackWatch");
+  });
+
   it("飞行页用 flv.js 在本页播放，并对未出画/画面停住做看门狗恢复", () => {
     const source = renderer();
     const page = html();
-    expect(source).toContain("flvjs");
+    expect(source).toContain("mpegts");
+    expect(source).toContain("mpegts.createPlayer");
+    const noFrame = Number(/NO_FRAME_MS = ([0-9_]+)/.exec(source)?.[1]?.replaceAll("_", ""));
+    expect(noFrame).toBeGreaterThanOrEqual(20_000);
     expect(source).toContain("hasAudio: false");
     expect(source).toContain("hasVideo: true");
     expect(source).toContain("enableStashBuffer: false");
@@ -46,6 +100,8 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).toContain("scheduleFlvReattach");
     expect(source).toContain("watchPlaybackStall");
     expect(source).toContain("recoverStuckFlv");
+    expect(source).not.toContain("photoHandoff");
+    expect(source).not.toContain("画面暂停");
     expect(source).toContain("NO_FRAME_MS");
     expect(source).toContain("STALL_MS");
     expect(source).toContain("video-playback");
@@ -71,8 +127,11 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     const source = mediaPorts();
 
     expect(source).toContain("MAX_FLV_PENDING_BYTES");
+    const pendingMatch = /MAX_FLV_PENDING_BYTES = ([0-9_]+)/.exec(source);
+    expect(Number(pendingMatch?.[1]?.replaceAll("_", ""))).toBeGreaterThanOrEqual(8 * 1024 * 1024);
     expect(source).toContain("res.writableLength");
     expect(source).toContain("skipUntilKeyframe");
+    expect(source).toContain("deliveredSync");
     expect(source).toContain("isAvcSyncTag");
     expect(source).toContain("http-flv-client-backpressure");
     expect(source).not.toContain("res.destroy()");
@@ -91,5 +150,30 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).toContain("mediaContext.publishers.has");
     expect(source).toContain("HTTP-FLV source is unavailable");
     expect(source).toContain("res.writeHead(404");
+  });
+
+  it("FULL_HD HEVC 在交给页面播放器前转成 H.264，AVC 直出不得再进 ffmpeg", () => {
+    const source = mediaPorts();
+    const filter = source.slice(source.indexOf("function filterSeiOnlyWrites"), source.indexOf("function createRtmpPort"));
+    expect(source).toContain("libx264");
+    expect(source).toContain("http-flv-hevc-transcode");
+    expect(source).toContain("pipe:0");
+    expect(source).toContain("pipe:1");
+    expect(source).toContain("http-flv-first-video-tag");
+    expect(source).toContain("hev1");
+    expect(source).toContain("http-flv-publisher-error");
+    expect(source).toContain("rtmp-video-error");
+    expect(source).toMatch(/payload\[0\]\s*&\s*0x0f/);
+    expect(source).not.toContain("if (!decided)");
+    expect(filter).not.toMatch(/let transcode = startHevcTranscode/);
+    expect(filter).toContain('route = "avc"');
+    expect(filter).toContain('route = "hevc"');
+    expect(filter).toContain("startHevcTranscode(write, onLog)");
+  });
+
+  it("无法按 AVC NAL 切开的大视频包仍送给播放器，只丢掉小的 SEI-only 包", () => {
+    const source = mediaPorts();
+    const keep = source.slice(source.indexOf("function keepAvcVideoTag"), source.indexOf("function deviceIdFromFlvPath"));
+    expect(keep).toContain("payload.length > 64");
   });
 });

@@ -1,3 +1,5 @@
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { RelayDeviceSettings } from "../../adapters/relay-device-settings/index.js";
 import { DeviceConsole } from "../../modules/device-console/index.js";
 import { FlightControl, FlightCommandDispatcher, type FlightControlOptions } from "../../modules/flight-control/index.js";
@@ -7,6 +9,7 @@ import { MissionControl } from "../../modules/mission-control/index.js";
 import type { MissionDispatcherOptions } from "../../modules/mission-control/mission-dispatcher/index.js";
 import { NetworkSettings, type NetworkSettingsValue } from "../../modules/desktop-settings/network-settings/index.js";
 import { RouteLibrary, type RouteLibraryCreateOptions } from "../../modules/route-library/index.js";
+import { CameraPhotoControl, type CameraPhotoControlInstance } from "../../modules/camera-photo-control/index.js";
 import type { JsonObject, JsonValue } from "../../modules/relay-link/protocol-core/index.js";
 import { DesktopRuntime, type DesktopRuntimeCode, type DesktopRuntimeInstance } from "../desktop-runtime/index.js";
 import { NodeRuntime, type NodeRelayOptions } from "../node-runtime/index.js";
@@ -33,6 +36,7 @@ export interface DesktopApplicationOptions {
     readonly legacyMediaAvailable: boolean;
   }>;
   readonly now: () => number;
+  readonly photos?: Readonly<{ readonly directory: string }>;
 }
 
 export interface DesktopApplicationSnapshot {
@@ -119,7 +123,8 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
       && validFunction(source.now)
       && validFunction(record(source.mission)?.createMissionId)
       && validFunction(record(source.flight)?.now)
-      && record(record(source.flight)?.confirmation) !== null;
+      && record(record(source.flight)?.confirmation) !== null
+      && (source.photos === undefined || (record(source.photos) !== null && typeof record(source.photos)?.directory === "string"));
   } catch {
     return false;
   }
@@ -127,6 +132,23 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
 const result = (ok: boolean, value: DesktopApplicationSnapshot, code?: DesktopApplicationCode): DesktopApplicationResult => ok
   ? freeze({ ok: true as const, value })
   : freeze({ ok: false as const, code: code!, value });
+const photoDirectoryFs = (directory: string) => freeze({
+  writeAtomic: (deviceId: string, fileName: string, bytes: Uint8Array): boolean => {
+    if (deviceId.includes("..") || fileName.includes("..") || /[\\/]/u.test(fileName)) return false;
+    const folder = join(directory, deviceId);
+    const destination = join(folder, fileName);
+    const temporary = `${destination}.tmp`;
+    try {
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(temporary, bytes);
+      renameSync(temporary, destination);
+      return true;
+    } catch {
+      try { unlinkSync(temporary); } catch { /* leftover temp files must not fail the transfer */ }
+      return false;
+    }
+  }
+});
 
 function create(raw: unknown): DesktopApplicationCreateResult {
   if (!isOptions(raw)) return freeze({ ok: false as const, code: "INVALID_CONFIGURATION" as const });
@@ -136,9 +158,19 @@ function create(raw: unknown): DesktopApplicationCreateResult {
   try {
     const routeCreated = RouteLibrary.create(options.routeLibrary);
     if (!routeCreated.ok) return freeze({ ok: false as const, code: "INVALID_CONFIGURATION" as const });
+    const photoHolder: { control: CameraPhotoControlInstance | null } = { control: null };
     const relay = NodeRuntime.createRelay({
       ...options.relay,
       address: freeze({ host: options.relay.address.host, port: network.value.relayPort }),
+      onPhoto: (deviceId, file) => {
+        const control = photoHolder.control;
+        if (control === null) return false;
+        let accepted: string;
+        try { accepted = control.inbox.accept(deviceId, file); } catch { return false; }
+        if (accepted !== "accepted" && accepted !== "duplicate") return false;
+        try { control.recordStored(deviceId, file.fileName, file.sha256); } catch { /* the inbox already owns the file */ }
+        return true;
+      },
     });
     const operations = RelayOperationsAdapter.create({ relay });
     const settingsGateway = operations.settingsGateway();
@@ -174,6 +206,12 @@ function create(raw: unknown): DesktopApplicationCreateResult {
         preflight: { evaluateFlightAction: (input) => MissionControl.PreflightCheck.evaluateFlightAction(input as never) },
       })
     }, options.flight);
+    const photos = CameraPhotoControl.create({
+      relay: operations.photoGateway(),
+      now: options.now,
+      ...(options.photos === undefined ? {} : { fs: photoDirectoryFs(options.photos.directory) }),
+    });
+    photoHolder.control = photos;
     const runtime = DesktopRuntime.create({
       relay: freeze({
         start: relay.start,
@@ -195,6 +233,12 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       mediaPipeline,
       flightControl,
       deviceSettings,
+      photoControl: freeze({
+        capture: (deviceId: string) => photos.capture(deviceId),
+        fetch: (deviceId: string) => photos.fetch(deviceId),
+        recordDisconnected: (deviceId: string) => photos.recordDisconnected(deviceId),
+        subscribe: (listener: (snapshot: unknown) => void) => photos.subscribe((snapshot) => listener(snapshot)),
+      }),
       hardwareReadiness: options.hardwareReadiness,
       now: options.now,
     });

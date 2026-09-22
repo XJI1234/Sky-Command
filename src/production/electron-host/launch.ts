@@ -74,7 +74,8 @@ const lanCards = (): readonly { readonly name: string; readonly enabled: true; r
 
 async function launch(): Promise<void> {
   delete process.env.NODE_OPTIONS;
-  const { httpFlvRoot, logPath } = runtimeDataPaths(app.getPath("userData"));
+  app.setName("Sky Command");
+  const { httpFlvRoot, logPath, photosRoot } = runtimeDataPaths(app.getPath("userData"));
   const launchLog = (message: string): void => log(logPath, message);
   launchLog("launch begin");
   const journal = IncidentJournal.create();
@@ -93,7 +94,6 @@ async function launch(): Promise<void> {
   const relayHint = `ws://${preferred.ipv4}:${relayPort}/relay`;
   let nextConfirmationId = 0;
   journal.record({ link: "phone-pc", level: "INFO", event: "RELAY_HINT", detail: `relay ${relayHint}` });
-  app.setName("Sky Command");
   // 飞行页只装配已验证的 RTMP→HTTP-FLV 图传路径。
   const mediaPorts = createMediaPorts(mediaLogger(journal));
   let window: BrowserWindow | null = null;
@@ -126,6 +126,7 @@ async function launch(): Promise<void> {
     mission: { createMissionId: (deviceId: string, routeId: string) => `mission-${deviceId}-${routeId}` },
     flight: { now: () => Date.now(), confirmation: { ttlMs: 15_000, createConfirmationId: () => `confirm-${++nextConfirmationId}` } },
     hardwareReadiness: { lanAddressAvailable: true, legacyMediaAvailable: true },
+    photos: { directory: photosRoot },
     now: () => Date.now(),
   });
   if (!created.ok) throw new Error("桌面应用配置无效");

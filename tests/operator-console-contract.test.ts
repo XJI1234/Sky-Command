@@ -64,10 +64,19 @@ describe("操作台投影", () => {
     const source = renderer();
 
     expect(source).toContain("const scheduleVideoPlay");
-    expect(source).toContain("flvjs.Events.MEDIA_INFO");
+    expect(source).toContain("mpegts.Events.MEDIA_INFO");
     expect(source).toContain('["loadedmetadata", "loadeddata", "canplay", "playing"]');
     expect(source).toContain("video.addEventListener(event, onReady)");
     expect(source).toContain("scheduleVideoPlay(video)");
+  });
+
+  it("图传播放器必须把 mpegts 的 MEDIA_INFO 和 ERROR 细节显示出来，不能吞掉解码失败", () => {
+    const source = renderer();
+    const attach = source.slice(source.indexOf("const attachVideo"), source.indexOf("const accepted"));
+    expect(attach).toContain("mpegts.Events.MEDIA_INFO");
+    expect(attach).toContain("mpegts.Events.ERROR");
+    expect(attach).toMatch(/Events\.ERROR,\s*\((type|errorType|_type)/);
+    expect(attach).toContain("show(");
   });
 
   it("起飞请求保留确认意图并复用已读取快照，刷新失败时仍能展示确认框", () => {
@@ -832,6 +841,32 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("stream-start", noAircraft)).toEqual({ ok: true });
   });
 
+  it("拍照和回传照片走图传手机，要求 MSDK 和主相机，不要求 AirLink", () => {
+    const view = OperatorConsole.project({
+      snapshot: snapshot([device()]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("photo-capture", view)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("photo-fetch", view)).toEqual({ ok: true });
+
+    const noAirLink = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, airLink: "disconnected" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("photo-capture", noAirLink)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("stream-start", noAirLink)).toEqual({ ok: false, reason: "AirLink 未连接，无法启动图传" });
+
+    const noCamera = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, camera: "disconnected" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("photo-capture", noCamera)).toEqual({ ok: false, reason: "主相机未连接，无法拍照" });
+    expect(OperatorConsole.evaluate("photo-fetch", noCamera)).toEqual({ ok: false, reason: "主相机未连接，无法拍照" });
+  });
+
   it("封存低延迟图传后，生产图传不受归档状态影响", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
@@ -1049,6 +1084,22 @@ describe("航线操作台渲染契约", () => {
     expect(pageSource).not.toMatch(/\.flight-panel-actions\s*\{[^}]*overflow-y:\s*auto;/);
   });
 
+  it("拍照和回传照片单独成行，紧跟在图传启停下面", () => {
+    const stream = page().slice(page().indexOf('id="flight-panel-stream"'), page().indexOf('id="flight-panel-mission"'));
+    const photoRowAt = stream.indexOf('class="row photo-controls"');
+    expect(photoRowAt).toBeGreaterThan(-1);
+    const streamRow = stream.slice(0, photoRowAt);
+    const photoRow = stream.slice(photoRowAt);
+    expect(streamRow).toContain('data-action="stream-start"');
+    expect(streamRow).toContain('data-action="stream-stop"');
+    expect(streamRow).not.toContain('data-action="photo-capture"');
+    expect(streamRow).not.toContain('data-action="photo-fetch"');
+    expect(photoRow).toContain('data-action="photo-capture"');
+    expect(photoRow).toContain('data-action="photo-fetch"');
+    expect(photoRow.indexOf("photo-capture")).toBeLessThan(photoRow.indexOf("photo-fetch"));
+    expect(photoRow).not.toContain('data-action="stream-start"');
+  });
+
   it("图传和起飞按钮跟在预留的现在行后面，不跟设备页 Key 清单", () => {
     const pageSource = page();
     const flight = pageSource.slice(pageSource.indexOf('id="workspace-flight"'));
@@ -1120,7 +1171,7 @@ describe("航线操作台渲染契约", () => {
     const pageSource = page();
     for (const action of [
       "mission-stage", "mission-upload", "mission-start", "mission-pause", "mission-resume", "mission-stop",
-      "stream-start", "stream-stop",
+      "stream-start", "stream-stop", "photo-capture", "photo-fetch",
       "flight-takeoff", "flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing",
     ]) {
       expect(pageSource).toContain(`data-operation-feedback="${action}"`);

@@ -19,6 +19,10 @@ const validFrames: readonly RelayFrame[] = Object.freeze([
   { type: "mission-phase", missionRevision: 1, deviceGeneration: 0, sequence: 1, phase: "START_POINT_REACHED", fileName: "route.kmz" },
   { type: "diagnostic-report", runId: "run-1", events: [{ sequence: 1, timestampMillis: 0, level: "INFO", module: "relay", eventCode: "READY", operationId: null, safeDetail: "ready" }] },
   { type: "diagnostic-ack", runId: "run-1", acknowledgedSequence: 1 },
+  { type: "media-begin", id: "photo-1", fileName: "shot.jpg", size: 1, sha256: "a".repeat(64) },
+  { type: "media-chunk", id: "photo-1", data: new Uint8Array([1]) },
+  { type: "media-complete", id: "photo-1" },
+  { type: "media-result", id: "photo-1", ok: true, detail: "stored" },
 ]);
 
 describe("跨运行时协议原子验证", () => {
@@ -33,7 +37,8 @@ describe("跨运行时协议原子验证", () => {
       if (decoded.kind === "decoded") observed.add(decoded.frame.type);
     }
     expect([...observed].sort()).toEqual([
-      "command", "command-result", "diagnostic-ack", "diagnostic-report", "hello", "mission-begin",
+      "command", "command-result", "diagnostic-ack", "diagnostic-report", "hello", "media-begin",
+      "media-chunk", "media-complete", "media-result", "mission-begin",
       "mission-chunk", "mission-complete", "mission-phase", "mission-result", "paired", "telemetry",
     ]);
   });

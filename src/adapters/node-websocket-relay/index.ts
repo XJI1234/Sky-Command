@@ -46,7 +46,7 @@ const productionFactory: WebSocketServerFactory = Object.freeze({
   create: (address: ListenAddress) => new WebSocketServer({ host: address.host, port: address.port, path: "/relay" })
 });
 
-const stableReason = (reason: string): string => reason === "server-closed" || reason === "transport-error" ? reason : "peer-closed";
+const stableReason = (reason: string): string => reason === "server-closed" || reason === "transport-error" || reason === "keepalive-timeout" ? reason : "peer-closed";
 const copyBytes = (data: unknown): Uint8Array | null => {
   if (data instanceof Uint8Array) return data.slice();
   if (data instanceof ArrayBuffer) return new Uint8Array(data.slice(0));
@@ -168,7 +168,7 @@ function adapt(socket: WebSocketLike, openState: number, localAddress: string | 
   if (ping.intervalMs > 0 && typeof socket.ping === "function") {
     pingTimer = ping.scheduler.setInterval(() => {
       if (closed) return;
-      if (awaitingPong !== null) { connection.shutdown("peer-closed"); return; }
+      if (awaitingPong !== null) { connection.shutdown("keepalive-timeout"); return; }
       const payload = nextPingPayload(0x4b);
       awaitingPong = payload;
       try { socket.ping!(payload.slice()); } catch { connection.shutdown("transport-error"); }

@@ -43,6 +43,24 @@ function create(dependencies: OperationWorkflowDependencies) {
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
   const connectionEpochs = new Map<string, number>();
+  const reconnectGrace = new Map<string, () => void>();
+  const cancelReconnectGrace = (deviceId: string): void => {
+    const cancel = reconnectGrace.get(deviceId);
+    if (cancel === undefined) return;
+    reconnectGrace.delete(deviceId);
+    try { cancel(); } catch { /* timer teardown cannot revive receipts */ }
+  };
+  const armReconnectGrace = (deviceId: string): void => {
+    if (reconnectGrace.has(deviceId)) return;
+    const handle = setTimeout(() => {
+      reconnectGrace.delete(deviceId);
+      if (disposed || online(deviceId)) return;
+      connectionEpochs.set(deviceId, (connectionEpochs.get(deviceId) ?? 0) + 1);
+      assignments.removeDevice(deviceId);
+      publish();
+    }, 15_000);
+    reconnectGrace.set(deviceId, () => clearTimeout(handle));
+  };
   const online = (deviceId: string): boolean => {
     try {
       const values = dependencies.relayOperations.devices();
@@ -108,30 +126,42 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (selectedVideoDeviceId === deviceId) selectedVideoDeviceId = null;
     }
   };
+  let handlingDisconnects = false;
   const onDisconnects = (): void => {
-    const current = new Set(onlineIds());
-    const sessions = sessionMap();
-    for (const deviceId of previousOnline) {
-      const gone = !current.has(deviceId);
-      const previousSession = previousSessions.get(deviceId);
-      const nextSession = sessions.get(deviceId);
-      const replaced = !gone && previousSession !== undefined && nextSession !== undefined && previousSession !== nextSession;
-      if (!gone && !replaced) continue;
-      connectionEpochs.set(deviceId, (connectionEpochs.get(deviceId) ?? 0) + 1);
-      // 设备消失或会话替换：危险确认与图传车道都必须作废，避免重连后点到旧确认。
-      clearFlightConfirm(deviceId);
-      landingIntents.delete(deviceId);
-      if (gone) {
-        assignments.removeDevice(deviceId);
+    if (handlingDisconnects) return;
+    handlingDisconnects = true;
+    try {
+      const current = new Set(onlineIds());
+      const sessions = sessionMap();
+      for (const deviceId of current) cancelReconnectGrace(deviceId);
+      for (const deviceId of previousOnline) {
+        const gone = !current.has(deviceId);
+        const previousSession = previousSessions.get(deviceId);
+        const nextSession = sessions.get(deviceId);
+        const replaced = !gone && previousSession !== undefined && nextSession !== undefined && previousSession !== nextSession;
+        if (!gone && !replaced) continue;
+        // 闪断或换会话：作废未点的危险确认和图传，但不拆掉已在执行的航线回执。
+        clearFlightConfirm(deviceId);
+        landingIntents.delete(deviceId);
+        forgetVideo(deviceId);
+        try { dependencies.photoControl?.recordDisconnected(deviceId); } catch { /* photo identity survives until SDK invalidation on the phone */ }
+        if (gone) armReconnectGrace(deviceId);
       }
-      forgetVideo(deviceId);
+      synchronizeVideoSources(current);
+      previousOnline = current;
+      previousSessions = sessions;
+      publish();
+    } finally {
+      handlingDisconnects = false;
     }
-    synchronizeVideoSources(current);
-    previousOnline = current;
-    previousSessions = sessions;
-    publish();
   };
-  const subscriptions = WorkflowSubscriptions.create([dependencies.relayOperations, dependencies.missionControl, dependencies.liveStreamControl, dependencies.flightControl], onDisconnects);
+  const subscriptions = WorkflowSubscriptions.create([
+    dependencies.relayOperations,
+    dependencies.missionControl,
+    dependencies.liveStreamControl,
+    dependencies.flightControl,
+    ...(dependencies.photoControl === undefined ? [] : [dependencies.photoControl]),
+  ], onDisconnects);
   const mission = async (method: "stage" | "upload" | "start" | "pause" | "resume" | "stop", deviceId: string): Promise<WorkflowResult> => {
     if (disposed) return failure("DISPOSED");
     const operation = () => method === "stage" ? actions.stage(deviceId) : actions.mission(method, deviceId);
@@ -273,6 +303,28 @@ function create(dependencies: OperationWorkflowDependencies) {
     writeTransmissionSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.writeTransmission(deviceId, patch)),
     readCameraSettings: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.readCamera(deviceId)),
     writeCameraSettings: (deviceId: string, patch: unknown) => disposed ? Promise.resolve(failure("DISPOSED")) : published(() => actions.writeCamera(deviceId, patch)),
+    capturePhoto: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
+      if (!validId(deviceId)) return failure("INVALID_INPUT");
+      if (!online(deviceId)) return failure("DEVICE_OFFLINE");
+      const control = dependencies.photoControl;
+      if (control === undefined) return failure("DEPENDENCY_FAILURE");
+      try {
+        const result = await control.capture(deviceId);
+        const code = read(result, "code");
+        return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
+      } catch { return failure("DEPENDENCY_FAILURE"); }
+    }),
+    fetchPhoto: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
+      if (!validId(deviceId)) return failure("INVALID_INPUT");
+      if (!online(deviceId)) return failure("DEVICE_OFFLINE");
+      const control = dependencies.photoControl;
+      if (control === undefined) return failure("DEPENDENCY_FAILURE");
+      try {
+        const result = await control.fetch(deviceId);
+        const code = read(result, "code");
+        return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
+      } catch { return failure("DEPENDENCY_FAILURE"); }
+    }),
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
       const result = actions.requestFlight(deviceId, action);
@@ -307,7 +359,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; subscriptions.dispose(); listeners.clear(); pending.clear(); pendingFlightActions.clear(); landingIntents.clear(); unavailableVideoSources.clear(); connectionEpochs.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; for (const deviceId of [...reconnectGrace.keys()]) cancelReconnectGrace(deviceId); subscriptions.dispose(); listeners.clear(); pending.clear(); pendingFlightActions.clear(); landingIntents.clear(); unavailableVideoSources.clear(); connectionEpochs.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
   });
 }
 

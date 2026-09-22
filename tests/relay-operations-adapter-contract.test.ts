@@ -960,6 +960,27 @@ describe("RelayOperationsAdapter", () => {
     ]);
   });
 
+  it("把最近一次中继断开原因带到操作快照", () => {
+    let publish: ((snapshot: unknown) => void) | undefined;
+    const adapter = RelayOperationsAdapter.create({ relay: {
+      devices: () => [],
+      latestTelemetry: () => null,
+      sendMission: async () => ({ status: "rejected" }),
+      sendCommand: async () => ({ status: "rejected" }),
+      subscribe: (listener: (snapshot: unknown) => void) => {
+        publish = listener;
+        return () => undefined;
+      },
+    } });
+
+    publish?.({
+      devices: [],
+      lastDisconnect: { deviceId: "phone-1", reason: "keepalive-timeout" },
+    });
+
+    expect(adapter.snapshot().lastDisconnect).toEqual({ deviceId: "phone-1", reason: "keepalive-timeout" });
+  });
+
   it("将中继异常、超时、断连和畸形遥测收敛为稳定业务结果", async () => {
     const sent: string[] = [];
     let publish: ((snapshot: unknown) => void) | undefined;
@@ -1275,5 +1296,17 @@ describe("RelayOperationsAdapter", () => {
       sendCommand: async () => ({ status: "timed-out" }),
     } });
     expect(await timedOut.pairingGateway().sendCommand("relay-1", { name: "pairing.status", fields: {} })).toMatchObject({ status: "timeout", detail: "timed-out" });
+  });
+
+  it("只转发空字段拍照与回传命令", async () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+    expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.capture", fields: {} })).status).toBe("succeeded");
+    expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.fetch", fields: {} })).status).toBe("succeeded");
+    expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.fetch", fields: { extra: true } as never })).status).toBe("rejected");
+    expect(fixture.sent).toEqual([
+      { deviceId: "relay-1", request: { name: "camera.photo.capture", fields: {} } },
+      { deviceId: "relay-1", request: { name: "camera.photo.fetch", fields: {} } },
+    ]);
   });
 });

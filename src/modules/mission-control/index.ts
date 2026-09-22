@@ -14,6 +14,10 @@ export interface MissionControlDependencies {
   readonly routeSource: MissionDispatcherDependencies["routeSource"];
   readonly relay: MissionControlRelay;
 }
+export interface MissionControlOptions extends MissionDispatcherOptions {
+  readonly disconnectGraceMs?: number;
+  readonly schedule?: (delayMs: number, callback: () => void) => () => void;
+}
 export interface MissionControlInstance {
   readonly stage: (deviceId: string, routeId: string) => Promise<DispatchResult>;
   readonly upload: (deviceId: string) => Promise<DispatchResult>;
@@ -52,12 +56,36 @@ function subscribeSafely(relay: MissionControlRelay, listener: (snapshot: unknow
   }
 }
 
-function create(dependencies: MissionControlDependencies, options: MissionDispatcherOptions): MissionControlInstance {
+function create(dependencies: MissionControlDependencies, options: MissionControlOptions): MissionControlInstance {
   const dispatcher = MissionDispatcher.create({ routeSource: dependencies.routeSource, relay: dependencies.relay }, options);
   let disposed = false;
   let previousDevices: ReadonlySet<string> | null = null;
   const previousSessions = new Map<string, string>();
   const appliedPhases = new Map<string, Readonly<{ readonly deviceGeneration: number; readonly missionRevision: number; readonly sequence: number }>>();
+  const disconnectTimers = new Map<string, () => void>();
+  const graceMs = Number.isFinite(options.disconnectGraceMs) && (options.disconnectGraceMs as number) >= 0
+    ? Math.floor(options.disconnectGraceMs as number)
+    : 15_000;
+  const schedule = options.schedule ?? ((delayMs: number, callback: () => void): (() => void) => {
+    const handle = setTimeout(callback, delayMs);
+    return () => clearTimeout(handle);
+  });
+  const cancelDisconnectTimer = (deviceId: string): void => {
+    const cancel = disconnectTimers.get(deviceId);
+    if (cancel === undefined) return;
+    disconnectTimers.delete(deviceId);
+    try { cancel(); } catch { /* timer teardown cannot revive a mission */ }
+  };
+  const armDisconnectTimer = (deviceId: string): void => {
+    if (disconnectTimers.has(deviceId)) return;
+    const cancel = schedule(graceMs, () => {
+      disconnectTimers.delete(deviceId);
+      if (disposed) return;
+      appliedPhases.delete(deviceId);
+      dispatcher.recordDisconnected(deviceId);
+    });
+    disconnectTimers.set(deviceId, cancel);
+  };
   const validSessionId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
   const sessionsOf = (snapshot: unknown): Map<string, string> => {
     const sessions = new Map<string, string>();
@@ -87,12 +115,9 @@ function create(dependencies: MissionControlDependencies, options: MissionDispat
     if (currentDevices === null) return;
     const currentSessions = sessionsOf(snapshot);
     if (previousDevices !== null) {
+      for (const deviceId of currentDevices) cancelDisconnectTimer(deviceId);
       for (const deviceId of previousDevices) {
-        const sessionChanged = previousSessions.has(deviceId) && currentSessions.has(deviceId) && previousSessions.get(deviceId) !== currentSessions.get(deviceId);
-        if (!currentDevices.has(deviceId) || sessionChanged) {
-          appliedPhases.delete(deviceId);
-          dispatcher.recordDisconnected(deviceId);
-        }
+        if (!currentDevices.has(deviceId)) armDisconnectTimer(deviceId);
       }
     }
     previousDevices = currentDevices;
@@ -111,7 +136,11 @@ function create(dependencies: MissionControlDependencies, options: MissionDispat
   };
   const relaySubscription = subscribeSafely(dependencies.relay, receiveRelaySnapshot);
   return freeze({
-    stage: dispatcher.stage,
+    stage: async (deviceId, routeId) => {
+      const result = await dispatcher.stage(deviceId, routeId);
+      if (result.ok) appliedPhases.delete(deviceId);
+      return result;
+    },
     upload: dispatcher.upload,
     start: dispatcher.start,
     pause: dispatcher.pause,
@@ -124,6 +153,7 @@ function create(dependencies: MissionControlDependencies, options: MissionDispat
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      for (const deviceId of [...disconnectTimers.keys()]) cancelDisconnectTimer(deviceId);
       relaySubscription.dispose();
     }
   });

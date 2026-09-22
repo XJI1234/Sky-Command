@@ -296,19 +296,21 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 `operation-workflow` 必须订阅中继设备、任务、图传和飞控的既有订阅接口；媒体状态只由 `refreshMedia()` 从既有媒体快照读取。某在线设备从中继快照消失时，必须在同一次工作流更新中：
 
-1. 从 `devices` 移除该设备；
-2. 清除该设备的本地航线分配；
-3. 让 `mission-control` 保留其 `disconnected` 任务终态；
-4. 调用 `live-stream-control.recordDisconnected(deviceId)`；
-5. 用保存的确认 ID 取消该设备尚未确认的直接飞行动作；
-6. 不发送 `wayline.stop`、`live-stream.stop` 或任何飞控命令；
-7. 不自动重连、不自动重传、不自动恢复任务或图传。
+1. 从当前 `devices` 列表移除该设备；
+2. 立即调用 `live-stream-control.recordDisconnected(deviceId)`；
+3. 用保存的确认 ID 取消该设备尚未确认的直接飞行动作；
+4. 不发送 `wayline.stop`、`live-stream.stop` 或任何飞控命令；
+5. 不自动重连、不自动重传、不自动恢复图传。
 
-同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道；不得让旧确认对话框在新会话上继续可点。
+航线分配和 `connectionEpoch` 不在消失当下清除。等待约 15 秒后设备仍不在快照中，才移除分配、推进连接代次；`mission-control` 在同一宽限期后才把任务写成 `disconnected`。
+
+同一 `deviceId` 仍在线但 `sessionId` 已替换时，同样必须：取消尚未确认的直接飞行动作、复位图传车道；不得让旧确认对话框在新会话上继续可点。不得因此把航线任务写成 `disconnected`，也不得更换 `connectionEpoch`。
+
+设备从快照消失时立即复位图传并取消未确认飞控；航线分配和 `connectionEpoch` 等待约 15 秒。若同一 `deviceId` 在宽限期内重新出现，视为中继闪断：保留航线任务与按钮回执。宽限期结束仍离线才移除分配并推进连接代次。
+
+同 ID 的手机在宽限期结束后才重新出现时，旧任务若已 `disconnected` 不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。图传在闪断后始终需要操作者再次启动。
 
 设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示已知状态；它不是后端授权。图传启动、设备设置、航线上传、航线启动、暂停、恢复和停止分别只接受各自模块读取的当前同会话最小事实：图传还需 `capabilities.liveVideo`，任务还需合法阶段；其余设备安全条件由 DJI 回调裁决。直接飞行动作由 `flight-control` 的同一最小 Relay+MSDK 可达性检查统一裁决，不得被其它缺失或旧遥测阻断。
-
-同 ID 的新手机会话后续重新出现时被视为新在线设备：旧任务和旧图传都不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。
 
 所有依赖异常都必须收敛为稳定、可显示的工作流错误码；不得泄露原始异常、地址、端口、文件路径、令牌、会话标识或 DJI 文本。某一个订阅者抛出异常不得阻碍其它订阅者或破坏已提交状态。
 

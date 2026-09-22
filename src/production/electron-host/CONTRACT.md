@@ -1,6 +1,6 @@
 # Electron 宿主
 
-状态：窗口装配已接线；RTMP 19500 收流后由本机过滤 HTTP-FLV（18080）供飞行页 flv.js 播放。每次图传启动优先使用该手机 WebSocket 实际接入的桌面 IPv4；缺失时才取当前首选网卡，绝不复用启动时已失效的网卡地址。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。手机 DJI 操作超时为 30s，超时会回 `command-result`，操作台应在约 30s 看到失败；120s 只覆盖手机无应答或排队中的遗留 DJI 调用。图传收流等待 20s，推流开始后即可标记播放就绪。
+状态：窗口装配已接线；RTMP 19500 收流后由本机过滤 HTTP-FLV（18080）供飞行页 mpegts.js 播放。每次图传启动优先使用该手机 WebSocket 实际接入的桌面 IPv4；缺失时才取当前首选网卡，绝不复用启动时已失效的网卡地址。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。手机 DJI 操作超时为 30s，超时会回 `command-result`，操作台应在约 30s 看到失败；120s 只覆盖手机无应答或排队中的遗留 DJI 调用。图传收流等待 20s，推流开始后即可标记播放就绪。
 
 启动方式与 `MSDK-upgraded` 对齐：
 
@@ -12,13 +12,13 @@ npm run desktop
 
 `npm run build` 把主进程打进 `electron/main.mjs`，把操作台渲染器打进 `dist/renderer/`。桌面快捷方式必须启动 `scripts/launch-desktop.cmd`（仓库根目录下已构建的 Electron），不得打开安装目录里的 `Sky Command.exe`。不再用 `tsx` 直接执行源码。
 
-打包时 `appRoot` 可以是只读的 `resources/app.asar`，因此它只用于定位主进程、预加载脚本和渲染器资源。所有宿主运行时写入都必须在 `app.whenReady()` 后基于 `app.getPath("userData")` 解析：本机 HTTP-FLV 临时根目录是 `userData/tmp-http-flv`，启动日志是 `userData/tmp/desktop-launch.log`。不得在 `appRoot`、`projectRoot` 或 ASAR 内创建目录、写日志或写缓存。
+打包时 `appRoot` 可以是只读的 `resources/app.asar`，因此它只用于定位主进程、预加载脚本和渲染器资源。所有宿主运行时写入都必须在 `app.whenReady()` 后解析。本机 HTTP-FLV 临时根目录是 `userData/tmp-http-flv`，启动日志是 `userData/tmp/desktop-launch.log`。原图收件箱必须写在 `%LOCALAPPDATA%\Sky Command\photos\{deviceId}\`，与事故日志同一棵目录树，不得写到 unpackaged Electron 默认的 `%APPDATA%\Electron\photos`。不得在 `appRoot`、`projectRoot` 或 ASAR 内创建目录、写日志或写缓存。启动时必须先 `app.setName("Sky Command")` 再读取 `userData`。
 
 Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡，展示当前可填写的 `ws://<IPv4>:8080/relay`；手机已连接后，图传 RTMP 主机以该连接的实际本端 IPv4 为准。网卡切换只影响后续命令，不重启 `19500`、`18080` 或已发布流。渲染进程只通过 preload 白名单短名调用 `DesktopUiGateway`。其中 `device-link-measure` 只映射既有 WebSocket 的协议层 PING/PONG 往返测量，不发送 Relay 业务帧，不调用 DJI、图传、任务或飞行控制，也不写入工作流状态或控制门禁。
 
 宿主在构造 `DesktopApplication` 时必须注入 `hardwareReadiness`：已选首选私网 IPv4 表示 `lanAddressAvailable: true`；生产装配将 `legacyMediaAvailable` 固定为 `true`（经典图传走 node-media-server + HTTP-FLV，不再依赖本机 FFmpeg 可执行文件）。这些桌面事实只供工作流报告旧图传的本机接收条件；不得替代 Relay/MSDK 可达性门禁，不得作为 DJI 设备安全退出条件，不得停止既有图传，也不得阻止已存在飞控确认的停止/取消动作。手机中继连接经过的时间不能替代 MSDK Key 观察。
 
-事故日志写在 `%LOCALAPPDATA%\Sky Command\diagnostics\`：`incident.log` 给人读，`incident.ndjson` 给检索。同一目录的 `relay-events.ndjson` 仍是手机上报原件。日志按链路标记 `phone-pc`（配对/连接）、`uplink`（飞控/航线/设置命令）、`downlink`（图传 RTMP/HTTP-FLV 画面）、`phone`（手机上报），记录配对、命令结局（含 DJI `errorCode`/`errorDescription`）、手机任务执行状态、DJI 原始航线状态、图传画面，以及操作台拦住未发出的动作。不记录密钥、路径、RTMP URL 或原始异常。连接类事实（SDK/遥控/飞控/飞机/对频）须连续两次快照一致才落盘；`unknown` 不写 WARN，避免遥测闪断误判为多次断连。手机任务执行状态与 DJI 原始航线状态随快照立即落盘，不走连接去抖。
+事故日志写在 `%LOCALAPPDATA%\Sky Command\diagnostics\`：`incident.log` 给人读，`incident.ndjson` 给检索。同一目录的 `relay-events.ndjson` 仍是手机上报原件。日志按链路标记 `phone-pc`（配对/连接）、`uplink`（飞控/航线/设置命令）、`downlink`（图传 RTMP/HTTP-FLV 画面）、`phone`（手机上报），记录配对、命令结局（含 DJI `errorCode`/`errorDescription`）、手机任务执行状态、DJI 原始航线状态、图传画面，以及操作台拦住未发出的动作。`DEVICE_UNPAIRED` 必须带上中继关闭原因（如 `keepalive-timeout`、`inbound-overflow`、`session-replaced`、`peer-closed`），不得一律写成无原因的断开。不记录密钥、路径、RTMP URL 或原始异常。连接类事实（SDK/遥控/飞控/飞机/对频）须连续两次快照一致才落盘；`unknown` 不写 WARN，避免遥测闪断误判为多次断连。手机任务执行状态与 DJI 原始航线状态随快照立即落盘，不走连接去抖。
 
 `IncidentJournal` 是观察者，接口为 `record(record): void` 和 `flush(): Promise<void>`。`record` 只能做脱敏、格式化和有界内存入队，绝不得在 Electron 主进程同步创建目录或写入文件；单一后台写入器必须保持两份日志的记录顺序。最多保留 512 条等待当前写入器的记录，外加最多一份已摘出、正在异步写入的批次（批次至多 512 条），故任何时刻内存中的未落盘记录不超过 1024 条。容量压力优先丢弃等待队列中最早的低优先级 INFO；新的 INFO 在没有可替换项时被丢弃，新的 WARN/ERROR 必须保留，并在后续日志留下安全的丢失计数。诊断积压不得影响 IPC、WebSocket、媒体接收或 DJI 命令。宿主正常关闭必须按“外壳释放、应用对象图完全释放、`flush` 完成、进程退出”的顺序执行；任一前置释放失败也不得跳过后续应用释放、日志刷出和退出。手机上报原件的确认不依赖此观察日志，而只依赖 `node-diagnostic-store` 异步持久化成功。
 
@@ -26,7 +26,7 @@ Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡�
 
 ## 旧 RTMP 图传
 
-旧图传由 `node-media-server` 收手机 RTMP（`19500`，`gop_cache: true`），HTTP 口（`18080`）用官方 `NodeFlvSession` **直连发布会话播放器槽位**输出 HTTP-FLV：`http://127.0.0.1:18080/live/{deviceId}.flv`。禁止再对本机 `19500` 做 RTMP 回环拉流。写出路径只过滤无图像的 SEI-only AVC 包，不得因 TCP 背压丢弃普通视频帧。同一 `deviceId` 新附着须停止旧 `NodeFlvSession`。不得再切 HLS，也不得默认拉起 `ffplay`。操作台飞行页用 `flv.js`（`isLive`、关闭 stash buffer，并追直播前沿）播到本页 `<video>`。推流开始后即可标记播放就绪并附着画面；已附着但长时间未出画，或出画后 `currentTime` 停住，必须软恢复或重挂。停止推流时结束播放附着。
+旧图传由 `node-media-server` 收手机 RTMP（`19500`，`gop_cache: true`），HTTP 口（`18080`）用官方 `NodeFlvSession` **直连发布会话播放器槽位**输出 HTTP-FLV：`http://127.0.0.1:18080/live/{deviceId}.flv`。禁止再对本机 `19500` 做 RTMP 回环拉流。写出路径只过滤无图像的 SEI-only AVC 包，不得因 TCP 背压丢弃普通视频帧；无法按 AVC NAL 切开的大包必须仍送给播放器。同一 `deviceId` 新附着须停止旧 `NodeFlvSession`。不得再切 HLS，也不得默认拉起 `ffplay`。FULL_HD 若为 HEVC（FLV codec 12），写出给页面之前须用本机 `ffmpeg`/`libx264` 转成 H.264 HTTP-FLV：Electron Chromium 的 MSE 会对 `hvc1` 报支持却不出画。操作台飞行页用 `mpegts.js` 播转码后的 HTTP-FLV（`isLive`、关闭 stash buffer，并在附着期间用播放时钟追直播前沿）到本页 `<video>`。不得再用只认 H.264 且不转码的 `flv.js`。及时性优先于把积压播完，但不得用高频 seek 打断解码：`timeupdate` 时仅当落后缓冲末端超过约 1.5s 才跳到末端附近，跳转中及随后约 2s 冷却期内不得再 seek。MSE 已播过的旧缓冲保留约 3s。卡死看门狗独立、放慢；首次出画宽限约 25s，避免 1080p GOP 未到就拆掉唯一 HTTP-FLV 会话。GOP 关键帧送出前不得因 TCP 背压跳帧。
 
 HTTP-FLV 输出必须在**单个播放器连接**的 `ServerResponse.writableLength` 到达 `2 MiB` 时停止该 `NodeFlvSession` 并销毁该播放器 socket，释放已积压的媒体字节；这不是按帧降级或丢弃 P 帧。正常可排空的短暂 TCP 背压不改变视频内容。达到上限只终止那个 `deviceId` 的本地播放器会话，现有渲染器恢复机制负责重挂 HTTP-FLV；它不得停止 RTMP 发布者、共享服务、其他设备或手机端 DJI 推流。
 

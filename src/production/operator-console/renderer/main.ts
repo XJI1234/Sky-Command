@@ -1,4 +1,4 @@
-import flvjs from "flv.js";
+import mpegts from "mpegts.js";
 import { OperatorConsole } from "../index.js";
 import {
   ARM_HOLD_MS,
@@ -584,7 +584,7 @@ const operatorNotice = (value: unknown): string => {
   return code === null ? "已发送到手机" : "暂时无法完成，请稍后重试";
 };
 
-let flvPlayer: ReturnType<typeof flvjs.createPlayer> | null = null;
+let flvPlayer: ReturnType<typeof mpegts.createPlayer> | null = null;
 let attachedUrl: string | null = null;
 let flvFatalStreak = 0;
 let flvRecoverTimer: number | null = null;
@@ -599,11 +599,19 @@ let armedCommand: ArmedCommand | null = null;
 let armExpiryTimer: number | null = null;
 let videoPlayRetryTimer: number | null = null;
 let videoPlayEventsBoundTo: HTMLVideoElement | null = null;
+let playbackWatchTimer: number | null = null;
+let lastLiveEdgeSeekAtMs = 0;
 const phoneLinkProbes = new Map<string, PhoneLinkProbeCacheEntry>();
 let phoneLinkProbeInFlightDeviceId: string | null = null;
 
-const NO_FRAME_MS = 8_000;
+const NO_FRAME_MS = 25_000;
 const STALL_MS = 12_000;
+const LIVE_EDGE_MAX_LAG_S = 1.5;
+const LIVE_EDGE_KEEP_S = 0.1;
+const PLAYBACK_WATCH_MS = 2000;
+const LIVE_EDGE_SEEK_COOLDOWN_MS = 2000;
+const LIVE_BACKWARD_MAX_S = 8;
+const LIVE_BACKWARD_KEEP_S = 3;
 
 const clearFlvRecoverTimer = (): void => {
   if (flvRecoverTimer === null) return;
@@ -633,27 +641,41 @@ const scheduleVideoPlay = (video: HTMLVideoElement): void => {
   }, 0);
 };
 
+type VideoPlayHooks = HTMLVideoElement & {
+  __skyCommandPlayReady?: () => void;
+  __skyCommandLiveEdge?: () => void;
+};
+
 const bindVideoPlayEvents = (video: HTMLVideoElement): void => {
   if (videoPlayEventsBoundTo === video) return;
+  const hooked = video as VideoPlayHooks;
   const onReady = (): void => { scheduleVideoPlay(video); };
+  const onLiveEdge = (): void => { chaseLiveEdge(video); };
   for (const event of ["loadedmetadata", "loadeddata", "canplay", "playing"] as const) {
     video.addEventListener(event, onReady);
   }
+  video.addEventListener("timeupdate", onLiveEdge);
   videoPlayEventsBoundTo = video;
-  (video as HTMLVideoElement & { __skyCommandPlayReady?: () => void }).__skyCommandPlayReady = onReady;
+  hooked.__skyCommandPlayReady = onReady;
+  hooked.__skyCommandLiveEdge = onLiveEdge;
 };
 
 const unbindVideoPlayEvents = (video: HTMLVideoElement): void => {
-  const onReady = (video as HTMLVideoElement & { __skyCommandPlayReady?: () => void }).__skyCommandPlayReady;
-  if (onReady === undefined) return;
+  const hooked = video as VideoPlayHooks;
+  const onReady = hooked.__skyCommandPlayReady;
+  const onLiveEdge = hooked.__skyCommandLiveEdge;
+  if (onReady === undefined && onLiveEdge === undefined) return;
   for (const event of ["loadedmetadata", "loadeddata", "canplay", "playing"] as const) {
-    video.removeEventListener(event, onReady);
+    if (onReady !== undefined) video.removeEventListener(event, onReady);
   }
-  delete (video as HTMLVideoElement & { __skyCommandPlayReady?: () => void }).__skyCommandPlayReady;
+  if (onLiveEdge !== undefined) video.removeEventListener("timeupdate", onLiveEdge);
+  delete hooked.__skyCommandPlayReady;
+  delete hooked.__skyCommandLiveEdge;
   if (videoPlayEventsBoundTo === video) videoPlayEventsBoundTo = null;
 };
 
 const detachVideo = (): void => {
+  stopPlaybackWatch();
   clearFlvRecoverTimer();
   clearVideoPlayRetry();
   const video = el("video") as HTMLVideoElement;
@@ -670,6 +692,7 @@ const detachVideo = (): void => {
   attachedAtMs = 0;
   lastPaintAtMs = 0;
   lastSeenCurrentTime = 0;
+  lastLiveEdgeSeekAtMs = 0;
   selectedPlaybackDeviceId = null;
   video.removeAttribute("src");
   video.srcObject = null;
@@ -698,15 +721,31 @@ const softReloadFlv = (video: HTMLVideoElement): boolean => {
   }
 };
 
+const startPlaybackWatch = (video: HTMLVideoElement): void => {
+  stopPlaybackWatch();
+  playbackWatchTimer = window.setInterval(() => {
+    watchPlaybackStall(video);
+  }, PLAYBACK_WATCH_MS);
+};
+
+const stopPlaybackWatch = (): void => {
+  if (playbackWatchTimer === null) return;
+  window.clearInterval(playbackWatchTimer);
+  playbackWatchTimer = null;
+};
+
 const chaseLiveEdge = (video: HTMLVideoElement): void => {
-  if (flvPlayer === null || attachedUrl === null || !isPainting(video)) return;
+  if (flvPlayer === null || attachedUrl === null || !isPainting(video) || video.seeking) return;
   try {
     if (video.buffered.length === 0) return;
     const end = video.buffered.end(video.buffered.length - 1);
     if (!Number.isFinite(end)) return;
     const lag = end - video.currentTime;
-    // 直播积压超过约 1.2s 就追到前沿，避免「一顿一顿往前赶」。
-    if (lag > 1.2) video.currentTime = Math.max(0, end - 0.25);
+    if (lag <= LIVE_EDGE_MAX_LAG_S) return;
+    const now = Date.now();
+    if (now - lastLiveEdgeSeekAtMs < LIVE_EDGE_SEEK_COOLDOWN_MS) return;
+    lastLiveEdgeSeekAtMs = now;
+    video.currentTime = Math.max(0, end - LIVE_EDGE_KEEP_S);
   } catch { /* ignore */ }
 };
 
@@ -745,7 +784,6 @@ const watchPlaybackStall = (video: HTMLVideoElement): void => {
   if (attachedUrl === null || flvPlayer === null || flvRecoverTimer !== null) return;
   const now = Date.now();
   notePaintProgress(video);
-  chaseLiveEdge(video);
   if (isPainting(video)) {
     if (lastPaintAtMs > 0 && now - lastPaintAtMs > STALL_MS) {
       recoverStuckFlv(video, attachedUrl, "画面停住");
@@ -796,33 +834,42 @@ const attachVideo = (url: string): void => {
     reportPlaybackHealth(video);
   };
   try {
-    if (!url.includes(".flv") || !flvjs.isSupported()) {
+    if (!url.includes(".flv") || !mpegts.isSupported()) {
       detachVideo();
       show("当前电脑无法播放图传画面，请重启 Sky Command 后再试");
       return;
     }
-    flvPlayer = flvjs.createPlayer(
+    flvPlayer = mpegts.createPlayer(
       { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url },
       // 小 stash 缓毛刺/网络抖动；过大则延迟明显。背压策略已在 HTTP-FLV 侧按关键frame 续写。
-      { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true },
+      { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true, autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S, autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S },
     );
     bindVideoPlayEvents(video);
-    flvPlayer.on(flvjs.Events.MEDIA_INFO, () => { scheduleVideoPlay(video); });
-    flvPlayer.on(flvjs.Events.ERROR, () => {
+    flvPlayer.on(mpegts.Events.MEDIA_INFO, (info: unknown) => {
+      scheduleVideoPlay(video);
+      const record = info !== null && typeof info === "object" ? info as Record<string, unknown> : null;
+      const width = typeof record?.width === "number" ? record.width : 0;
+      const height = typeof record?.height === "number" ? record.height : 0;
+      if (width > 0) show(`图传正在出画（${width}×${height}）`);
+    });
+    flvPlayer.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
       flvFatalStreak += 1;
       const retryUrl = attachedUrl;
+      void errorType;
+      void errorDetail;
       if (retryUrl === null) return;
       if (flvFatalStreak <= 3 && softReloadFlv(video)) {
-        show("图传不稳定，正在自动恢复…");
+        show("图传画面无法解码，正在自动恢复…");
         return;
       }
-      show("图传中断，正在重新连接…");
+      show("图传画面无法解码，正在重新连接…");
       detachVideo();
       scheduleFlvReattach(retryUrl);
     });
     flvPlayer.attachMediaElement(video);
     flvPlayer.load();
     play();
+    startPlaybackWatch(video);
   } catch {
     detachVideo();
     show("图传播放器初始化失败，正在自动重试…");
@@ -1246,11 +1293,13 @@ async function run(
   knownView?: ReturnType<typeof OperatorConsole.project>,
   feedbackAction = action,
 ): Promise<void> {
-  const view = knownView ?? await projectView();
+  const view = knownView ?? projectCached();
   const decision = OperatorConsole.evaluate(action, view);
   const deviceId = text(read(input, "deviceId"));
   const connectionEpoch = feedbackDeviceEpoch(view, deviceId);
   if (!decision.ok) { blocked(action, decision.reason ?? "无法执行", deviceId, connectionEpoch); return; }
+  if (action === "photo-capture") show("正在拍照");
+  if (action === "photo-fetch") show("正在回传照片，界面应保持可操作");
   let result: unknown;
   try {
     result = await bridge().invoke(invokeName, input);
@@ -1477,6 +1526,14 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   }
   renderOperationFeedback("stream-start", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
   renderOperationFeedback("stream-stop", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
+  for (const action of ["photo-capture", "photo-fetch"] as const) {
+    const button = document.querySelector(`button[data-action="${action}"]`);
+    if (!(button instanceof HTMLButtonElement)) continue;
+    const decision = OperatorConsole.evaluate(action, view);
+    button.disabled = !decision.ok;
+    button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
+    renderOperationFeedback(action, view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
+  }
   armedCommand = expireArm(armedCommand, Date.now());
   if (armedCommand === null) clearArmTimer();
   for (const action of ["flight-takeoff", "flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"] as const) {
@@ -1761,7 +1818,7 @@ el("route-remove").addEventListener("click", async () => {
     const action = (button as HTMLButtonElement).dataset.action ?? "";
     let view: ReturnType<typeof OperatorConsole.project>;
     try {
-      view = await projectView();
+      view = projectCached();
     } catch {
       show("界面读取失败，本次操作未发送；请确认手机仍连接后重试");
       renderFlightConfirmationFallback();
@@ -1813,7 +1870,7 @@ el("route-remove").addEventListener("click", async () => {
       armedCommand = null;
       clearArmTimer();
     }
-    const streamAction = action.startsWith("stream-");
+    const streamAction = action.startsWith("stream-") || action.startsWith("photo-");
     const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
     if (action === "stream-select") {
       await run(action, "stream-select", { deviceId }, view);
@@ -1829,6 +1886,8 @@ el("route-remove").addEventListener("click", async () => {
       "mission-stop": "mission-stop",
       "stream-start": "stream-start",
       "stream-stop": "stream-stop",
+      "photo-capture": "photo-capture",
+      "photo-fetch": "photo-fetch",
       "flight-confirm-landing": "flight-request",
       "flight-stop-takeoff": "flight-request",
       "flight-stop-auto-landing": "flight-request",

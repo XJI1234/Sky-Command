@@ -27,6 +27,10 @@ const validFrames: RelayFrame[] = [
   { type: "mission-phase", missionRevision: 1, deviceGeneration: 0, sequence: 1, phase: "START_POINT_REACHED", fileName: "route.kmz" },
   { type: "diagnostic-report", runId: "run-1", events: [{ sequence: 1, timestampMillis: 0, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }] },
   { type: "diagnostic-ack", runId: "run-1", acknowledgedSequence: 1 },
+  { type: "media-begin", id: "photo-1", fileName: "shot.jpg", size: 1, sha256: "a".repeat(64) },
+  { type: "media-chunk", id: "photo-1", data: new Uint8Array([0, 1, 255]) },
+  { type: "media-complete", id: "photo-1" },
+  { type: "media-result", id: "photo-1", ok: true, detail: "stored" },
 ];
 
 describe("relay-link/protocol-core contract", () => {
@@ -57,6 +61,9 @@ describe("relay-link/protocol-core contract", () => {
       [{ type: "mission-begin", id: "x", fileName: "route.kmz", size: 0, sha256: "a".repeat(64) }, "MISSION_SIZE_OUT_OF_RANGE"],
       [{ type: "mission-begin", id: "x", fileName: "route.kmz", size: 1, sha256: "A".repeat(64) }, "INVALID_SHA256"],
       [{ type: "mission-chunk", id: "x", data: new Uint8Array() }, "EMPTY_CHUNK"],
+      [{ type: "media-begin", id: "x", fileName: "../shot.jpg", size: 1, sha256: "a".repeat(64) }, "INVALID_FILE_NAME"],
+      [{ type: "media-begin", id: "x", fileName: "route.kmz", size: 1, sha256: "a".repeat(64) }, "INVALID_FILE_NAME"],
+      [{ type: "media-chunk", id: "x", data: new Uint8Array() }, "EMPTY_CHUNK"],
       [{ type: "mission-phase", missionRevision: 0, deviceGeneration: 0, sequence: 1, phase: "START_POINT_REACHED", fileName: "route.kmz" } as never, "INVALID_FIELD"],
     ];
     for (const [frame, code] of cases) expect(validate(frame)).toMatchObject({ ok: false, error: { code } });

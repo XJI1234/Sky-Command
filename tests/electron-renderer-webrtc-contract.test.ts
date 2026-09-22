@@ -15,7 +15,7 @@ describe("Electron 生产图传渲染", () => {
   it("渲染器仍只使用 HTTP-FLV 播放并保留恢复策略", () => {
     const source = renderer();
     expect(source).toContain('"stream-refresh"');
-    expect(source).toContain("flvjs.createPlayer");
+    expect(source).toContain("mpegts.createPlayer");
     expect(source).toContain("chaseLiveEdge");
     expect(source).toContain("recoverStuckFlv");
     expect(source).toContain("videoTransportStatusRows(connection)");
@@ -41,6 +41,8 @@ describe("Electron 生产图传渲染", () => {
     expect(page).toContain('<video id="video"');
     expect(page).toContain('data-action="stream-start"');
     expect(page).toContain('data-action="stream-stop"');
+    expect(page).toContain('data-action="photo-capture"');
+    expect(page).toContain('data-action="photo-fetch"');
     expect(page).toContain('data-action="flight-takeoff"');
     expect(page).not.toContain('data-action="stream-select"');
     expect(page).not.toContain("启动低延迟");
@@ -48,7 +50,7 @@ describe("Electron 生产图传渲染", () => {
     expect(page).toContain('data-flight-status="stream-paint"');
     expect(renderer()).toContain("图传可请求启动：手机中继、MSDK、AirLink 和主相机均已就绪；发送前会检查电脑接收端，实际推流和出画仍分别确认");
     expect(renderer()).toContain("playVideo");
-    expect(renderer()).toContain("flvjs");
+    expect(renderer()).toContain("mpegts");
     expect(renderer()).toContain("自动播放被拦截，请点一下上方画面");
   });
 

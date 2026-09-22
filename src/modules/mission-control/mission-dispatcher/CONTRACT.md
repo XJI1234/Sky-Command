@@ -112,7 +112,7 @@ interface MissionDispatchSnapshot {
 
 ## 6. 断线和遥测
 
-`recordDisconnected(deviceId)` 是供父模块调用的断线协调接口，只能在设备从已确认中继快照消失或会话替换时调用。它不发送命令：活动轨道进入 `disconnected`、清除两个可展示里程碑、发布快照并返回该快照；未知、终态或已断线轨道返回 `null` 且不发布。它绝不重试、自动恢复或启动任务。
+`recordDisconnected(deviceId)` 是供父模块调用的断线协调接口，只能在设备从已确认中继快照消失并超过宽限期后调用，不得仅因 `sessionId` 替换调用。它不发送命令：活动轨道进入 `disconnected`、清除两个可展示里程碑、发布快照并返回该快照；未知、终态或已断线轨道返回 `null` 且不发布。它绝不重试、自动恢复或启动任务。
 
 命令和暂存结果中的 `disconnected` 仍是该操作失败，不能伪装为成功。`recordMissionPhase` 只接受手机端 `mission-phase` 已校验的 `START_POINT_REACHED` 或 `ROUTE_EXECUTION_STARTED`，且必须携带安全文件名、`missionRevision`、`deviceGeneration` 与严格递增的 `sequence`。首个可接受里程碑只能属于 `starting` 任务；之后所有里程碑必须与已锁定任务身份匹配。`START_POINT_REACHED` 仅记录首航点事实，绝不使轨道进入 `running`；只有 `ROUTE_EXECUTION_STARTED` 才可使 `starting` 进入 `running`。新的 `stage`、`forget` 或 `recordDisconnected` 都会清除可展示里程碑。`recordExecutionStarted` 保留为兼容入口，等价于不带序列的 `ROUTE_EXECUTION_STARTED` 事实；`recordExecutionTerminal` 继续只接受匹配身份的 `completed` 或 `failed` 终态。未知设备、终态、文件名或身份不匹配、重复或迟到事实一律返回 `null`，不发布也不发送命令。调度器不会由自由格式遥测推断完成或暂停；上游必须先将 Android 的封闭 `missionExecution` 枚举校验为上述两种终态。
 

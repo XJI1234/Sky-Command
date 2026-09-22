@@ -716,6 +716,7 @@ describe("飞行作业工作流模块契约", () => {
       routeLibrary: { list: () => [], select: () => ({ ok: false }), get: () => ({ ok: false }), importFile: async () => ({ status: "cancelled" as const }), getPreview: () => ({ ok: false }), remove: () => ({ ok: false }), getMissionPayload: () => ({ ok: false }), getSelected: () => null, clear: () => undefined },
       missionControl: { stage: async () => ({ ok: false }), upload: async (id: string) => { calls.push(`upload:${id}`); return { ok: true }; }, start: async () => ({ ok: false }), pause: async () => ({ ok: false }), resume: async () => ({ ok: false }), stop: async () => ({ ok: false }), get: (deviceId: string) => ({ deviceId, phase: "idle" }), list: () => [], forget: () => false, subscribe: () => () => undefined, dispose: () => undefined },
       liveStreamControl: { start: async (id: string) => { calls.push(`stream-start:${id}`); return { ok: true }; }, stop: async (id: string) => { calls.push(`stream-stop:${id}`); return { ok: true }; }, get: () => ({ phase: "idle" }), list: () => [], recordDisconnected: () => null, forget: () => false, subscribe: () => () => undefined },
+      photoControl: { capture: async (id: string) => { calls.push(`photo-capture:${id}`); return { ok: true, code: "CAPTURED" }; }, fetch: async (id: string) => { calls.push(`photo-fetch:${id}`); return { ok: true, code: "SUCCEEDED" }; }, recordDisconnected: () => null, subscribe: () => () => undefined },
       mediaPipeline: { snapshot: () => ({ streams: [] }), evaluate: (now: number) => { calls.push(`media:${now}`); return { ok: true }; }, selectPlayer: (id: string) => { calls.push(`player:${id}`); return { ok: true }; }, clearPlayer: () => ({ ok: true }) },
       flightControl: { request: () => ({ ok: true, confirmation: { confirmationId: "confirm-1" } }), confirm: async (id: string, confirmation: string) => { calls.push(`confirm:${id}:${confirmation}`); return { ok: true }; }, cancel: () => ({ ok: true }), get: () => null, subscribe: () => () => undefined, dispose: () => undefined },
       deviceSettings: { snapshot: () => ({}), readTransmission: async (id: string) => { calls.push(`read-transmission:${id}`); return { ok: true }; }, writeTransmission: async (id: string, patch: unknown) => { calls.push(`write-transmission:${id}:${JSON.stringify(patch)}`); return { ok: true }; }, readCamera: async (id: string) => { calls.push(`read-camera:${id}`); return { ok: true }; }, writeCamera: async (id: string, patch: unknown) => { calls.push(`write-camera:${id}:${JSON.stringify(patch)}`); return { ok: true }; } }, hardwareReadiness: readyHardware, now: () => 7
@@ -723,6 +724,8 @@ describe("飞行作业工作流模块契约", () => {
     await workflow.upload("relay-a");
     await workflow.startStream("relay-a");
     await workflow.stopStream("relay-a");
+    await workflow.capturePhoto("relay-a");
+    await workflow.fetchPhoto("relay-a");
     workflow.refreshMedia();
     await workflow.readTransmissionSettings("relay-a");
     await workflow.writeTransmissionSettings("relay-a", { bandwidth: "BANDWIDTH_20MHZ" });
@@ -730,7 +733,7 @@ describe("飞行作业工作流模块契约", () => {
     await workflow.writeCameraSettings("relay-a", { focusMode: "AUTO" });
     await workflow.requestFlightAction("relay-a", "takeoff");
     await workflow.confirmFlightAction("relay-a", "confirm-1");
-    expect(calls).toEqual(["upload:relay-a", "stream-start:relay-a", "stream-stop:relay-a", "media:7", "read-transmission:relay-a", "write-transmission:relay-a:{\"bandwidth\":\"BANDWIDTH_20MHZ\"}", "read-camera:relay-a", "write-camera:relay-a:{\"focusMode\":\"AUTO\"}", "confirm:relay-a:confirm-1"]);
+    expect(calls).toEqual(["upload:relay-a", "stream-start:relay-a", "stream-stop:relay-a", "photo-capture:relay-a", "photo-fetch:relay-a", "media:7", "read-transmission:relay-a", "write-transmission:relay-a:{\"bandwidth\":\"BANDWIDTH_20MHZ\"}", "read-camera:relay-a", "write-camera:relay-a:{\"focusMode\":\"AUTO\"}", "confirm:relay-a:confirm-1"]);
   });
 
   it("旧图传媒体不可用时在电脑端阻止向手机在线服务发送启动命令", async () => {
@@ -1320,6 +1323,40 @@ describe("飞行作业工作流模块契约", () => {
     expect(workflow.snapshot().devices[0]?.pendingFlightAction).toBeNull();
   });
 
+  it("断线复位图传时，图传状态通知不得再次进入断线处理", () => {
+    let sessionId = "session-1";
+    let signal!: () => void;
+    let streamListener: (() => void) | null = null;
+    let calls = 0;
+    workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId }],
+        telemetry: () => ({ payload: { connected: true }, capabilities: {} }),
+        controlTelemetry: () => ({ payload: { connected: true }, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        subscribe: (listener: () => void) => { signal = listener; return () => undefined; },
+      },
+      liveStreamControl: {
+        start: async () => ({ ok: true }),
+        stop: async () => ({ ok: true }),
+        get: () => ({ phase: "streaming" }),
+        list: () => [],
+        recordDisconnected: () => {
+          calls += 1;
+          if (calls > 3) throw new Error("disconnect reentered");
+          streamListener?.();
+          return { phase: "disconnected" };
+        },
+        recordSourceUnavailable: () => null,
+        forget: () => false,
+        subscribe: (listener: () => void) => { streamListener = listener; return () => { streamListener = null; }; },
+      },
+    });
+    sessionId = "session-2";
+    signal();
+    expect(calls).toBe(1);
+  });
+
   it("同一手机换会话时只投影新的不透明连接代次，不向界面泄露会话标识", () => {
     let sessionId = "session-1";
     let signal!: () => void;
@@ -1339,8 +1376,29 @@ describe("飞行作业工作流模块契约", () => {
     sessionId = "session-2";
     signal();
 
-    expect(workflow.snapshot().devices[0]).toMatchObject({ deviceId: "relay-a", connectionEpoch: 1 });
+    expect(workflow.snapshot().devices[0]).toMatchObject({ deviceId: "relay-a", connectionEpoch: 0 });
     expect(workflow.snapshot().devices[0]).not.toHaveProperty("sessionId");
+  });
+
+  it("中继闪断后自行重连时不更换连接代次，已成功回执仍可显示", () => {
+    let devices: unknown[] = [{ deviceId: "relay-a", sessionId: "session-1" }];
+    let signal!: () => void;
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => devices,
+        telemetry: () => ({ payload: {}, capabilities: {} }),
+        controlTelemetry: () => ({ payload: {}, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        subscribe: (listener: () => void) => { signal = listener; return () => undefined; },
+      },
+    });
+
+    expect(workflow.snapshot().devices[0]).toMatchObject({ deviceId: "relay-a", connectionEpoch: 0 });
+    devices = [];
+    signal();
+    devices = [{ deviceId: "relay-a", sessionId: "session-2" }];
+    signal();
+    expect(workflow.snapshot().devices[0]).toMatchObject({ deviceId: "relay-a", connectionEpoch: 0 });
   });
 
   it("转码失败且手机仍在线时必须停止这一路图传，手机已离线则不得补发停止", async () => {

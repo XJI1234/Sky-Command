@@ -46,11 +46,13 @@ const missionLabel = (action: string): string => {
 };
 
 const streamLabel = (action: string): string => action === "stream-stop" ? "停止图传" : "启动图传";
+const photoLabel = (action: string): string => action === "photo-fetch" ? "回传照片" : "拍照";
 
 const localReason = (code: string | null): string => {
-  if (code === "DEVICE_OFFLINE" || code === "RELAY_OFFLINE") return "手机中继离线";
-  if (code === "SDK_NOT_READY") return "手机端 MSDK 尚未就绪";
-  if (code === "AIRLINK_OFFLINE") return "AirLink 未连接";
+    if (code === "DEVICE_OFFLINE" || code === "RELAY_OFFLINE") return "手机中继离线";
+    if (code === "SDK_NOT_READY") return "手机端 MSDK 尚未就绪";
+    if (code === "NOTHING_TO_FETCH") return "还没有可回传的照片";
+    if (code === "AIRLINK_OFFLINE") return "AirLink 未连接";
   if (code === "AIRLINK_CONNECTION_UNKNOWN") return "AirLink 状态未知";
   if (code === "CAMERA_OFFLINE") return "主相机未连接";
   if (code === "CAMERA_CONNECTION_UNKNOWN") return "主相机状态未知";
@@ -84,9 +86,10 @@ const msdkCallback = (
 });
 
 const djiFailure = (inner: unknown): OperationFeedback => {
-  const platformError = read(inner, "platformError");
-  const code = text(read(platformError, "code"));
-  const description = text(read(platformError, "description"));
+  const nested = record(read(inner, "value"));
+  const platformError = read(inner, "platformError") ?? read(nested, "platformError");
+  const code = text(read(platformError, "code")) ?? text(read(inner, "errorCode")) ?? text(read(nested, "errorCode"));
+  const description = text(read(platformError, "description")) ?? text(read(inner, "errorDescription")) ?? text(read(nested, "errorDescription"));
   const details = [
     ...(code === null ? [] : [`错误码：${code}`]),
     ...(description === null ? [] : [`错误说明：${description}`]),
@@ -98,7 +101,7 @@ const unconfirmed = (label: string, explanation = `未收到 DJI MSDK ${label} �
   msdkCallback("relay", "unconfirmed", "未确认", "无最终回调", [`说明：${explanation}`]);
 
 const operationLabel = (action: string, flightAction: string): string =>
-  action.startsWith("flight-") ? flightAction : action.startsWith("mission-") ? missionLabel(action) : streamLabel(action);
+  action.startsWith("flight-") ? flightAction : action.startsWith("mission-") ? missionLabel(action) : action.startsWith("photo-") ? photoLabel(action) : streamLabel(action);
 
 export const operationFeedback = (action: string, value: unknown): OperationFeedback => {
   const inner = unwrap(value);
@@ -109,8 +112,17 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
   if (code === "FLIGHT_ACTION_REJECTED") return djiFailure(inner);
   if (code === "WAYLINE_ACTION_REJECTED") return djiFailure(inner);
   if (code === "STREAM_ACTION_REJECTED") return djiFailure(inner);
+  if (code === "PHOTO_ACTION_REJECTED") {
+    const nested = record(read(inner, "value"));
+    const platformError = read(inner, "platformError") ?? read(nested, "platformError");
+    const errorCode = text(read(platformError, "code")) ?? text(read(inner, "errorCode")) ?? text(read(nested, "errorCode"));
+    if (errorCode === "CAMERA_MODE_NOT_PHOTO") {
+      return { source: "relay", outcome: "rejected", message: "相机没有进入拍照模式，画面会恢复。图传没有停止。" };
+    }
+    return djiFailure(inner);
+  }
   if (code === "RESULT_UNCONFIRMED" || (code !== null && code.endsWith("_UNCONFIRMED"))) return unconfirmed(operationLabel(action, platformAction));
-  if (code === "FLIGHT_ACTION_INVOCATION_FAILED" || code === "WAYLINE_ACTION_INVOCATION_FAILED" || code === "STREAM_ACTION_INVOCATION_FAILED") {
+  if (code === "FLIGHT_ACTION_INVOCATION_FAILED" || code === "WAYLINE_ACTION_INVOCATION_FAILED" || code === "STREAM_ACTION_INVOCATION_FAILED" || code === "INVOCATION_FAILED" || code === "TRANSFER_FAILED") {
     return unconfirmed(operationLabel(action, platformAction), `手机未取得 DJI MSDK ${operationLabel(action, platformAction)} 的可用结果`);
   }
   if (
@@ -123,7 +135,7 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
   ) return unconfirmed(operationLabel(action, platformAction), `未收到 DJI MSDK ${operationLabel(action, platformAction)}的可判定结果`);
   if (code === "RELAY_REJECTED") {
     const reason = text(read(inner, "reason")) ?? text(read(value, "reason"));
-    return { source: "relay", outcome: "rejected", message: `手机/中继回调：拒绝${action.startsWith("flight-") ? platformAction : action.startsWith("mission-") ? missionLabel(action) : streamLabel(action)}${reason === null ? "" : `；原因：${reason}`}` };
+    return { source: "relay", outcome: "rejected", message: `手机/中继回调：拒绝${operationLabel(action, platformAction)}${reason === null ? "" : `；原因：${reason}`}` };
   }
   if (code === "CONFIRMATION_REQUIRED" && read(inner, "confirmation") !== undefined) {
     const label = action.startsWith("mission-") ? missionLabel(action) : flightLabel(confirmedAction);
@@ -132,6 +144,7 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
   if (code === "CANCELLED" && read(inner, "confirmation") !== undefined) {
     return { source: "desktop", outcome: "completed", message: `已取消${flightLabel(confirmedAction)}，未调用 DJI MSDK` };
   }
+  if (code === "CAPTURED") return msdkCallback("dji", "accepted", "成功", "onSuccess", ["说明：已拍下原图，电脑尚未收齐文件"]);
   const reason = text(read(inner, "reason")) ?? text(read(value, "reason"));
   if (code !== null && code !== "SUCCEEDED") return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${localReason(reason ?? code)}` };
 
@@ -140,6 +153,7 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
   if (code === "SUCCEEDED" && action.startsWith("flight-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action.startsWith("mission-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action.startsWith("stream-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
+  if (code === "SUCCEEDED" && action.startsWith("photo-")) return msdkCallback("dji", "accepted", "成功", "onSuccess", action === "photo-fetch" ? ["说明：原图已保存，可用系统看图软件打开"] : []);
   if (read(inner, "ok") === true || read(value, "ok") === true) return { source: "relay", outcome: "completed", message: "手机中继回调：已完成" };
   return { source: "desktop", outcome: "not-called", message: "未调用 DJI MSDK：没有获得可识别的操作结果" };
 };

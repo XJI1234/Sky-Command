@@ -453,6 +453,35 @@ describe("relay-server contract", () => {
     expect(closeReasons).toEqual(["inbound-overflow"]);
   });
 
+  it("drops surplus diagnostic reports instead of closing an inbound-full session", async () => {
+    const transport = new FakeTransport();
+    const server = createServer({ transport });
+    const closeReasons: string[] = [];
+    server.subscribe((event) => {
+      if (event.kind === "connection-closed") closeReasons.push(event.reason);
+    });
+    await server.start();
+    const connection = transport.connect();
+    connection.controlledSends = true;
+    connection.emitMessage(bytes({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }));
+    await flush();
+    const diagnostic = (sequence: number): RelayFrame => ({
+      type: "diagnostic-report",
+      runId: "run-1",
+      events: [{ sequence, timestampMillis: sequence, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "queued" }],
+    });
+
+    for (let sequence = 1; sequence <= 24; sequence += 1) connection.emitMessage(bytes(diagnostic(sequence)));
+
+    expect(connection.closed).toBe(false);
+    expect(closeReasons).toEqual([]);
+    expect(server.snapshot().connections).toHaveLength(1);
+
+    connection.emitMessage(bytes({ type: "command-result", id: "result-overflow", ok: true, detail: "queued" }));
+    expect(connection.closed).toBe(true);
+    expect(closeReasons).toEqual(["inbound-overflow"]);
+  });
+
   it("closes active connections during stop and normalizes missing close reasons", async () => {
     const transport = new FakeTransport();
     const server = createServer({ transport });

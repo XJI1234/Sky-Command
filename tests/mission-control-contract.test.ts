@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MissionControl } from "../src/modules/mission-control/index.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("飞行任务控制模块契约", () => {
   it("通过唯一根接口将航线暂存委托给指定手机的独立任务轨道", async () => {
@@ -33,10 +37,35 @@ describe("飞行任务控制模块契约", () => {
     await control.stage("phone-1", "route-1");
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }] });
     expect(control.get("phone-1").phase).toBe("staged");
+    vi.useFakeTimers();
     receiveRelaySnapshot({ devices: [] });
+    expect(control.get("phone-1").phase).toBe("staged");
+    await vi.advanceTimersByTimeAsync(15_000);
 
     expect(control.get("phone-1")).toMatchObject({ phase: "disconnected", missionId: "mission-1" });
     expect(commands).toEqual([]);
+  });
+
+  it("中继闪断后自行重连时保持当前任务，不把航线写成断开", async () => {
+    let receiveRelaySnapshot!: (snapshot: unknown) => void;
+    const control = MissionControl.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) },
+      relay: {
+        sendMission: async (_deviceId: string, payload: { missionId: string }) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "ok" }),
+        latestTelemetry: () => null,
+        subscribe: (listener) => { receiveRelaySnapshot = listener; return () => undefined; }
+      }
+    }, { createMissionId: () => "mission-1" });
+
+    await control.stage("phone-1", "route-1");
+    receiveRelaySnapshot({ devices: [{ deviceId: "phone-1", sessionId: "session-1" }] });
+    vi.useFakeTimers();
+    receiveRelaySnapshot({ devices: [] });
+    receiveRelaySnapshot({ devices: [{ deviceId: "phone-1", sessionId: "session-2" }] });
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(control.get("phone-1")).toMatchObject({ phase: "staged", missionId: "mission-1" });
   });
 
   it("只将从多设备快照中消失的独立任务轨道标记为断线", async () => {
@@ -54,7 +83,10 @@ describe("飞行任务控制模块契约", () => {
     await control.stage("phone-1", "route-1");
     await control.stage("phone-2", "route-1");
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }, { deviceId: "phone-2" }] });
+    vi.useFakeTimers();
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-2" }] });
+    expect(control.get("phone-1").phase).toBe("staged");
+    await vi.advanceTimersByTimeAsync(15_000);
 
     expect(control.get("phone-1").phase).toBe("disconnected");
     expect(control.get("phone-2").phase).toBe("staged");
@@ -75,7 +107,9 @@ describe("飞行任务控制模块契约", () => {
 
     await control.stage("phone-1", "route-1");
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }] });
+    vi.useFakeTimers();
     receiveRelaySnapshot({ devices: [] });
+    await vi.advanceTimersByTimeAsync(15_000);
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1" }] });
 
     expect(control.get("phone-1")).toMatchObject({ phase: "disconnected", missionId: "mission-1", routeId: "route-1" });
@@ -162,7 +196,7 @@ describe("飞行任务控制模块契约", () => {
     });
   });
 
-  it("会话替换视为断线，并忽略更老代际的航线开始事件", async () => {
+  it("会话替换不拆任务，并忽略更老代际的航线开始事件", async () => {
     let receiveRelaySnapshot!: (snapshot: unknown) => void;
     const control = MissionControl.create({
       routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) },
@@ -196,10 +230,10 @@ describe("飞行任务控制模块契约", () => {
     expect(control.get("phone-1")).toMatchObject({ phase: "running" });
 
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1", sessionId: "session-2" }], missionPhases: [] });
-    expect(control.get("phone-1")).toMatchObject({ phase: "disconnected" });
+    expect(control.get("phone-1")).toMatchObject({ phase: "running" });
   });
 
-  it("会话替换后清除旧阶段水位，使手机重启后的新任务可以确认执行", async () => {
+  it("会话替换后仍可停止并开始新任务，使手机重启后的新航线可以确认执行", async () => {
     let receiveRelaySnapshot!: (snapshot: unknown) => void;
     const control = MissionControl.create({
       routeSource: { getMissionPayload: () => ({ ok: true as const, value: { routeId: "route-1", fileName: "survey.kmz", sizeBytes: 3, sha256: "a".repeat(64), bytes: new Uint8Array([1, 2, 3]) } }) },
@@ -221,8 +255,9 @@ describe("飞行任务控制模块契约", () => {
     expect(control.get("phone-1").phase).toBe("running");
 
     receiveRelaySnapshot({ devices: [{ deviceId: "phone-1", sessionId: "session-2" }], missionPhases: [] });
-    expect(control.get("phone-1").phase).toBe("disconnected");
+    expect(control.get("phone-1").phase).toBe("running");
 
+    await control.stop("phone-1");
     await control.stage("phone-1", "route-1");
     await control.upload("phone-1");
     await control.start("phone-1");

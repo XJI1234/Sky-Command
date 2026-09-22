@@ -47,6 +47,7 @@
     "cesium": "^1.143.0",
     "flv.js": "^1.6.2",
     "hls.js": "^1.7.0",
+    "mpegts.js": "^1.8.2",
     "node-media-server": "^2.6.6",
     "saxes": "^6.0.0",
     "ws": "^8.18.3"

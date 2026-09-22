@@ -28,7 +28,7 @@
 
 ## 当前保证的共同语义
 
-向量必须持续覆盖：带结构化 `result` 的 `command-result`、结构化结果内的 JSON `null`、无 `result` 的旧版 `command-result`、`mission-phase`、带标准 Base64 的 `mission-chunk`、非对象 `result`、非规范 Base64、非整数任务序列号以及未来未知帧。
+向量必须持续覆盖：带结构化 `result` 的 `command-result`、结构化结果内的 JSON `null`、无 `result` 的旧版 `command-result`、`mission-phase`、带标准 Base64 的 `mission-chunk`、非对象 `result`、非规范 Base64、非整数任务序列号、`media-begin` / `media-chunk` / `media-complete` / `media-result` 以及未来未知帧。媒体四帧在编解码落地前，现有向量必须继续把它们当作未知合法类型（`Ignored`），不得当成错误或断连。
 
 向量中 `canonicalWire` 的字段顺序是协议的一部分。已知帧的编码器必须产生该顺序，不得依赖运行时对象排序。任务块的 Base64 必须是标准、带填充且无空白的规范形式。
 

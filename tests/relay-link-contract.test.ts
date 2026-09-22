@@ -16,6 +16,7 @@ class Connection implements RelayConnection {
   readonly sent: Uint8Array[] = [];
   readonly closed = { value: false };
   failSends = false;
+  hangSends = false;
   readonly localAddress?: string;
   readonly probeResults: RelayConnectionProbeResult[] = [];
   probeCalls = 0;
@@ -23,7 +24,11 @@ class Connection implements RelayConnection {
   private closes = new Set<(reason?: string) => void>();
   private errors = new Set<() => void>();
   constructor(localAddress?: string) { this.localAddress = localAddress; }
-  async send(bytes: Uint8Array): Promise<void> { if (this.failSends) throw new Error("send failed"); this.sent.push(bytes.slice()); }
+  async send(bytes: Uint8Array): Promise<void> {
+    if (this.hangSends) return new Promise(() => undefined);
+    if (this.failSends) throw new Error("send failed");
+    this.sent.push(bytes.slice());
+  }
   async close(): Promise<void> { this.closed.value = true; }
   onMessage(listener: (bytes: Uint8Array) => void): () => void { this.messages.add(listener); return () => this.messages.delete(listener); }
   onClose(listener: (reason?: string) => void): () => void { this.closes.add(listener); return () => this.closes.delete(listener); }
@@ -200,14 +205,33 @@ describe("relay-link root contract", () => {
   });
 
   it("cancels pending operations and removes devices on disconnect", async () => {
-    const fixture = options(); const link = RelayLink.create(fixture.options); await link.start();
+    const fixture = options(); const link = RelayLink.create(fixture.options);
+    const snapshots: RelayLinkSnapshot[] = [];
+    link.subscribe((value) => snapshots.push(value));
+    await link.start();
     const phone = fixture.transport.connect(); phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" }); await flush();
     const command = link.sendCommand("phone-1", { name: "go", fields: {} }); const mission = link.sendMission("phone-1", payload); await flush();
     phone.emitClose("lost"); await flush();
     await expect(command).resolves.toMatchObject({ status: "disconnected", detail: "lost" });
     await expect(mission).resolves.toMatchObject({ status: "disconnected", detail: "lost" });
     expect(link.devices()).toEqual([]); expect(link.latestTelemetry("phone-1")).toBeNull();
+    expect(snapshots.at(-1)?.lastDisconnect).toEqual({ deviceId: "phone-1", reason: "lost" });
   });
+
+  it("传输层 send 未完成时命令超时仍须结束，不得把调用方卡住", async () => {
+    const fixture = options();
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const phone = fixture.transport.connect();
+    phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
+    await flush();
+    phone.hangSends = true;
+    const command = link.sendCommand("phone-1", { name: "camera.photo.fetch", fields: {} });
+    await flush();
+    fixture.scheduler.fireAll();
+    await flush();
+    await expect(command).resolves.toMatchObject({ status: "timed-out" });
+  }, 1_000);
 
   it("times out operations, contains listeners, and supports idempotent stop", async () => {
     const fixture = options(); const link = RelayLink.create(fixture.options); link.subscribe(() => { throw new Error("listener"); });
@@ -496,20 +520,27 @@ describe("relay-link root contract", () => {
     phone.emit({ type: "hello", deviceId: "phone-1", protocolVersion: "1" });
     await flush();
 
-    for (let sequence = 1; sequence <= 10; sequence += 1) {
-      phone.emit({
-        type: "diagnostic-report",
-        runId: "run-bounded",
-        events: [{ sequence, timestampMillis: sequence, level: "INFO", module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }],
-      });
-    }
+    const report = (sequence: number) => ({
+      type: "diagnostic-report" as const,
+      runId: "run-bounded",
+      events: [{ sequence, timestampMillis: sequence, level: "INFO" as const, module: "relay-gateway", eventCode: "STARTED", operationId: null, safeDetail: "connected" }],
+    });
+    phone.emit(report(1));
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    for (let index = 0; index < 9; index += 1) {
+    expect(persisted).toEqual([1]);
+
+    for (let sequence = 2; sequence <= 17; sequence += 1) phone.emit(report(sequence));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    for (let sequence = 18; sequence <= 20; sequence += 1) {
+      phone.emit(report(sequence));
+      await flush();
+    }
+    for (let index = 0; index < 17; index += 1) {
       completions[index]!(true);
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
 
-    expect(persisted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(persisted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
   });
 
   it("在日志未落盘时不确认，在重复上报时不重复写入", async () => {
@@ -589,7 +620,7 @@ describe("relay-link root contract", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(acks()).toEqual([{ type: "diagnostic-ack", runId: "run-1", acknowledgedSequence: 1 }]);
 
-    for (let sequence = 2; sequence <= 9; sequence += 1) {
+    for (let sequence = 2; sequence <= 17; sequence += 1) {
       phone.emit({ type: "diagnostic-report", runId: "run-1", events: [event(sequence)] });
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 0));

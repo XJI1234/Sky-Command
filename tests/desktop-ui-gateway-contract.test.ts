@@ -36,6 +36,7 @@ describe("DesktopUiGateway", () => {
       assignRoute: named("assignRoute"), clearAssignment: named("clearAssignment"),
       stage: named("stage"), upload: named("upload"), start: named("start"), pause: named("pause"), resume: named("resume"), stop: named("stop"),
       startStream: named("startStream"), stopStream: named("stopStream"), refreshMedia: named("refreshMedia"), selectVideo: named("selectVideo"), clearVideo: named("clearVideo"),
+      capturePhoto: named("capturePhoto"), fetchPhoto: named("fetchPhoto"),
       readTransmissionSettings: named("readTransmissionSettings"), writeTransmissionSettings: named("writeTransmissionSettings"), readCameraSettings: named("readCameraSettings"), writeCameraSettings: named("writeCameraSettings"),
       requestFlightAction: named("requestFlightAction"), confirmFlightAction: named("confirmFlightAction"), cancelFlightAction: named("cancelFlightAction"),
     };
@@ -55,6 +56,7 @@ describe("DesktopUiGateway", () => {
       { method: "assignment.assign", input: { deviceId: "device-a", routeId: "route-a" } }, { method: "assignment.clear", input: { deviceId: "device-a" } },
       { method: "mission.stage", input: { deviceId: "device-a" } }, { method: "mission.upload", input: { deviceId: "device-a" } }, { method: "mission.start", input: { deviceId: "device-a" } }, { method: "mission.pause", input: { deviceId: "device-a" } }, { method: "mission.resume", input: { deviceId: "device-a" } }, { method: "mission.stop", input: { deviceId: "device-a" } },
       { method: "stream.start", input: { deviceId: "device-a" } }, { method: "stream.stop", input: { deviceId: "device-a" } }, { method: "stream.refresh", input: undefined }, { method: "stream.select", input: { deviceId: "device-a" } }, { method: "stream.clear", input: undefined },
+      { method: "photo.capture", input: { deviceId: "device-a" } }, { method: "photo.fetch", input: { deviceId: "device-a" } },
       { method: "settings.transmission.read", input: { deviceId: "device-a" } }, { method: "settings.transmission.write", input: { deviceId: "device-a", patch: { bandwidth: "BANDWIDTH_20MHZ" } } },
       { method: "settings.camera.read", input: { deviceId: "device-a" } }, { method: "settings.camera.write", input: { deviceId: "device-a", patch: { focusMode: "AUTO" } } },
       { method: "flight.request", input: { deviceId: "device-a", action: "takeoff" } }, { method: "flight.confirm", input: { deviceId: "device-a", confirmationId: "confirm-a" } }, { method: "flight.cancel", input: { deviceId: "device-a", confirmationId: "confirm-a" } },
@@ -67,6 +69,7 @@ describe("DesktopUiGateway", () => {
     expect(calls.map((call) => call.name)).toEqual([
       "refreshDeviceState", "measurePhoneLink", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",
       "stage", "upload", "start", "pause", "resume", "stop", "startStream", "stopStream", "refreshMedia", "selectVideo", "clearVideo",
+      "capturePhoto", "fetchPhoto",
       "readTransmissionSettings", "writeTransmissionSettings", "readCameraSettings", "writeCameraSettings", "requestFlightAction", "confirmFlightAction", "cancelFlightAction",
     ]);
 

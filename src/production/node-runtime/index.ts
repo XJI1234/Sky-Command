@@ -10,6 +10,7 @@ export interface NodeRelayOptions {
   readonly commandTimeoutMs: RelayLinkOptions["commandTimeoutMs"];
   readonly missionTimeoutMs: RelayLinkOptions["missionTimeoutMs"];
   readonly diagnosticSink?: RelayDiagnosticSink;
+  readonly onPhoto?: RelayLinkOptions["onPhoto"];
 }
 
 // Stryker disable next-line ObjectLiteral: ESM 静态调度器在转换测试模块重新导入前已创建；真实握手已验证其公开行为。
@@ -21,15 +22,17 @@ const scheduler: RelayLinkOptions["scheduler"] = Object.freeze({
 });
 
 function createRelay(options: NodeRelayOptions): RelayLinkInstance {
+  const { onPhoto, diagnosticSink, ...relayOptions } = options;
   return RelayLink.create({
-    ...options,
+    ...relayOptions,
     transport: NodeWebSocketRelayTransport.create(),
     scheduler,
     now: () => Date.now(),
     createConnectionId: randomUUID,
     createSessionId: () => randomUUID(),
     createCommandId: randomUUID,
-    diagnosticSink: options.diagnosticSink ?? NodeDiagnosticStore.create()
+    diagnosticSink: diagnosticSink ?? NodeDiagnosticStore.create(),
+    ...(onPhoto === undefined ? {} : { onPhoto }),
   });
 }
 

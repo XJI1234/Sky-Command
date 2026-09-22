@@ -5,6 +5,7 @@ import { CommandTracker, type CommandOutcome as TrackedCommandOutcome, type Time
 import { TelemetryIntake } from "./telemetry-intake/index.js";
 import { MissionSender, type MissionOutcome as SentMissionOutcome, type MissionPayload, type TimerScheduler as MissionTimerScheduler } from "./mission-sender/index.js";
 import { MissionPhaseIntake, type MissionPhase } from "./mission-phase-intake/index.js";
+import { MediaIntake, type MediaFile } from "./media-intake/index.js";
 
 export type { LinkProbeReport, ListenAddress, RelayConnection, RelayTransport };
 export type { MissionPayload } from "./mission-sender/index.js";
@@ -36,6 +37,7 @@ export interface RelayLinkSnapshot {
   readonly missionPhases: readonly RelayMissionPhaseSnapshot[];
   readonly pendingCommands: readonly Readonly<{ readonly deviceId: string; readonly commandId: string }>[];
   readonly pendingMissions: readonly Readonly<{ readonly deviceId: string; readonly missionId: string }>[];
+  readonly lastDisconnect: Readonly<{ readonly deviceId: string; readonly reason: string }> | null;
 }
 export type StartResult = Readonly<{ readonly ok: true; readonly value: Pick<RelayLinkSnapshot, "state" | "endpoint"> }> | Readonly<{ readonly ok: false; readonly error: Readonly<{ readonly code: string; readonly message: string }> }>;
 
@@ -53,6 +55,7 @@ export interface RelayLinkOptions {
   readonly createConnectionId: () => string;
   readonly createSessionId: (deviceId: string) => string;
   readonly createCommandId: () => string;
+  readonly onPhoto?: (deviceId: string, file: MediaFile) => boolean;
 }
 
 export interface RelayLinkInstance {
@@ -71,7 +74,7 @@ export interface RelayLinkInstance {
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const key = (connectionId: string, operationId: string): string => `${connectionId}\u0000${operationId}`;
 const frozen = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
-const MAX_QUEUED_DIAGNOSTIC_REPORTS = 8;
+const MAX_QUEUED_DIAGNOSTIC_REPORTS = 16;
 const commandFailure = (deviceId: string, commandId: string, detail: string): CommandOutcome => frozen({ deviceId, commandId, status: "rejected", detail });
 const missionFailure = (deviceId: string, missionId: string, detail: string): MissionOutcome => frozen({ deviceId, missionId, status: "rejected", detail });
 const copyProbeReport = (report: LinkProbeReport): LinkProbeReport => report.status === "measured"
@@ -89,7 +92,34 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
   const intake = TelemetryIntake.create(options.now === undefined ? {} : { now: options.now });
   const missionPhases = MissionPhaseIntake.create();
   const missions = MissionSender.create({ scheduler: options.scheduler, timeoutMs: options.missionTimeoutMs });
+  let currentMediaConnection: string | null = null;
+  const media = MediaIntake.create({
+    sink: {
+      begin: () => {
+        const device = currentMediaConnection === null ? null : deviceForConnection(currentMediaConnection);
+        currentMediaDevice = device?.deviceId ?? null;
+        return currentMediaDevice === null ? "rejected" : "accepted";
+      },
+      append: () => currentMediaDevice === null ? "rejected" : "accepted",
+      complete: (file) => {
+        const device = currentMediaDevice;
+        currentMediaDevice = null;
+        currentMediaConnection = null;
+        if (device === null || options.onPhoto === undefined) return "rejected";
+        try { return options.onPhoto(device, file) === true ? "accepted" : "rejected"; } catch { return "rejected"; }
+      },
+      abort: () => { currentMediaDevice = null; currentMediaConnection = null; }
+    },
+    results: {
+      send: (connectionId, frame) => {
+        const encoded = RelayFrameCodec.encode(frame);
+        if (encoded.ok) void server.send(connectionId, encoded.value);
+      }
+    }
+  });
+  let currentMediaDevice: string | null = null;
   const listeners = new Set<(snapshot: RelayLinkSnapshot) => void>();
+  let lastDisconnect: RelayLinkSnapshot["lastDisconnect"] = null;
   const ingressByConnection = new Map<string, string>();
   const commandWaiters = new Map<string, { readonly deviceId: string; readonly resolve: (outcome: CommandOutcome) => void }>();
   const persistedDiagnosticKeys = new Map<string, null>();
@@ -144,9 +174,9 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       return device ? [frozen({ deviceId: device.deviceId, commandId: value.commandId })] : [];
     }));
     const pendingMissions = Object.freeze(missions.snapshot().flatMap((value) => {
-      const device = deviceForConnection(value.connectionId); return device ? [frozen({ deviceId: device.deviceId, missionId: value.missionId })] : [];
+      const device = deviceForConnection(value.connectionId);       return device ? [frozen({ deviceId: device.deviceId, missionId: value.missionId })] : [];
     }));
-    return frozen({ state: serverSnapshot.state, endpoint: serverSnapshot.endpoint, devices, telemetry, missionPhases: phaseFacts, pendingCommands, pendingMissions });
+    return frozen({ state: serverSnapshot.state, endpoint: serverSnapshot.endpoint, devices, telemetry, missionPhases: phaseFacts, pendingCommands, pendingMissions, lastDisconnect });
   };
   const publish = (): void => {
     const value = snapshot();
@@ -171,11 +201,14 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       registry.register({ connectionId: event.connection.connectionId, deviceId: event.connection.deviceId!, sessionId: event.connection.sessionId! }); publish(); return;
     }
     if (event.kind === "connection-closed") {
+      const device = deviceForConnection(event.connectionId);
+      if (device !== null) lastDisconnect = frozen({ deviceId: device.deviceId, reason: event.reason });
       ingressByConnection.delete(event.connectionId);
       diagnosticQueues.delete(event.connectionId);
       registry.removeByConnection(event.connectionId); intake.removeConnection(event.connectionId); missionPhases.remove(event.connectionId);
       tracker.cancelConnection(event.connectionId, event.reason);
       missions.cancelConnection(event.connectionId, event.reason);
+      media.cancelConnection(event.connectionId, event.reason);
       publish(); return;
     }
     if (event.kind !== "frame") return;
@@ -187,6 +220,11 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     }
     if (event.frame.type === "command-result") { tracker.resolve({ connectionId: event.connectionId, commandId: event.frame.id, ok: event.frame.ok, detail: event.frame.detail, ...(event.frame.result === undefined ? {} : { result: event.frame.result }) }); return; }
     if (event.frame.type === "mission-result") { missions.acceptResult(event.connectionId, { missionId: event.frame.id, ok: event.frame.ok, detail: event.frame.detail }); }
+    if (event.frame.type === "media-begin" || event.frame.type === "media-chunk" || event.frame.type === "media-complete") {
+      currentMediaConnection = event.connectionId;
+      media.accept(event.connectionId, event.frame);
+      return;
+    }
     const diagnosticReport = event.frame;
     if (diagnosticReport.type === "diagnostic-report") {
       const device = deviceForConnection(event.connectionId);
@@ -242,8 +280,9 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     const encoded = RelayFrameCodec.encode(frame); if (!encoded.ok) return commandFailure(deviceId, commandId, "Command is invalid");
     const begun = tracker.begin({ connectionId: device.connectionId, commandId }); if (!begun.ok) return commandFailure(deviceId, commandId, "Command is already pending");
     const result = new Promise<CommandOutcome>((resolve) => { commandWaiters.set(key(device.connectionId, commandId), { deviceId, resolve }); });
-    const sent = await server.send(device.connectionId, encoded.value);
-    if (!sent.ok) tracker.cancelConnection(device.connectionId, "Command could not be sent");
+    void server.send(device.connectionId, encoded.value).then((sent) => {
+      if (!sent.ok) tracker.cancelConnection(device.connectionId, "Command could not be sent");
+    });
     return result;
   };
   const sendMission = async (deviceId: string, payload: MissionPayload): Promise<MissionOutcome> => {

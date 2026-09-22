@@ -267,7 +267,7 @@ describe("node websocket relay adapter contract", () => {
     expect(source).toContain("path: \"/relay\"");
   });
 
-  it("paired sockets that miss a pong are closed as peer-closed", async () => {
+  it("paired sockets that miss a pong are closed as keepalive-timeout", async () => {
     class PingSocket extends Socket {
       pings = 0;
       ping(): void { this.pings += 1; }
@@ -297,7 +297,7 @@ describe("node websocket relay adapter contract", () => {
     expect(socket.readyState).toBe(1);
     timers[0]!();
     expect(socket.readyState).toBe(3);
-    expect(reasons).toEqual(["peer-closed"]);
+    expect(reasons).toEqual(["keepalive-timeout"]);
     await listener.close();
   });
 

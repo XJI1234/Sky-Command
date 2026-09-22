@@ -70,7 +70,7 @@ describe("Electron 主进程图传装配（HTTP-FLV 单路径）", () => {
     const player = contract("src/modules/media-pipeline/video-player/CONTRACT.md");
     const workflow = contract("src/production/operation-workflow/CONTRACT.md");
 
-    expect(root).toContain("手机 DJI -> RTMP -> 电脑 Node Media Server -> 本机 HTTP-FLV -> flv.js");
+    expect(root).toContain("手机 DJI -> RTMP -> 电脑 Node Media Server -> 本机 HTTP-FLV -> mpegts.js");
     expect(application).not.toContain("application.lowLatency()");
     expect(gateway).not.toContain("webrtc.start");
     expect(shell).not.toContain("webrtc-* 短名");

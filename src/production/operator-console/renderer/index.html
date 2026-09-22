@@ -177,7 +177,8 @@
        overflow: hidden;
        text-overflow: ellipsis;
      }
-     .flight-panel-actions { min-height: 0; margin-top: 12px; overflow: hidden; }
+     .flight-panel-actions { min-height: 0; margin-top: 12px; overflow: hidden; display: grid; align-content: start; }
+     .photo-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 2px; }
      .flight-controls button[data-action] { min-width: 8.5em; }
      .flight-controls button[data-action="mission-start"],
      .flight-controls button[data-action="stream-start"] { min-width: 9.6em; }
@@ -382,6 +383,16 @@
               <div class="operation-action">
                 <button data-action="stream-stop">停止图传</button>
                 <p class="operation-feedback" data-operation-feedback="stream-stop" aria-live="polite"></p>
+              </div>
+            </div>
+            <div class="row photo-controls">
+              <div class="operation-action">
+                <button data-action="photo-capture">拍照</button>
+                <p class="operation-feedback" data-operation-feedback="photo-capture" aria-live="polite"></p>
+              </div>
+              <div class="operation-action">
+                <button data-action="photo-fetch">回传照片</button>
+                <p class="operation-feedback" data-operation-feedback="photo-fetch" aria-live="polite"></p>
               </div>
             </div>
           </div>

@@ -1,9 +1,10 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { expect, it } from "vitest";
 import { MissionSender } from "../src/modules/relay-link/mission-sender/index.js";
+import { ProtocolLimits } from "../src/modules/relay-link/protocol-core/index.js";
 
 it("mission-sender chunks bounded payloads without excessive overhead", async () => {
-  const bytes = new Uint8Array(48 * 1024 + 1);
+  const bytes = new Uint8Array(ProtocolLimits.maxMissionChunkBytes + 1);
   const digest = Array.from(sha256(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
   const sender = MissionSender.create({ scheduler: { setTimeout: () => 1, clearTimeout: () => undefined }, timeoutMs: 10_000 });
   const frames: unknown[] = [];

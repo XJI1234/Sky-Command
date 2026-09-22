@@ -128,15 +128,32 @@ describe("操作回调展示", () => {
     ].join("\n"));
   });
 
-  it("依赖调用异常时不把 DJI 调用状态伪装成确定未发出", () => {
-    const feedback = operationFeedback("flight-return-home", {
-      ok: false,
-      code: "DEPENDENCY_FAILURE",
+  it("拍照成功与原图落盘使用独立回执，不覆盖图传启停", () => {
+    expect(operationFeedback("photo-capture", { ok: true, code: "CAPTURED" })).toMatchObject({
+      source: "dji",
+      outcome: "accepted",
     });
-
-    expect(feedback.source).toBe("relay");
-    expect(feedback.outcome).toBe("unconfirmed");
-    expect(feedback.message).toContain("MSDK 回调：未确认");
-    expect(feedback.message).toContain("原始类型：无最终回调");
+    expect(operationFeedback("photo-capture", { ok: true, code: "CAPTURED" }).message).toContain("已拍下原图");
+    expect(operationFeedback("photo-fetch", { ok: true, code: "SUCCEEDED" }).message).toContain("原图已保存");
+    expect(operationFeedback("photo-capture", { ok: false, code: "PHOTO_ACTION_REJECTED", errorCode: "CAMERA_BUSY", errorDescription: "inner=Camera/StartShootPhoto:-1" }).message).toContain("错误码：CAMERA_BUSY");
+    expect(operationFeedback("photo-capture", { ok: false, code: "PHOTO_ACTION_REJECTED", errorCode: "CAMERA_BUSY", errorDescription: "inner=Camera/StartShootPhoto:-1" }).message).toContain("错误说明：inner=Camera/StartShootPhoto:-1");
+    expect(operationFeedback("photo-capture", {
+      ok: false,
+      code: "PHOTO_ACTION_REJECTED",
+      value: {
+        ok: false,
+        code: "PHOTO_ACTION_REJECTED",
+        platformError: { code: "CANNOT_START_TASK_ON_WEAK_GPS", description: "errorType=CORE; inner=CAMERA.StartShootPhoto:-472" },
+      },
+    }).message).toContain("错误码：CANNOT_START_TASK_ON_WEAK_GPS");
+    expect(operationFeedback("photo-capture", {
+      ok: false,
+      code: "PHOTO_ACTION_REJECTED",
+      platformError: { code: "CAMERA_MODE_NOT_PHOTO", description: "相机没有进入拍照模式" },
+    })).toEqual({
+      source: "relay",
+      outcome: "rejected",
+      message: "相机没有进入拍照模式，画面会恢复。图传没有停止。",
+    });
   });
 });

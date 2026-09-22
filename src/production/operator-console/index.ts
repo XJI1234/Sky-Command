@@ -300,6 +300,16 @@ const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean =
   const videoPhase = text(read(read(device, "video"), "phase"));
   return videoPhase === "ready" || videoPhase === "awaiting-playback" || videoPhase === "awaiting-ingest";
 };
+const photoIssueOf = (device: Record<string, unknown>): string | null => {
+  const connection = invocationConnection(device);
+  const msdk = read(connection, "msdk");
+  const sdkReady = msdk === undefined ? read(connection, "sdk") === "ready" : msdk === "ready";
+  if (!sdkReady) return "手机尚未就绪，无法拍照";
+  const camera = read(connection, "camera");
+  if (camera === "disconnected") return "主相机未连接，无法拍照";
+  if (camera !== "connected") return "主相机状态未知，无法拍照";
+  return null;
+};
 const reject = (reason: string): OperatorActionResult => freeze({ ok: false, reason });
 const accept = (): OperatorActionResult => freeze({ ok: true });
 const msdkInvocationIssue = (device: Record<string, unknown>): string | null => {
@@ -313,7 +323,7 @@ const deviceById = (view: OperatorView, deviceId: string | null): Record<string,
 const flightDevice = (view: OperatorView, action: string): OperatorActionResult | Record<string, unknown> => {
   if (view.workspace === "devices") return reject("请到飞行页执行任务");
   if (view.workspace === "routes") return reject("航线页不执行飞行或图传，请到飞行页操作");
-  const streamAction = action.startsWith("stream-");
+  const streamAction = action.startsWith("stream-") || action.startsWith("photo-");
   const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
   if (deviceId === null) return reject(streamAction ? "请选择用于图传的飞机" : "请选择用于执行任务的飞机");
   const device = deviceById(view, deviceId);
@@ -581,6 +591,10 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
     }
     if (name === "stream-stop" && streamSourceUnavailableOf(device)) return reject("图传源已断开，手机已自动停止图传");
     return accept();
+  }
+  if (name === "photo-capture" || name === "photo-fetch") {
+    const issue = photoIssueOf(device);
+    return issue === null ? accept() : reject(issue);
   }
   if (name === "flight-confirm" || name === "flight-cancel") return accept();
   if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing") {

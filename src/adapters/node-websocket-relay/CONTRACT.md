@@ -16,7 +16,7 @@ NodeWebSocketRelayTransport.create(options) -> RelayTransport
 
 `listen({host, port}, onConnection)` 仅在服务器报告监听后成功；绑定/启动失败返回稳定适配器错误。生产 `WebSocketServer` 只接受路径 `/relay`。监听器 `close` 幂等，并在停止接收连接后完成。
 
-每个客户端成为一个 `RelayConnection`：二进制数据复制为新的 `Uint8Array` 后才通知消息监听器；文本帧立即关闭连接，绝不被当作 UTF-8 协议输入。`send(bytes)` 复制后发送二进制帧，Socket 未打开或库报错时拒绝。`close` 幂等，只请求一次正常关闭；任意顺序的回调最多触发一次关闭通知。三类监听器均返回幂等退订函数，监听器异常不得影响清理或其他监听器。已打开的套接字必须按固定间隔发送 WebSocket ping；连续两次未收到 pong 时按 `peer-closed` 关闭，避免半死连接继续显示“手机已连接”。
+每个客户端成为一个 `RelayConnection`：二进制数据复制为新的 `Uint8Array` 后才通知消息监听器；文本帧立即关闭连接，绝不被当作 UTF-8 协议输入。`send(bytes)` 复制后发送二进制帧，Socket 未打开或库报错时拒绝。`close` 幂等，只请求一次正常关闭；任意顺序的回调最多触发一次关闭通知。三类监听器均返回幂等退订函数，监听器异常不得影响清理或其他监听器。已打开的套接字必须按固定间隔发送 WebSocket ping；连续两次未收到 pong 时按 `keepalive-timeout` 关闭，避免半死连接继续显示“手机已连接”。该原因不得伪装成 `peer-closed`。
 
 适配器还为已接受连接提供可选的 `probeLink()` 传输能力，仅供中继根模块做手机到电脑链路自检。一次调用只发一个带不可混淆载荷的 WebSocket 协议 `PING`，以对应载荷的 `PONG` 计算单次 RTT；它有独立的短超时，结果只能是已测量、超时或不可用。保活 PING 和诊断 PING 使用不同载荷并各自确认，任一诊断 PONG 都不得确认保活，反之亦然。单连接的并发探测合并为同一在途操作；关闭、会话替换和迟到 PONG 只结束或忽略该探测，绝不改变连接状态。此能力不发送中继协议帧、不进入命令队列，也不接触 DJI、RTMP、媒体播放或业务门禁。
 

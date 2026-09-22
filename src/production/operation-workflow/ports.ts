@@ -27,6 +27,14 @@ export type FlightControlPort = Pick<FlightControlInstance, "request" | "confirm
 /** Owns cached camera and transmission settings and delegates their device requests. */
 export type DeviceSettingsPort = Pick<DeviceSettingsPanelInstance, "snapshot" | "readTransmission" | "writeTransmission" | "readCamera" | "writeCamera">;
 
+/** Owns still-photo capture and original-photo fetch for the selected online phone. */
+export interface PhotoControlPort {
+  readonly capture: (deviceId: string) => Promise<unknown>;
+  readonly fetch: (deviceId: string) => Promise<unknown>;
+  readonly recordDisconnected: (deviceId: string) => unknown;
+  readonly subscribe: (listener: (snapshot: unknown) => void) => () => void;
+}
+
 /** Supplies the desktop facts needed by the hardware-readiness evaluator. */
 export interface HardwareReadinessPort {
   readonly lanAddressAvailable: boolean;
@@ -41,6 +49,7 @@ export interface OperationWorkflowDependencies {
   readonly mediaPipeline: MediaPipelinePort;
   readonly flightControl: FlightControlPort;
   readonly deviceSettings: DeviceSettingsPort;
+  readonly photoControl?: PhotoControlPort;
   readonly hardwareReadiness: HardwareReadinessPort;
   readonly now: () => number;
 }
@@ -48,4 +57,5 @@ export interface OperationWorkflowDependencies {
 export type WorkflowSubscriptionPort = Pick<RelayOperationsPort, "subscribe">
   | Pick<MissionControlPort, "subscribe">
   | Pick<LiveStreamControlPort, "subscribe">
-  | Pick<FlightControlPort, "subscribe">;
+  | Pick<FlightControlPort, "subscribe">
+  | Pick<PhotoControlPort, "subscribe">;

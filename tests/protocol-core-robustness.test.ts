@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { RelayFrameCodec, validate } from "../src/modules/relay-link/protocol-core/index.js";
+import { ProtocolLimits, RelayFrameCodec, validate } from "../src/modules/relay-link/protocol-core/index.js";
 
 const bytes = (source: string): Uint8Array => new TextEncoder().encode(source);
 const telemetry = (payload: unknown, capabilities: unknown = { kind: "object", fields: {} }) => ({ type: "telemetry" as const, payload, capabilities });
@@ -76,7 +76,7 @@ describe("relay-link/protocol-core robustness contract", () => {
     expect(validate(telemetry({ kind: "object", fields: { bad: unreadableKind } }))).toMatchObject({ ok: false, error: { code: "INVALID_FIELD" } });
     expect(validate(telemetry({ kind: "object", fields: unreadableFields }))).toMatchObject({ ok: false, error: { code: "INVALID_FIELD" } });
     expect(validate(telemetry({ kind: "array", values: [{ kind: "unknown" }] }))).toMatchObject({ ok: false, error: { code: "INVALID_JSON" } });
-    expect(validate(telemetry({ kind: "object", fields: { long: "a".repeat(65_537) } }))).toMatchObject({ ok: false, error: { code: "INVALID_JSON" } });
+    expect(validate(telemetry({ kind: "object", fields: { long: "a".repeat(ProtocolLimits.maxJsonStringCodePoints + 1) } }))).toMatchObject({ ok: false, error: { code: "INVALID_JSON" } });
   });
 
   it("covers parser arrays, numbers, incomplete strings, and object separators", () => {
