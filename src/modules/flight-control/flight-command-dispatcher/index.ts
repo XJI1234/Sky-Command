@@ -3,22 +3,25 @@ import type { FlightAction } from "../dangerous-action-confirm/index.js";
 export type { FlightAction } from "../dangerous-action-confirm/index.js";
 
 export type FlightCommandCode = "SUCCEEDED" | "PREFLIGHT_BLOCKED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "DEPENDENCY_FAILURE" | "OPERATION_IN_PROGRESS" | "INVALID_INPUT" | "DISPOSED" | "NO_PENDING_CONFIRMATION" | "CONFIRMATION_MISMATCH" | "CONFIRMATION_EXPIRED" | "CONFIGURATION_INVALID" | "ID_UNAVAILABLE";
+type FlightCommandName = "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing";
+type FlightCheckCode = Exclude<FlightCommandCode, "SUCCEEDED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "OPERATION_IN_PROGRESS">;
+type FlightCommandRequest = Readonly<{ readonly name: FlightCommandName; readonly fields: Readonly<{ readonly confirm: true }> }>;
 export interface FlightBlocker { readonly code: string; readonly message: string; }
 export interface FlightPlatformError { readonly code: string; readonly description: string; }
 export type FlightCommandCheck =
   | Readonly<{ readonly ok: true }>
-  | Readonly<{ readonly ok: false; readonly code: Exclude<FlightCommandCode, "SUCCEEDED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "OPERATION_IN_PROGRESS">; readonly blockers?: readonly FlightBlocker[]; readonly reason?: string }>;
+  | Readonly<{ readonly ok: false; readonly code: FlightCheckCode; readonly blockers?: readonly FlightBlocker[]; readonly reason?: string }>;
 export type FlightCommandResult = Readonly<{ readonly ok: boolean; readonly code: FlightCommandCode; readonly deviceId: string; readonly action: FlightAction; readonly blockers?: readonly FlightBlocker[]; readonly reason?: string; readonly platformError?: FlightPlatformError }>;
 export interface FlightRelay {
   readonly latestTelemetry: (deviceId: string) => unknown;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing"; readonly fields: Readonly<{ readonly confirm: true }> }>) => Promise<unknown>;
+  readonly sendCommand: (deviceId: string, request: FlightCommandRequest) => Promise<unknown>;
 }
 export interface FlightPreflight { readonly evaluateFlightAction: (input: unknown) => unknown; }
 export interface FlightCommandDispatcherDependencies { readonly relay: FlightRelay; readonly preflight: FlightPreflight; }
 export interface FlightCommandDispatcherInstance { readonly check: (deviceId: string, action: FlightAction) => FlightCommandCheck; readonly dispatch: (deviceId: string, action: FlightAction) => Promise<FlightCommandResult>; readonly isBusy: (deviceId: string) => boolean; }
 
 const actions: readonly FlightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"];
-const commands: Readonly<Record<FlightAction, "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing">> = Object.freeze({
+const commands: Readonly<Record<FlightAction, FlightCommandName>> = Object.freeze({
   takeoff: "flight.takeoff",
   land: "flight.land",
   "confirm-landing": "flight.confirm-landing",
@@ -29,7 +32,7 @@ const commands: Readonly<Record<FlightAction, "flight.takeoff" | "flight.land" |
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const validAction = (value: unknown): value is FlightAction => typeof value === "string" && actions.includes(value as FlightAction);
-const invalid = (code: Exclude<FlightCommandCode, "SUCCEEDED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "OPERATION_IN_PROGRESS"> = "INVALID_INPUT"): FlightCommandCheck => freeze({ ok: false as const, code });
+const invalid = (code: FlightCheckCode = "INVALID_INPUT"): FlightCommandCheck => freeze({ ok: false as const, code });
 const outcome = (ok: boolean, code: FlightCommandCode, deviceId: string, action: FlightAction, extra: Partial<Pick<FlightCommandResult, "blockers" | "reason" | "platformError">> = {}): FlightCommandResult => freeze({ ok, code, deviceId, action, ...extra });
 const attempt = <T>(run: () => T): Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false }> => { try { return freeze({ ok: true as const, value: run() }); } catch { return freeze({ ok: false as const }); } };
 const attemptAsync = async <T>(run: () => Promise<T>): Promise<Readonly<{ readonly ok: true; readonly value: T }> | Readonly<{ readonly ok: false }>> => {

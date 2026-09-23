@@ -92,18 +92,31 @@ function create(dependencies: Readonly<{ readonly port: DeviceSettingsPort }>): 
   const states = new Map<string, State>();
   const stateFor = (deviceId: string): State => states.get(deviceId) ?? initial(deviceId);
   const snapshot = (deviceId: string): DeviceSettingsSnapshot => { const s = stateFor(deviceId); return freeze({ deviceId: s.deviceId, transmission: s.transmission === null ? null : freeze({ ...s.transmission }), camera: s.camera === null ? null : freeze({ ...s.camera }), transmissionPending: s.transmissionPending, cameraPending: s.cameraPending, lastFailure: s.lastFailure }); };
+  const updateState = (deviceId: string, state: State, domain: Domain, pending: boolean, change: Partial<State>): void => {
+    states.set(deviceId, { ...state, ...(domain === "transmission" ? { transmissionPending: pending } : { cameraPending: pending }), ...change });
+  };
   const run = async <T>(deviceId: string, domain: Domain, call: () => Promise<PortResult<T>>, copy: (value: unknown) => T | null): Promise<DeviceSettingsResult> => {
     if (!validId(deviceId)) return result(domain, "invalid-device");
     const state = stateFor(deviceId); const pending = domain === "transmission" ? state.transmissionPending : state.cameraPending;
     if (pending) return result(domain, "busy");
-    states.set(deviceId, { ...state, ...(domain === "transmission" ? { transmissionPending: true } : { cameraPending: true }), lastFailure: null });
+    updateState(deviceId, state, domain, true, { lastFailure: null });
     try {
       const outcome = await call();
-      if (!outcome.ok) { states.set(deviceId, { ...stateFor(deviceId), ...(domain === "transmission" ? { transmissionPending: false } : { cameraPending: false }), lastFailure: outcome.reason }); return result(domain, outcome.reason); }
+      if (!outcome.ok) {
+        updateState(deviceId, stateFor(deviceId), domain, false, { lastFailure: outcome.reason });
+        return result(domain, outcome.reason);
+      }
       const value = copy(outcome.value);
-      if (value === null) { states.set(deviceId, { ...stateFor(deviceId), ...(domain === "transmission" ? { transmissionPending: false } : { cameraPending: false }), lastFailure: "invalid-result" }); return result(domain, "invalid-result"); }
-      states.set(deviceId, { ...stateFor(deviceId), ...(domain === "transmission" ? { transmission: value as TransmissionSettings, transmissionPending: false } : { camera: value as CameraSettings, cameraPending: false }), lastFailure: null }); return result(domain);
-    } catch { states.set(deviceId, { ...stateFor(deviceId), ...(domain === "transmission" ? { transmissionPending: false } : { cameraPending: false }), lastFailure: "adapter-failed" }); return result(domain, "adapter-failed"); }
+      if (value === null) {
+        updateState(deviceId, stateFor(deviceId), domain, false, { lastFailure: "invalid-result" });
+        return result(domain, "invalid-result");
+      }
+      updateState(deviceId, stateFor(deviceId), domain, false, domain === "transmission" ? { transmission: value as TransmissionSettings, lastFailure: null } : { camera: value as CameraSettings, lastFailure: null });
+      return result(domain);
+    } catch {
+      updateState(deviceId, stateFor(deviceId), domain, false, { lastFailure: "adapter-failed" });
+      return result(domain, "adapter-failed");
+    }
   };
   return freeze({ snapshot, readTransmission: (id) => run(id, "transmission", () => dependencies.port.readTransmission(id), copyTransmission), writeTransmission: (id, patch) => validTransmissionPatch(patch) ? run(id, "transmission", () => dependencies.port.writeTransmission(id, freeze({ ...patch })), copyTransmission) : Promise.resolve(result("transmission", validId(id) ? "invalid-patch" : "invalid-device")), readCamera: (id) => run(id, "camera", () => dependencies.port.readCamera(id), copyCamera), writeCamera: (id, patch) => validCameraPatch(patch) ? run(id, "camera", () => dependencies.port.writeCamera(id, freeze({ ...patch })), copyCamera) : Promise.resolve(result("camera", validId(id) ? "invalid-patch" : "invalid-device")) });
 }

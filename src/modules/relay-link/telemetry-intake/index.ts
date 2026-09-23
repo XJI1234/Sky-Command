@@ -16,24 +16,33 @@ export interface TelemetryIntakeInstance {
 const invalid = <T = never>(): TelemetryResult<T> => Object.freeze({ ok: false as const, error: Object.freeze({ code: "INVALID_TELEMETRY" as const, message: "Telemetry is invalid" }) });
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 
+interface TelemetryFields { readonly connectionId: unknown; readonly payload: unknown; readonly capabilities: unknown; }
+
+function readTelemetryFields(input: unknown): TelemetryFields | null {
+  try {
+    const record = input as Record<string, unknown>;
+    return { connectionId: record.connectionId, payload: record.payload, capabilities: record.capabilities };
+  } catch {
+    return null;
+  }
+}
+
 function create(options: TelemetryIntakeOptions = {}): TelemetryIntakeInstance {
   let current: readonly TelemetrySnapshot[] = Object.freeze([]);
   const listeners = new Set<(snapshot: TelemetrySnapshot) => void>();
   const publish = (value: TelemetrySnapshot): void => { for (const listener of [...listeners]) { try { listener(value); } catch { /* listener isolation is intentional */ } } };
   const accept = (input: TelemetryInput): TelemetryResult<TelemetrySnapshot> => {
-    let connectionId: unknown, payload: unknown, capabilities: unknown;
-    try { connectionId = (input as unknown as Record<string, unknown>).connectionId; payload = (input as unknown as Record<string, unknown>).payload; capabilities = (input as unknown as Record<string, unknown>).capabilities; }
-    catch { return invalid(); }
-    if (!validId(connectionId)) return invalid();
-    const checked = validate({ type: "telemetry", payload: payload as JsonObject, capabilities: capabilities as JsonObject });
+    const fields = readTelemetryFields(input);
+    if (fields === null || !validId(fields.connectionId)) return invalid();
+    const checked = validate({ type: "telemetry", payload: fields.payload as JsonObject, capabilities: fields.capabilities as JsonObject });
     if (!checked.ok || checked.value.type !== "telemetry") return invalid();
     let receivedAtMs: number | null = null;
     try {
       const now = options.now?.();
       if (typeof now === "number" && Number.isFinite(now) && now >= 0) receivedAtMs = now;
     } catch { /* receipt time is optional display metadata */ }
-    const value = Object.freeze({ connectionId, payload: checked.value.payload, capabilities: checked.value.capabilities, receivedAtMs });
-    const index = current.findIndex((snapshot) => snapshot.connectionId === connectionId);
+    const value = Object.freeze({ connectionId: fields.connectionId, payload: checked.value.payload, capabilities: checked.value.capabilities, receivedAtMs });
+    const index = current.findIndex((snapshot) => snapshot.connectionId === fields.connectionId);
     current = Object.freeze(index < 0 ? [...current, value] : [...current.slice(0, index), value, ...current.slice(index + 1)]);
     publish(value);
     return Object.freeze({ ok: true as const, value });

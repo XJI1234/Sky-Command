@@ -37,8 +37,13 @@ const copyResult = (value: unknown): JsonObject | null | undefined => {
   if (!normalized.ok) return null;
   return normalized.value;
 };
-const readResolution = (input: Record<string, unknown>): Readonly<{ readonly ok: unknown; readonly detail: unknown; readonly result: unknown }> | null => {
-  try { return Object.freeze({ ok: input.ok, detail: input.detail, result: input.result }); } catch { return null; }
+const readResolution = (input: unknown): Readonly<{ readonly ok: unknown; readonly detail: unknown; readonly result: unknown }> | null => {
+  try {
+    const record = input as Record<string, unknown>;
+    return Object.freeze({ ok: record.ok, detail: record.detail, result: record.result });
+  } catch {
+    return null;
+  }
 };
 
 function create(options: CommandTrackerOptions): CommandTrackerInstance {
@@ -78,7 +83,7 @@ function create(options: CommandTrackerOptions): CommandTrackerInstance {
   };
   const resolve = (input: CommandResolve): TrackerResult<CommandOutcome> => {
     const checked = readBegin(input);
-    const raw = readResolution(input as unknown as Record<string, unknown>);
+    const raw = readResolution(input);
     if (!checked.ok || raw === null || typeof raw.ok !== "boolean" || typeof raw.detail !== "string") return rejected("INVALID_COMMAND", "Command result is invalid");
     const result = copyResult(raw.result);
     if (!validDetail(raw.detail) || result === null) return rejected("INVALID_COMMAND", "Command result is invalid");
