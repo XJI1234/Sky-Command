@@ -91,10 +91,32 @@ function create(dependencies: OperationWorkflowDependencies) {
   };
   const pendingFlightAction = (deviceId: string): unknown => { try { return dependencies.flightControl.get(deviceId); } catch { return null; } };
   const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
-  const snapshot = () => WorkflowSnapshot.create({ devices: deviceRecords().map(({ deviceId }) => {
-    const rawTelemetry = telemetryRaw(deviceId);
-    return freeze({ deviceId, connectionEpoch: connectionEpochs.get(deviceId) ?? 0, telemetry: telemetryForDisplay(deviceId, rawTelemetry), controlTelemetry: controlTelemetryRaw(deviceId), assignment: freeze({ routeId: assignments.get(deviceId), routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null }), mission: task(deviceId), stream: stream(deviceId), settings: settings(deviceId), pendingFlightAction: pendingFlightAction(deviceId), landingIntent: landingIntents.get(deviceId) });
-  }), routes: routes(), selectedRouteId, selectedVideoDeviceId, revision, media: media(), disposed });
+  const snapshot = () => WorkflowSnapshot.create({
+    devices: deviceRecords().map(({ deviceId }) => {
+      const rawTelemetry = telemetryRaw(deviceId);
+      return freeze({
+        deviceId,
+        connectionEpoch: connectionEpochs.get(deviceId) ?? 0,
+        telemetry: telemetryForDisplay(deviceId, rawTelemetry),
+        controlTelemetry: controlTelemetryRaw(deviceId),
+        assignment: freeze({
+          routeId: assignments.get(deviceId),
+          routeName: read(route(assignments.get(deviceId) ?? ""), "displayName") ?? null,
+        }),
+        mission: task(deviceId),
+        stream: stream(deviceId),
+        settings: settings(deviceId),
+        pendingFlightAction: pendingFlightAction(deviceId),
+        landingIntent: landingIntents.get(deviceId),
+      });
+    }),
+    routes: routes(),
+    selectedRouteId,
+    selectedVideoDeviceId,
+    revision,
+    media: media(),
+    disposed,
+  });
   const publish = (): void => {
     revision += 1;
     if (listeners.size === 0) return;

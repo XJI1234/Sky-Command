@@ -318,16 +318,81 @@ const commandDetail = (value: unknown): string | undefined => {
   return typeof detail === "string" && detail.trim().length > 0 && Array.from(detail).length <= 256 && !/[\p{Cc}]/u.test(detail) ? detail : undefined;
 };
 
-function project(deviceId: string, source: unknown): DesktopRelayTelemetry | null {
-  const raw = record(source);
-  if (raw === null || !validId(deviceId)) return null;
-  const payload = fieldsOf(read(raw, "payload"));
-  const capabilities = fieldsOf(read(raw, "capabilities"));
-  if (payload === null || capabilities === null) return null;
-  const outputPayload: MutableDesktopRelayTelemetryPayload = {};
-  const outputCapabilities: { liveVideo?: boolean; waypointMission?: boolean; waypointMissionSupport?: "supported" | "unsupported" } = {};
-  const telemetrySequence = positiveIntegerValue(payload.telemetrySequence); if (telemetrySequence !== undefined) outputPayload.telemetrySequence = telemetrySequence;
-  const deviceRevision = positiveIntegerValue(payload.deviceRevision); if (deviceRevision !== undefined) outputPayload.deviceRevision = deviceRevision;
+function projectVideoFacts(payload: UnknownRecord, outputPayload: MutableDesktopRelayTelemetryPayload): void {
+  const liveStreaming = boolean(payload.liveStreaming);
+  const liveStreamNotice = safeText(string(payload.liveStreamNotice), 256);
+  if (liveStreamNotice !== undefined) outputPayload.liveStreamNotice = liveStreamNotice;
+  const liveStreamRuntimeErrorCode = safeText(string(payload.liveStreamRuntimeErrorCode), 128);
+  const liveStreamRuntimeErrorDescription = safeText(string(payload.liveStreamRuntimeErrorDescription), 512);
+  if (liveStreamRuntimeErrorCode !== undefined && liveStreamRuntimeErrorDescription !== undefined) {
+    outputPayload.liveStreamRuntimeErrorCode = liveStreamRuntimeErrorCode;
+    outputPayload.liveStreamRuntimeErrorDescription = liveStreamRuntimeErrorDescription;
+  }
+  if (liveStreaming !== undefined) {
+    outputPayload.liveStreaming = liveStreaming;
+    if (liveStreaming) {
+      const liveResolution = safeText(string(payload.liveResolution)); if (liveResolution !== undefined) outputPayload.liveResolution = liveResolution;
+      const liveFps = boundedNumber(payload.liveFps, 0, 240); if (liveFps !== undefined) outputPayload.liveFps = liveFps;
+      const liveVideoBitrateKbps = boundedNumber(payload.liveVideoBitrateKbps, 0, 100_000); if (liveVideoBitrateKbps !== undefined) outputPayload.liveVideoBitrateKbps = liveVideoBitrateKbps;
+      const liveRttMillis = boundedInteger(payload.liveRttMillis, 0, 60_000); if (liveRttMillis !== undefined) outputPayload.liveRttMillis = liveRttMillis;
+      const livePacketLoss = boundedInteger(payload.livePacketLoss, 0, 2_147_483_647); if (livePacketLoss !== undefined) outputPayload.livePacketLoss = livePacketLoss;
+      const livePacketCacheLength = boundedInteger(payload.livePacketCacheLength, 0, 2_147_483_647); if (livePacketCacheLength !== undefined) outputPayload.livePacketCacheLength = livePacketCacheLength;
+    }
+  }
+  const cameraFrameGeneration = nonNegativeIntegerValue(payload.cameraFrameGeneration);
+  if (cameraFrameGeneration !== undefined) outputPayload.cameraFrameGeneration = cameraFrameGeneration;
+  const cameraFrameStateValue = cameraFrameObservationState(payload.cameraFrameState);
+  if (cameraFrameStateValue !== undefined) outputPayload.cameraFrameState = cameraFrameStateValue;
+  const cameraFrameCount = nonNegativeIntegerValue(payload.cameraFrameCount);
+  if (cameraFrameCount !== undefined) outputPayload.cameraFrameCount = cameraFrameCount;
+  // A zero-receipt generation cannot honestly carry a previous frame's metadata. Keep
+  // only independently meaningful generation/state facts rather than project stale data.
+  if (cameraFrameCount !== undefined && cameraFrameCount > 0) {
+    const cameraFrameLastAgeMillis = nonNegativeIntegerValue(payload.cameraFrameLastAgeMillis);
+    if (cameraFrameLastAgeMillis !== undefined) outputPayload.cameraFrameLastAgeMillis = cameraFrameLastAgeMillis;
+    const cameraFrameCodecValue = cameraFrameCodec(payload.cameraFrameCodec);
+    if (cameraFrameCodecValue !== undefined) outputPayload.cameraFrameCodec = cameraFrameCodecValue;
+    const cameraFrameWidth = boundedInteger(payload.cameraFrameWidth, 1, 16_384);
+    if (cameraFrameWidth !== undefined) outputPayload.cameraFrameWidth = cameraFrameWidth;
+    const cameraFrameHeight = boundedInteger(payload.cameraFrameHeight, 1, 16_384);
+    if (cameraFrameHeight !== undefined) outputPayload.cameraFrameHeight = cameraFrameHeight;
+    const cameraFrameRate = boundedInteger(payload.cameraFrameRate, 1, 240);
+    if (cameraFrameRate !== undefined) outputPayload.cameraFrameRate = cameraFrameRate;
+  }
+}
+
+function projectMissionFacts(payload: UnknownRecord, outputPayload: MutableDesktopRelayTelemetryPayload): void {
+  const missionExecution = string(payload.missionExecution);
+  if (missionExecution === "NOT_STARTED" || missionExecution === "STARTING" || missionExecution === "EXECUTING" ||
+      missionExecution === "PAUSED" || missionExecution === "STOPPING" || missionExecution === "FINISHED" || missionExecution === "FAILED") {
+    outputPayload.missionExecution = missionExecution;
+  }
+  const missionDjiExecutionState = string(payload.missionDjiExecutionState);
+  if (missionDjiExecutionState === "IDLE" || missionDjiExecutionState === "READY" || missionDjiExecutionState === "UPLOADING" ||
+      missionDjiExecutionState === "PREPARING" || missionDjiExecutionState === "RECOVERING" || missionDjiExecutionState === "ENTER_WAYLINE" ||
+      missionDjiExecutionState === "EXECUTING" || missionDjiExecutionState === "PAUSED" || missionDjiExecutionState === "INTERRUPTED" ||
+      missionDjiExecutionState === "FINISHED" || missionDjiExecutionState === "RETURN_TO_START_POINT" || missionDjiExecutionState === "DISCONNECTED" ||
+      missionDjiExecutionState === "NOT_SUPPORTED" || missionDjiExecutionState === "UNKNOWN") {
+    outputPayload.missionDjiExecutionState = missionDjiExecutionState;
+  }
+  const missionUploadProgress = boundedInteger(payload.missionUploadProgress, 0, 100); if (missionUploadProgress !== undefined) outputPayload.missionUploadProgress = missionUploadProgress;
+  const missionFileName = string(payload.missionFileName); if (validMissionFileName(missionFileName)) outputPayload.missionFileName = missionFileName;
+  const waylineExecutingMissionFileName = string(payload.waylineExecutingMissionFileName); if (validExecutingMissionFileName(waylineExecutingMissionFileName)) outputPayload.waylineExecutingMissionFileName = waylineExecutingMissionFileName;
+  const waylineId = boundedInteger(payload.waylineId, 0, 10_000); if (waylineId !== undefined) outputPayload.waylineId = waylineId;
+  const currentWaypointIndex = boundedInteger(payload.currentWaypointIndex, 0, 100_000); if (currentWaypointIndex !== undefined) outputPayload.currentWaypointIndex = currentWaypointIndex;
+  const waypointActionGroup = boundedInteger(payload.waypointActionGroup, 0, 100_000); if (waypointActionGroup !== undefined) outputPayload.waypointActionGroup = waypointActionGroup;
+  const waypointActionId = boundedInteger(payload.waypointActionId, 0, 100_000); if (waypointActionId !== undefined) outputPayload.waypointActionId = waypointActionId;
+  const waypointActionPhase = string(payload.waypointActionPhase);
+  if (waypointActionPhase === "START" || waypointActionPhase === "FINISH") outputPayload.waypointActionPhase = waypointActionPhase;
+  const waypointActionErrorCode = safeText(string(payload.waypointActionErrorCode)); if (waypointActionErrorCode !== undefined) outputPayload.waypointActionErrorCode = waypointActionErrorCode;
+  const waypointActionErrorDescription = safeText(string(payload.waypointActionErrorDescription), 512); if (waypointActionErrorDescription !== undefined) outputPayload.waypointActionErrorDescription = waypointActionErrorDescription;
+  const waylineInterruptErrorCode = safeText(string(payload.waylineInterruptErrorCode)); if (waylineInterruptErrorCode !== undefined) outputPayload.waylineInterruptErrorCode = waylineInterruptErrorCode;
+  const waylineInterruptErrorDescription = safeText(string(payload.waylineInterruptErrorDescription), 512); if (waylineInterruptErrorDescription !== undefined) outputPayload.waylineInterruptErrorDescription = waylineInterruptErrorDescription;
+  const missionRevision = positiveIntegerValue(payload.missionRevision); if (missionRevision !== undefined) outputPayload.missionRevision = missionRevision;
+  const missionDeviceGeneration = nonNegativeIntegerValue(payload.missionDeviceGeneration); if (missionDeviceGeneration !== undefined) outputPayload.missionDeviceGeneration = missionDeviceGeneration;
+}
+
+function projectDeviceFacts(payload: UnknownRecord, outputPayload: MutableDesktopRelayTelemetryPayload): void {
   const sdk = sdkAvailability(payload.sdkAvailability);
   if (sdk !== undefined) {
     outputPayload.sdkAvailability = sdk;
@@ -375,46 +440,20 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
     outputPayload.longitude = longitudeValue;
   }
   const altitudeMeters = finiteNumber(payload.altitudeMeters); if (altitudeMeters !== undefined) outputPayload.altitudeMeters = altitudeMeters;
-  const liveStreaming = boolean(payload.liveStreaming);
-  const liveStreamNotice = safeText(string(payload.liveStreamNotice), 256);
-  if (liveStreamNotice !== undefined) outputPayload.liveStreamNotice = liveStreamNotice;
-  const liveStreamRuntimeErrorCode = safeText(string(payload.liveStreamRuntimeErrorCode), 128);
-  const liveStreamRuntimeErrorDescription = safeText(string(payload.liveStreamRuntimeErrorDescription), 512);
-  if (liveStreamRuntimeErrorCode !== undefined && liveStreamRuntimeErrorDescription !== undefined) {
-    outputPayload.liveStreamRuntimeErrorCode = liveStreamRuntimeErrorCode;
-    outputPayload.liveStreamRuntimeErrorDescription = liveStreamRuntimeErrorDescription;
-  }
-  if (liveStreaming !== undefined) {
-    outputPayload.liveStreaming = liveStreaming;
-    if (liveStreaming) {
-      const liveResolution = safeText(string(payload.liveResolution)); if (liveResolution !== undefined) outputPayload.liveResolution = liveResolution;
-      const liveFps = boundedNumber(payload.liveFps, 0, 240); if (liveFps !== undefined) outputPayload.liveFps = liveFps;
-      const liveVideoBitrateKbps = boundedNumber(payload.liveVideoBitrateKbps, 0, 100_000); if (liveVideoBitrateKbps !== undefined) outputPayload.liveVideoBitrateKbps = liveVideoBitrateKbps;
-      const liveRttMillis = boundedInteger(payload.liveRttMillis, 0, 60_000); if (liveRttMillis !== undefined) outputPayload.liveRttMillis = liveRttMillis;
-      const livePacketLoss = boundedInteger(payload.livePacketLoss, 0, 2_147_483_647); if (livePacketLoss !== undefined) outputPayload.livePacketLoss = livePacketLoss;
-      const livePacketCacheLength = boundedInteger(payload.livePacketCacheLength, 0, 2_147_483_647); if (livePacketCacheLength !== undefined) outputPayload.livePacketCacheLength = livePacketCacheLength;
-    }
-  }
-  const cameraFrameGeneration = nonNegativeIntegerValue(payload.cameraFrameGeneration);
-  if (cameraFrameGeneration !== undefined) outputPayload.cameraFrameGeneration = cameraFrameGeneration;
-  const cameraFrameStateValue = cameraFrameObservationState(payload.cameraFrameState);
-  if (cameraFrameStateValue !== undefined) outputPayload.cameraFrameState = cameraFrameStateValue;
-  const cameraFrameCount = nonNegativeIntegerValue(payload.cameraFrameCount);
-  if (cameraFrameCount !== undefined) outputPayload.cameraFrameCount = cameraFrameCount;
-  // A zero-receipt generation cannot honestly carry a previous frame's metadata. Keep
-  // only independently meaningful generation/state facts rather than project stale data.
-  if (cameraFrameCount !== undefined && cameraFrameCount > 0) {
-    const cameraFrameLastAgeMillis = nonNegativeIntegerValue(payload.cameraFrameLastAgeMillis);
-    if (cameraFrameLastAgeMillis !== undefined) outputPayload.cameraFrameLastAgeMillis = cameraFrameLastAgeMillis;
-    const cameraFrameCodecValue = cameraFrameCodec(payload.cameraFrameCodec);
-    if (cameraFrameCodecValue !== undefined) outputPayload.cameraFrameCodec = cameraFrameCodecValue;
-    const cameraFrameWidth = boundedInteger(payload.cameraFrameWidth, 1, 16_384);
-    if (cameraFrameWidth !== undefined) outputPayload.cameraFrameWidth = cameraFrameWidth;
-    const cameraFrameHeight = boundedInteger(payload.cameraFrameHeight, 1, 16_384);
-    if (cameraFrameHeight !== undefined) outputPayload.cameraFrameHeight = cameraFrameHeight;
-    const cameraFrameRate = boundedInteger(payload.cameraFrameRate, 1, 240);
-    if (cameraFrameRate !== undefined) outputPayload.cameraFrameRate = cameraFrameRate;
-  }
+}
+
+function project(deviceId: string, source: unknown): DesktopRelayTelemetry | null {
+  const raw = record(source);
+  if (raw === null || !validId(deviceId)) return null;
+  const payload = fieldsOf(read(raw, "payload"));
+  const capabilities = fieldsOf(read(raw, "capabilities"));
+  if (payload === null || capabilities === null) return null;
+  const outputPayload: MutableDesktopRelayTelemetryPayload = {};
+  const outputCapabilities: { liveVideo?: boolean; waypointMission?: boolean; waypointMissionSupport?: "supported" | "unsupported" } = {};
+  const telemetrySequence = positiveIntegerValue(payload.telemetrySequence); if (telemetrySequence !== undefined) outputPayload.telemetrySequence = telemetrySequence;
+  const deviceRevision = positiveIntegerValue(payload.deviceRevision); if (deviceRevision !== undefined) outputPayload.deviceRevision = deviceRevision;
+  projectDeviceFacts(payload, outputPayload);
+  projectVideoFacts(payload, outputPayload);
   const gpsSignalLevel = safeText(string(payload.gpsSignalLevel)); if (gpsSignalLevel !== undefined) outputPayload.gpsSignalLevel = gpsSignalLevel;
   const gpsSatelliteCount = nonNegativeIntegerValue(payload.gpsSatelliteCount); if (gpsSatelliteCount !== undefined) outputPayload.gpsSatelliteCount = gpsSatelliteCount;
   const visionSensorUsed = boolean(payload.visionSensorUsed); if (visionSensorUsed !== undefined) outputPayload.visionSensorUsed = visionSensorUsed;
@@ -424,25 +463,7 @@ function project(deviceId: string, source: unknown): DesktopRelayTelemetry | nul
   const landingConfirmationNeeded = boolean(payload.landingConfirmationNeeded); if (landingConfirmationNeeded !== undefined) outputPayload.landingConfirmationNeeded = landingConfirmationNeeded;
   const takeoffFailureError = safeText(string(payload.takeoffFailureError)); if (takeoffFailureError !== undefined) outputPayload.takeoffFailureError = takeoffFailureError;
   const motorStartFailureError = safeText(string(payload.motorStartFailureError)); if (motorStartFailureError !== undefined) outputPayload.motorStartFailureError = motorStartFailureError;
-  const missionExecution = string(payload.missionExecution);
-  if (missionExecution === "NOT_STARTED" || missionExecution === "STARTING" || missionExecution === "EXECUTING" || missionExecution === "PAUSED" || missionExecution === "STOPPING" || missionExecution === "FINISHED" || missionExecution === "FAILED") outputPayload.missionExecution = missionExecution;
-  const missionDjiExecutionState = string(payload.missionDjiExecutionState);
-  if (missionDjiExecutionState === "IDLE" || missionDjiExecutionState === "READY" || missionDjiExecutionState === "UPLOADING" || missionDjiExecutionState === "PREPARING" || missionDjiExecutionState === "RECOVERING" || missionDjiExecutionState === "ENTER_WAYLINE" || missionDjiExecutionState === "EXECUTING" || missionDjiExecutionState === "PAUSED" || missionDjiExecutionState === "INTERRUPTED" || missionDjiExecutionState === "FINISHED" || missionDjiExecutionState === "RETURN_TO_START_POINT" || missionDjiExecutionState === "DISCONNECTED" || missionDjiExecutionState === "NOT_SUPPORTED" || missionDjiExecutionState === "UNKNOWN") outputPayload.missionDjiExecutionState = missionDjiExecutionState;
-  const missionUploadProgress = boundedInteger(payload.missionUploadProgress, 0, 100); if (missionUploadProgress !== undefined) outputPayload.missionUploadProgress = missionUploadProgress;
-  const missionFileName = string(payload.missionFileName); if (validMissionFileName(missionFileName)) outputPayload.missionFileName = missionFileName;
-  const waylineExecutingMissionFileName = string(payload.waylineExecutingMissionFileName); if (validExecutingMissionFileName(waylineExecutingMissionFileName)) outputPayload.waylineExecutingMissionFileName = waylineExecutingMissionFileName;
-  const waylineId = boundedInteger(payload.waylineId, 0, 10_000); if (waylineId !== undefined) outputPayload.waylineId = waylineId;
-  const currentWaypointIndex = boundedInteger(payload.currentWaypointIndex, 0, 100_000); if (currentWaypointIndex !== undefined) outputPayload.currentWaypointIndex = currentWaypointIndex;
-  const waypointActionGroup = boundedInteger(payload.waypointActionGroup, 0, 100_000); if (waypointActionGroup !== undefined) outputPayload.waypointActionGroup = waypointActionGroup;
-  const waypointActionId = boundedInteger(payload.waypointActionId, 0, 100_000); if (waypointActionId !== undefined) outputPayload.waypointActionId = waypointActionId;
-  const waypointActionPhase = string(payload.waypointActionPhase);
-  if (waypointActionPhase === "START" || waypointActionPhase === "FINISH") outputPayload.waypointActionPhase = waypointActionPhase;
-  const waypointActionErrorCode = safeText(string(payload.waypointActionErrorCode)); if (waypointActionErrorCode !== undefined) outputPayload.waypointActionErrorCode = waypointActionErrorCode;
-  const waypointActionErrorDescription = safeText(string(payload.waypointActionErrorDescription), 512); if (waypointActionErrorDescription !== undefined) outputPayload.waypointActionErrorDescription = waypointActionErrorDescription;
-  const waylineInterruptErrorCode = safeText(string(payload.waylineInterruptErrorCode)); if (waylineInterruptErrorCode !== undefined) outputPayload.waylineInterruptErrorCode = waylineInterruptErrorCode;
-  const waylineInterruptErrorDescription = safeText(string(payload.waylineInterruptErrorDescription), 512); if (waylineInterruptErrorDescription !== undefined) outputPayload.waylineInterruptErrorDescription = waylineInterruptErrorDescription;
-  const missionRevision = positiveIntegerValue(payload.missionRevision); if (missionRevision !== undefined) outputPayload.missionRevision = missionRevision;
-  const missionDeviceGeneration = nonNegativeIntegerValue(payload.missionDeviceGeneration); if (missionDeviceGeneration !== undefined) outputPayload.missionDeviceGeneration = missionDeviceGeneration;
+  projectMissionFacts(payload, outputPayload);
   const liveVideo = boolean(capabilities.liveVideo); if (liveVideo !== undefined) outputCapabilities.liveVideo = liveVideo;
   const waypointMission = boolean(capabilities.waypointMission); if (waypointMission !== undefined) outputCapabilities.waypointMission = waypointMission;
   const support = string(capabilities.waypointMissionSupport); if (support === "SUPPORTED") outputCapabilities.waypointMissionSupport = "supported"; else if (support === "UNSUPPORTED") outputCapabilities.waypointMissionSupport = "unsupported";

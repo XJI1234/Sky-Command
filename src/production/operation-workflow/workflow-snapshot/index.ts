@@ -45,6 +45,8 @@ const poseNumber = (value: unknown): number | null => typeof value === "number" 
 const safeText = (value: unknown, maximumCodePoints = 128): string | null => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maximumCodePoints && !/[\p{Cc}]/u.test(value) ? value : null;
 const boundedInteger = (value: unknown, minimum: number, maximum: number): number | null => typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : null;
 const boundedNumber = (value: unknown, minimum: number, maximum: number): number | null => typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum ? value : null;
+const flightBoolean = (payload: unknown, key: string, available: boolean): boolean | null =>
+  available && typeof read(payload, key) === "boolean" ? read(payload, key) as boolean : null;
 const pose = (payload: unknown): Readonly<{ readonly latitude: number | null; readonly longitude: number | null; readonly altitudeMeters: number | null }> | null => {
   const latitude = poseNumber(read(payload, "latitude"));
   const longitude = poseNumber(read(payload, "longitude"));
@@ -119,15 +121,15 @@ const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
     remoteControllerModel: safeText(read(payload, "remoteControllerModel")),
     batteryPercent: battery === "connected" ? boundedInteger(read(payload, "batteryPercent"), 0, 100) : null,
     flightState: flightFactsAvailable ? state(read(payload, "isFlying"), "flying", "grounded") : "unknown",
-    motorsOn: flightFactsAvailable && typeof read(payload, "motorsOn") === "boolean" ? read(payload, "motorsOn") as boolean : null,
+    motorsOn: flightBoolean(payload, "motorsOn", flightFactsAvailable),
     flightMode: flightFactsAvailable ? safeText(read(payload, "flightMode")) : null,
     gpsSignalLevel: flightFactsAvailable ? safeText(read(payload, "gpsSignalLevel")) : null,
     gpsSatelliteCount: flightFactsAvailable ? boundedInteger(read(payload, "gpsSatelliteCount"), 0, Number.MAX_SAFE_INTEGER) : null,
-    visionSensorUsed: flightFactsAvailable && typeof read(payload, "visionSensorUsed") === "boolean" ? read(payload, "visionSensorUsed") as boolean : null,
+    visionSensorUsed: flightBoolean(payload, "visionSensorUsed", flightFactsAvailable),
     visionSystemWarning: flightFactsAvailable ? safeText(read(payload, "visionSystemWarning")) : null,
-    visionPositioningEnabled: flightFactsAvailable && typeof read(payload, "visionPositioningEnabled") === "boolean" ? read(payload, "visionPositioningEnabled") as boolean : null,
+    visionPositioningEnabled: flightBoolean(payload, "visionPositioningEnabled", flightFactsAvailable),
     landingProtectionState: flightFactsAvailable ? safeText(read(payload, "landingProtectionState")) : null,
-    landingConfirmationNeeded: flightFactsAvailable && typeof read(payload, "landingConfirmationNeeded") === "boolean" ? read(payload, "landingConfirmationNeeded") as boolean : null,
+    landingConfirmationNeeded: flightBoolean(payload, "landingConfirmationNeeded", flightFactsAvailable),
     takeoffFailureError: flightFactsAvailable ? safeText(read(payload, "takeoffFailureError")) : null,
     motorStartFailureError: flightFactsAvailable ? safeText(read(payload, "motorStartFailureError")) : null,
     lowBatteryRthState: rthState,
@@ -159,6 +161,16 @@ const control = (payload: unknown) => freeze({
   remoteController: linkState(read(payload, "remoteController")),
   flightController: linkState(read(payload, "flightController")),
 });
+const waypointMissionCapability = (capabilities: unknown): "supported" | "unsupported" | "unknown" => {
+  if (read(capabilities, "waypointMission") === true && read(capabilities, "waypointMissionSupport") === "supported") return "supported";
+  if (read(capabilities, "waypointMission") === false || read(capabilities, "waypointMissionSupport") === "unsupported") return "unsupported";
+  return "unknown";
+};
+const liveVideoCapability = (capabilities: unknown): "supported" | "unsupported" | "unknown" => {
+  if (read(capabilities, "liveVideo") === true) return "supported";
+  if (read(capabilities, "liveVideo") === false) return "unsupported";
+  return "unknown";
+};
 
 function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly connectionEpoch: number; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
   const streams = read(input.media, "streams");
@@ -178,14 +190,14 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
       connectionEpoch: Number.isSafeInteger(device.connectionEpoch) && device.connectionEpoch >= 0 ? device.connectionEpoch : 0,
       connection: connectionValue,
       control: control(read(record(device.controlTelemetry), "payload")),
-      capabilities: freeze({ waypointMission: read(capabilities, "waypointMission") === true && read(capabilities, "waypointMissionSupport") === "supported" ? "supported" : read(capabilities, "waypointMission") === false || read(capabilities, "waypointMissionSupport") === "unsupported" ? "unsupported" : "unknown", liveVideo: read(capabilities, "liveVideo") === true ? "supported" : read(capabilities, "liveVideo") === false ? "unsupported" : "unknown" }),
+      capabilities: freeze({ waypointMission: waypointMissionCapability(capabilities), liveVideo: liveVideoCapability(capabilities) }),
       assignment: device.assignment,
       mission: device.mission,
       stream: device.stream,
       video: freeze({ phase: videoPhase, selected: input.selectedVideoDeviceId === device.deviceId, playerPhase: player.deviceId === device.deviceId ? player.phase : "idle" }),
       settings: device.settings,
-      pendingFlightAction: device.pendingFlightAction
-      ,landing: freeze({ phase: landingPhase(device.landingIntent, connectionValue) })
+      pendingFlightAction: device.pendingFlightAction,
+      landing: freeze({ phase: landingPhase(device.landingIntent, connectionValue) }),
     });
   }).sort((left, right) => left.deviceId.localeCompare(right.deviceId));
   const media = freeze({

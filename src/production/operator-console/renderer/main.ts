@@ -333,9 +333,7 @@ const renderFlightHud = (name: string, value: string): void => {
   const node = document.querySelector(`[data-flight-hud="${name}"]`);
   if (node instanceof HTMLElement) node.textContent = value;
 };
-function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project>): void {
-  const streamDevice = selectedFlightDevice(view, view.streamDeviceId);
-  const missionDevice = selectedFlightDevice(view, view.missionDeviceId);
+function renderStreamFlightStatus(streamDevice: Record<string, unknown> | undefined): void {
   const streamConnection = connectionOf(streamDevice);
   const live = read(streamConnection, "live");
   const streaming = read(live, "streaming");
@@ -361,7 +359,9 @@ function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project
     code: text(read(runtimeError, "code")),
     description: text(read(runtimeError, "description")),
   }));
+}
 
+function renderMissionFlightStatus(missionDevice: Record<string, unknown> | undefined): void {
   const missionConnection = connectionOf(missionDevice);
   renderFlightStatus("mission-reach", commandReachStatus({
     selected: missionDevice !== undefined,
@@ -385,7 +385,9 @@ function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project
     code: text(read(missionConnection, "waylineInterruptErrorCode")),
     description: text(read(missionConnection, "waylineInterruptErrorDescription")),
   }));
+}
 
+function renderDirectFlightStatus(missionDevice: Record<string, unknown> | undefined): void {
   const directConnection = connectionOf(missionDevice);
   const flying = text(read(directConnection, "flightState"));
   const motorsOn = read(directConnection, "motorsOn");
@@ -424,6 +426,14 @@ function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project
   renderFlightHud("altitude", hudAltitude(read(pose, "altitudeMeters")));
   renderFlightHud("gps", hudText(read(directConnection, "gpsSignalLevel")));
   renderFlightHud("mode", hudText(read(directConnection, "flightMode")));
+}
+
+function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project>): void {
+  const streamDevice = selectedFlightDevice(view, view.streamDeviceId);
+  const missionDevice = selectedFlightDevice(view, view.missionDeviceId);
+  renderStreamFlightStatus(streamDevice);
+  renderMissionFlightStatus(missionDevice);
+  renderDirectFlightStatus(missionDevice);
 }
 
 function renderFlightPanelVisibility(): void {
@@ -1467,27 +1477,7 @@ function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
   el("route-executable").classList.toggle("is-blocked", selected.executable !== true);
 }
 
-function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
-  // Cancel any renderer-local FLV retry after the phone has queued recovery stop.
-  if (view.streamSourceUnavailable) detachVideo();
-  const devices = view.devices as readonly Record<string, unknown>[];
-  const fill = (id: string, selected: string | null, onChange: (value: string) => void): void => {
-    const select = el(id) as HTMLSelectElement;
-    select.replaceChildren(...[
-      Object.assign(document.createElement("option"), { value: "", textContent: "未选择" }),
-      ...devices.map((device) => Object.assign(document.createElement("option"), {
-        value: String(device.deviceId),
-        textContent: String(device.deviceId),
-        selected: device.deviceId === selected,
-      })),
-    ]);
-    select.onchange = () => { onChange(select.value || ""); void render(); };
-  };
-  fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
-  fill("direct-flight-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
-  fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
-  renderFlightPanelStatus(view);
-  renderFlightPanelVisibility();
+function renderMissionButtons(view: ReturnType<typeof OperatorConsole.project>): void {
   const missionButtonActions = Object.freeze({
     stage: "mission-stage",
     upload: "mission-upload",
@@ -1504,6 +1494,9 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     button.title = availability.enabled ? button.textContent ?? "" : availability.reason ?? "当前阶段不能执行此操作";
     renderOperationFeedback(dataAction, view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
   }
+}
+
+function renderStreamButtons(view: ReturnType<typeof OperatorConsole.project>): void {
   const streamStopping = view.streamLabel === "正在停止图传";
   const streamHasDjiRuntimeError = view.streamLabel.startsWith("DJI MSDK 图传运行回调：");
   el("stream-label").textContent = view.streamLabel;
@@ -1534,6 +1527,31 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
     renderOperationFeedback(action, view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
   }
+}
+
+function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
+  // Cancel any renderer-local FLV retry after the phone has queued recovery stop.
+  if (view.streamSourceUnavailable) detachVideo();
+  const devices = view.devices as readonly Record<string, unknown>[];
+  const fill = (id: string, selected: string | null, onChange: (value: string) => void): void => {
+    const select = el(id) as HTMLSelectElement;
+    select.replaceChildren(...[
+      Object.assign(document.createElement("option"), { value: "", textContent: "未选择" }),
+      ...devices.map((device) => Object.assign(document.createElement("option"), {
+        value: String(device.deviceId),
+        textContent: String(device.deviceId),
+        selected: device.deviceId === selected,
+      })),
+    ]);
+    select.onchange = () => { onChange(select.value || ""); void render(); };
+  };
+  fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
+  fill("direct-flight-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
+  fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
+  renderFlightPanelStatus(view);
+  renderFlightPanelVisibility();
+  renderMissionButtons(view);
+  renderStreamButtons(view);
   armedCommand = expireArm(armedCommand, Date.now());
   if (armedCommand === null) clearArmTimer();
   for (const action of ["flight-takeoff", "flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"] as const) {
