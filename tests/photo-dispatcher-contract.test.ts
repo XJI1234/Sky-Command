@@ -14,7 +14,19 @@ const captured = (fileName = "DJI_0001.jpg", index = 1) => ({
     },
   },
 });
-const succeeded = () => ({ status: "succeeded", result: { kind: "object", fields: { domain: { kind: "string", value: "photo" }, outcome: { kind: "string", value: "DELIVERED" } } } });
+const delivered = (fileName = "DJI_0001.jpg", sha256 = "a".repeat(64)) => ({
+  status: "succeeded",
+  result: {
+    kind: "object",
+    fields: {
+      domain: { kind: "string", value: "photo" },
+      outcome: { kind: "string", value: "DELIVERED" },
+      fileName: { kind: "string", value: fileName },
+      size: { kind: "number", value: "3" },
+      sha256: { kind: "string", value: sha256 },
+    },
+  },
+});
 
 describe("photo-dispatcher", () => {
   it("只发送空字段命令，记下拍照身份，并在 fetch 等到收件箱确认后才成功", async () => {
@@ -26,7 +38,7 @@ describe("photo-dispatcher", () => {
         sendCommand: async (_deviceId, request) => {
           sent.push(request);
           if (request.name === "camera.photo.fetch") await new Promise<void>((resolve) => { releaseFetch = resolve; });
-          return request.name === "camera.photo.capture" ? captured() : succeeded();
+          return request.name === "camera.photo.capture" ? captured() : delivered();
         },
       },
     });
@@ -41,9 +53,10 @@ describe("photo-dispatcher", () => {
     for (let step = 0; step < 10 && releaseFetch === undefined; step += 1) await Promise.resolve();
     await expect(dispatcher.capture("phone-1")).resolves.toMatchObject({ ok: false, code: "OPERATION_IN_PROGRESS" });
     expect(dispatcher.get("phone-1").phase).toBe("fetching");
-    expect(dispatcher.recordStored("phone-1", "DJI_0001.jpg", "a".repeat(64))).toMatchObject({ phase: "stored", code: "SUCCEEDED" });
+    expect(dispatcher.recordStored("phone-1", "DJI_0001.jpg", "a".repeat(64))).toMatchObject({ phase: "fetching", code: null });
     releaseFetch?.();
     await expect(fetching).resolves.toMatchObject({ ok: true, code: "SUCCEEDED", fileName: "DJI_0001.jpg" });
+    expect(dispatcher.get("phone-1")).toMatchObject({ phase: "stored", code: "SUCCEEDED" });
     expect(sent[1]).toEqual({ name: "camera.photo.fetch", fields: {} });
   });
 
@@ -52,7 +65,7 @@ describe("photo-dispatcher", () => {
     const dispatcher = PhotoDispatcher.create({
       relay: {
         latestTelemetry: () => ready(),
-        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : succeeded(),
+        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : delivered(),
       },
       clock: {
         setTimeout: (callback) => { fire = callback; return 1; },
@@ -71,7 +84,7 @@ describe("photo-dispatcher", () => {
     const dispatcher = PhotoDispatcher.create({
       relay: {
         latestTelemetry: () => ready(),
-        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : succeeded(),
+        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : delivered(),
       },
       storedTimeoutMs: 1,
     });
@@ -105,6 +118,28 @@ describe("photo-dispatcher", () => {
         description: "errorType=CORE; inner=CAMERA.StartShootPhoto:-472",
       },
     });
+  });
+
+  it("同名但摘要不一致的收件箱文件不能完成 fetch", async () => {
+    let fire: (() => void) | undefined;
+    const dispatcher = PhotoDispatcher.create({
+      relay: {
+        latestTelemetry: () => ready(),
+        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : delivered(),
+      },
+      clock: {
+        setTimeout: (callback) => { fire = callback; return 1; },
+        clearTimeout: () => undefined,
+      },
+    });
+
+    await expect(dispatcher.capture("phone-1")).resolves.toMatchObject({ ok: true, code: "CAPTURED" });
+    const fetching = dispatcher.fetch("phone-1");
+    for (let step = 0; step < 10 && fire === undefined; step += 1) await Promise.resolve();
+    dispatcher.recordStored("phone-1", "DJI_0001.jpg", "b".repeat(64));
+    fire?.();
+
+    await expect(fetching).resolves.toMatchObject({ ok: false, code: "TRANSFER_FAILED", fileName: "DJI_0001.jpg" });
   });
 
   it("主相机未连接时本地拒绝，且不同设备互不阻塞", async () => {

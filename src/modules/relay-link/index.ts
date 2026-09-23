@@ -92,23 +92,16 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
   const intake = TelemetryIntake.create(options.now === undefined ? {} : { now: options.now });
   const missionPhases = MissionPhaseIntake.create();
   const missions = MissionSender.create({ scheduler: options.scheduler, timeoutMs: options.missionTimeoutMs });
-  let currentMediaConnection: string | null = null;
   const media = MediaIntake.create({
     sink: {
-      begin: () => {
-        const device = currentMediaConnection === null ? null : deviceForConnection(currentMediaConnection);
-        currentMediaDevice = device?.deviceId ?? null;
-        return currentMediaDevice === null ? "rejected" : "accepted";
-      },
-      append: () => currentMediaDevice === null ? "rejected" : "accepted",
-      complete: (file) => {
-        const device = currentMediaDevice;
-        currentMediaDevice = null;
-        currentMediaConnection = null;
+      begin: (connectionId) => deviceForConnection(connectionId) === null ? "rejected" : "accepted",
+      append: (connectionId) => deviceForConnection(connectionId) === null ? "rejected" : "accepted",
+      complete: (connectionId, file) => {
+        const device = deviceForConnection(connectionId);
         if (device === null || options.onPhoto === undefined) return "rejected";
-        try { return options.onPhoto(device, file) === true ? "accepted" : "rejected"; } catch { return "rejected"; }
+        try { return options.onPhoto(device.deviceId, file) === true ? "accepted" : "rejected"; } catch { return "rejected"; }
       },
-      abort: () => { currentMediaDevice = null; currentMediaConnection = null; }
+      abort: () => undefined,
     },
     results: {
       send: (connectionId, frame) => {
@@ -117,7 +110,6 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       }
     }
   });
-  let currentMediaDevice: string | null = null;
   const listeners = new Set<(snapshot: RelayLinkSnapshot) => void>();
   let lastDisconnect: RelayLinkSnapshot["lastDisconnect"] = null;
   const ingressByConnection = new Map<string, string>();
@@ -221,7 +213,6 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     if (event.frame.type === "command-result") { tracker.resolve({ connectionId: event.connectionId, commandId: event.frame.id, ok: event.frame.ok, detail: event.frame.detail, ...(event.frame.result === undefined ? {} : { result: event.frame.result }) }); return; }
     if (event.frame.type === "mission-result") { missions.acceptResult(event.connectionId, { missionId: event.frame.id, ok: event.frame.ok, detail: event.frame.detail }); }
     if (event.frame.type === "media-begin" || event.frame.type === "media-chunk" || event.frame.type === "media-complete") {
-      currentMediaConnection = event.connectionId;
       media.accept(event.connectionId, event.frame);
       return;
     }

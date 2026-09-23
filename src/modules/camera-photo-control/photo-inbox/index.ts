@@ -28,11 +28,18 @@ export interface PhotoInboxInstance {
 }
 
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
+const maxPhotoBytes = 100 * 1024 * 1024;
+const sha256Pattern = /^[0-9a-f]{64}$/u;
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const validPhotoName = (value: unknown): value is string => {
   if (!validId(value) || value.includes("..") || /[\\/]/u.test(value)) return false;
   const lower = value.toLowerCase();
   return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".dng");
+};
+const validPhotoFile = (file: PhotoMediaFile): boolean => {
+  if (!validPhotoName(file?.fileName) || !(file.bytes instanceof Uint8Array)) return false;
+  if (file.size !== file.bytes.byteLength) return false;
+  return file.size >= 1 && file.size <= maxPhotoBytes && sha256Pattern.test(file.sha256);
 };
 
 function create(options: PhotoInboxOptions): PhotoInboxInstance {
@@ -44,7 +51,7 @@ function create(options: PhotoInboxOptions): PhotoInboxInstance {
   };
   return freeze({
     accept: (deviceId, file) => {
-      if (!validId(deviceId) || !validPhotoName(file?.fileName) || !(file.bytes instanceof Uint8Array) || file.size !== file.bytes.byteLength || file.size < 1 || file.size > 104857600 || !/^[0-9a-f]{64}$/u.test(file.sha256)) return "rejected";
+      if (!validId(deviceId) || !validPhotoFile(file)) return "rejected";
       const existing = photos.get(deviceId) ?? [];
       if (existing.some((item) => item.fileName === file.fileName || item.sha256 === file.sha256)) return "duplicate";
       if (options.fs !== undefined) {

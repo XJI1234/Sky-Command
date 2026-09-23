@@ -153,6 +153,38 @@ describe("relay-link root contract", () => {
     await expect(mission).resolves.toMatchObject({ deviceId: "phone-1", missionId: "mission-1", status: "succeeded" });
   });
 
+  it("keeps interleaved media transfers associated with their own paired devices", async () => {
+    const received: Array<{ readonly deviceId: string; readonly fileName: string }> = [];
+    const fixture = options({
+      onPhoto: (deviceId, file) => {
+        received.push({ deviceId, fileName: file.fileName });
+        return true;
+      },
+    });
+    const link = RelayLink.create(fixture.options);
+    await link.start();
+    const first = fixture.transport.connect();
+    const second = fixture.transport.connect();
+    first.emit({ type: "hello", deviceId: "phone-a", protocolVersion: "1" });
+    second.emit({ type: "hello", deviceId: "phone-b", protocolVersion: "1" });
+    await flush();
+
+    const firstBytes = new Uint8Array([1]);
+    const secondBytes = new Uint8Array([2]);
+    first.emit({ type: "media-begin", id: "photo-a", fileName: "a.jpg", size: firstBytes.byteLength, sha256: Buffer.from(sha256(firstBytes)).toString("hex") });
+    second.emit({ type: "media-begin", id: "photo-b", fileName: "b.jpg", size: secondBytes.byteLength, sha256: Buffer.from(sha256(secondBytes)).toString("hex") });
+    first.emit({ type: "media-chunk", id: "photo-a", data: firstBytes });
+    first.emit({ type: "media-complete", id: "photo-a" });
+    second.emit({ type: "media-chunk", id: "photo-b", data: secondBytes });
+    second.emit({ type: "media-complete", id: "photo-b" });
+    await flush();
+
+    expect(received).toEqual([
+      { deviceId: "phone-a", fileName: "a.jpg" },
+      { deviceId: "phone-b", fileName: "b.jpg" },
+    ]);
+  });
+
   it("把手机端命令的结构化结果交给原始命令调用者", async () => {
     const fixture = options();
     const link = RelayLink.create(fixture.options);

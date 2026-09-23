@@ -1,6 +1,6 @@
 # 相机拍照控制一级模块契约
 
-状态：契约已批准；实现未开始
+状态：已实现
 
 ## 唯一职责
 
@@ -11,18 +11,19 @@
 ## 对外接口
 
 ```ts
-CameraPhotoControl.create(dependencies) -> CameraPhotoControlInstance
+CameraPhotoControl.create({ relay, now, fs? }) -> CameraPhotoControlInstance
 
-instance.capture(deviceId) -> Promise<PhotoControlResult>
-instance.fetch(deviceId) -> Promise<PhotoControlResult>
-instance.get(deviceId) -> PhotoControlSnapshot
-instance.list() -> readonly PhotoControlSnapshot[]
-instance.recordDisconnected(deviceId) -> PhotoControlSnapshot | null
-instance.forget(deviceId) -> boolean
+instance.capture(deviceId) -> Promise<PhotoDispatchResult>
+instance.fetch(deviceId) -> Promise<PhotoDispatchResult>
+instance.get(deviceId) -> PhotoDispatchSnapshot
+instance.list(deviceId) -> readonly StoredPhoto[]
+instance.recordDisconnected(deviceId) -> PhotoDispatchSnapshot | null
+instance.recordStored(deviceId, fileName, sha256) -> PhotoDispatchSnapshot | null
+instance.inbox -> PhotoInboxInstance
 instance.subscribe(listener) -> unsubscribe
 ```
 
-每一个可变状态都以 `deviceId` 为键。`capture` 成功只表示手机回报 DJI 已拍下，并记下本次 `fileName`/`index`。`fetch` 成功只表示 `photo-inbox` 已有与该次身份匹配、摘要一致的本地文件。图传是否仍在出画必须继续看 `media-pipeline`。
+每一个可变状态都以 `deviceId` 为键。`capture` 成功只表示手机回报 DJI 已拍下，并记下本次 `fileName`/`index`。`fetch` 成功只表示手机 `DELIVERED` 结果与 `photo-inbox` 的落盘事实在文件名、SHA-256 上完全一致。图传是否仍在出画必须继续看 `media-pipeline`。
 
 ## 二级模块与依赖
 
@@ -31,7 +32,7 @@ instance.subscribe(listener) -> unsubscribe
 | `photo-dispatcher` | 检查命令可达性、同设备互斥，并把请求映射为精确的两个命令 | 收字节、写磁盘、构造媒体帧 |
 | `photo-inbox` | 接收 `relay-link/media-intake` 已校验的原图，按设备去重落盘并提供只读清单 | 下发命令、解析 WebSocket |
 
-一级组合根只组合这两个公开二级接口。它只可以依赖注入的 `relay-link` 命令端口、`media-intake` 的已完成媒体交接，以及只读设备在线判定；禁止导入它们的内部实现。
+一级组合根只组合这两个公开二级接口。它只依赖注入的中继命令端口、时钟和可选的原子写入端口；媒体交接由生产装配层在 `photo-inbox.accept` 成功后调用 `recordStored`。禁止二级模块导入 `relay-link`、WebSocket、DJI 或 Electron 的内部实现。
 
 ## 已确认的协议契约
 
@@ -48,10 +49,10 @@ camera.photo.fetch      fields: {}
 
 每台设备的控制快照仅为 `idle`、`capturing`、`captured`、`fetching`、`stored`、`failed` 或 `disconnected`，并包含最后一次安全文件名、稳定失败码。状态不保存绝对路径、原始异常或照片字节。`stored` 表示收件箱已有该次文件；同一文件名或同一 SHA-256 再次到达不得覆盖，只保持已有记录。
 
-同一设备在等待命令结果时，第二个 capture 或 fetch 返回 `OPERATION_IN_PROGRESS`，且不触发依赖；不同设备互不阻塞。capture 与 fetch 不得合成一次点击。设备断开时进行中的结果不能覆盖 `disconnected`；重连后必须由操作者再点，不能自动重拍或自动回传，也不能复用断线前未完成的传输 ID。
+同一设备在等待命令结果或本地收件箱确认时，第二个 capture 或 fetch 返回 `OPERATION_IN_PROGRESS`，且不触发依赖；不同设备互不阻塞。capture 与 fetch 不得合成一次点击。设备断开时进行中的结果不能覆盖 `disconnected`；重连后必须由操作者再点，不能自动重拍或自动回传。
 
-本地照片目录固定为用户数据下的 `photos/{deviceId}/{fileName}`。模块只暴露只读目录句柄和基名，禁止把绝对路径写进快照或 UI 文案。
+本地照片目录由生产装配层提供的原子写入端口决定。控制模块只暴露文件安全基名、大小、摘要和接收时间，禁止把绝对路径写进快照或 UI 文案。
 
 ## 验收
 
-实现前每个二级模块必须有中文 `CONTRACT.md`。测试必须覆盖空字段命令、无拍照身份时拒绝 fetch、同设备互斥、多设备并行、断线、迟到结果、收件箱去重、磁盘写入失败、以及不导入 WebSocket/DJI/Electron 的架构边界。
+测试覆盖空字段命令、无拍照身份时拒绝 fetch、同设备互斥、多设备并行、断线、迟到结果、收件箱去重、磁盘写入失败、文件名与摘要双事实匹配，以及不导入 WebSocket/DJI/Electron 的架构边界。

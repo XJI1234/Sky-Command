@@ -18,6 +18,16 @@ export type PhotoDispatchCode =
 
 export type PhotoPhase = "idle" | "capturing" | "captured" | "fetching" | "stored" | "failed" | "disconnected";
 export interface PhotoIdentity { readonly fileName: string; readonly index: number; }
+interface PhotoDelivery { readonly fileName: string; readonly sha256: string; }
+interface PhotoDispatchSession {
+  busy: boolean;
+  identity: PhotoIdentity | undefined;
+  delivered: PhotoDelivery | undefined;
+  received: PhotoDelivery | undefined;
+  snapshot: PhotoDispatchSnapshot | undefined;
+  generation: number;
+  storedWaiter: ((result: PhotoDispatchResult) => void) | undefined;
+}
 export interface PhotoDispatchSnapshot {
   readonly deviceId: string;
   readonly phase: PhotoPhase;
@@ -71,21 +81,28 @@ const defaultClock: PhotoDispatcherClock = freeze({
 function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly clock?: PhotoDispatcherClock; readonly storedTimeoutMs?: number }>): PhotoDispatcherInstance {
   const clock = dependencies.clock ?? defaultClock;
   const storedTimeoutMs = typeof dependencies.storedTimeoutMs === "number" && Number.isFinite(dependencies.storedTimeoutMs) && dependencies.storedTimeoutMs > 0 ? dependencies.storedTimeoutMs : 15_000;
-  const busy = new Set<string>();
-  const identity = new Map<string, PhotoIdentity>();
-  const snapshots = new Map<string, PhotoDispatchSnapshot>();
-  const generations = new Map<string, number>();
+  const sessions = new Map<string, PhotoDispatchSession>();
   const listeners = new Set<(snapshot: PhotoDispatchSnapshot) => void>();
-  const storedWaiters = new Map<string, (result: PhotoDispatchResult) => void>();
-  const publish = (snapshot: PhotoDispatchSnapshot): void => {
-    snapshots.set(snapshot.deviceId, snapshot);
+  const sessionFor = (deviceId: string): PhotoDispatchSession => {
+    const current = sessions.get(deviceId);
+    if (current !== undefined) return current;
+    const created: PhotoDispatchSession = { busy: false, identity: undefined, delivered: undefined, received: undefined, snapshot: undefined, generation: 0, storedWaiter: undefined };
+    sessions.set(deviceId, created);
+    return created;
+  };
+  const hasMatchingDelivery = (session: PhotoDispatchSession): boolean => {
+    const { delivered, received } = session;
+    return delivered !== undefined && received !== undefined && delivered.fileName === received.fileName && delivered.sha256 === received.sha256;
+  };
+  const publish = (session: PhotoDispatchSession, snapshot: PhotoDispatchSnapshot): void => {
+    session.snapshot = snapshot;
     for (const listener of [...listeners]) { try { listener(snapshot); } catch { /* isolate */ } }
   };
-  const release = (deviceId: string, result: PhotoDispatchResult): PhotoDispatchResult => {
-    busy.delete(deviceId);
-    const waiter = storedWaiters.get(deviceId);
+  const release = (session: PhotoDispatchSession, result: PhotoDispatchResult): PhotoDispatchResult => {
+    session.busy = false;
+    const waiter = session.storedWaiter;
     if (waiter !== undefined) {
-      storedWaiters.delete(deviceId);
+      session.storedWaiter = undefined;
       waiter(result);
     }
     return result;
@@ -106,73 +123,81 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly cl
   };
   const dispatch = async (deviceId: string, name: "camera.photo.capture" | "camera.photo.fetch"): Promise<PhotoDispatchResult> => {
     if (!validId(deviceId)) return outcome(false, "INVALID_INPUT", typeof deviceId === "string" ? deviceId : "invalid");
-    if (busy.has(deviceId)) return outcome(false, "OPERATION_IN_PROGRESS", deviceId);
-    if (name === "camera.photo.fetch" && !identity.has(deviceId)) return outcome(false, "NOTHING_TO_FETCH", deviceId);
+    const existing = sessions.get(deviceId);
+    if (existing?.busy) return outcome(false, "OPERATION_IN_PROGRESS", deviceId);
+    if (name === "camera.photo.fetch" && existing?.identity === undefined) return outcome(false, "NOTHING_TO_FETCH", deviceId);
     const blocked = reachability(deviceId);
     if (blocked !== null) return outcome(false, blocked, deviceId);
-    busy.add(deviceId);
-    const generation = (generations.get(deviceId) ?? 0) + 1;
-    generations.set(deviceId, generation);
-    publish(freeze({ deviceId, phase: name === "camera.photo.capture" ? "capturing" as const : "fetching" as const, fileName: identity.get(deviceId)?.fileName ?? null, code: null }));
+    const session = existing ?? sessionFor(deviceId);
+    session.busy = true;
+    session.generation += 1;
+    const generation = session.generation;
+    publish(session, freeze({ deviceId, phase: name === "camera.photo.capture" ? "capturing" as const : "fetching" as const, fileName: session.identity?.fileName ?? null, code: null }));
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, freeze({ name, fields: empty })));
-    if (generations.get(deviceId) !== generation) return release(deviceId, outcome(false, "DISCONNECTED", deviceId));
-    if (!sent.ok) return release(deviceId, finish(deviceId, false, "DEPENDENCY_FAILURE"));
+    if (session.generation !== generation) return release(session, outcome(false, "DISCONNECTED", deviceId));
+    if (!sent.ok) return release(session, finish(deviceId, session, false, "DEPENDENCY_FAILURE"));
     const status = isRecord(sent.value) && typeof sent.value.status === "string" ? sent.value.status : null;
-    if (status === "timed-out" || status === "disconnected") return release(deviceId, finish(deviceId, false, "RESULT_UNCONFIRMED"));
+    if (status === "timed-out" || status === "disconnected") return release(session, finish(deviceId, session, false, "RESULT_UNCONFIRMED"));
     if (status === "succeeded") {
       if (name === "camera.photo.capture") {
         const captured = readCaptured(sent.value);
-        if (captured === null) return release(deviceId, finish(deviceId, false, "DEPENDENCY_FAILURE"));
-        identity.set(deviceId, captured);
-        publish(freeze({ deviceId, phase: "captured" as const, fileName: captured.fileName, code: "CAPTURED" }));
-        return release(deviceId, outcome(true, "CAPTURED", deviceId, captured.fileName));
+        if (captured === null) return release(session, finish(deviceId, session, false, "DEPENDENCY_FAILURE"));
+        session.identity = captured;
+        session.delivered = undefined;
+        session.received = undefined;
+        publish(session, freeze({ deviceId, phase: "captured" as const, fileName: captured.fileName, code: "CAPTURED" }));
+        return release(session, outcome(true, "CAPTURED", deviceId, captured.fileName));
       }
-      const current = identity.get(deviceId);
-      const snapshot = snapshots.get(deviceId);
-      if (current !== undefined && snapshot?.phase === "stored" && snapshot.fileName === current.fileName) {
-        return release(deviceId, outcome(true, "SUCCEEDED", deviceId, current.fileName));
+      const current = session.identity;
+      const confirmed = readDelivered(sent.value);
+      if (current === undefined || confirmed === null || confirmed.fileName !== current.fileName) {
+        return release(session, finish(deviceId, session, false, "DEPENDENCY_FAILURE"));
       }
+      session.delivered = confirmed;
+      if (hasMatchingDelivery(session)) return release(session, finish(deviceId, session, true, "SUCCEEDED", confirmed.fileName));
       return await new Promise<PhotoDispatchResult>((resolve) => {
         const timer = clock.setTimeout(() => {
-          if (!storedWaiters.has(deviceId)) return;
-          resolve(release(deviceId, finish(deviceId, false, "TRANSFER_FAILED", identity.get(deviceId)?.fileName ?? undefined)));
+          if (session.storedWaiter === undefined) return;
+          resolve(release(session, finish(deviceId, session, false, "TRANSFER_FAILED", session.identity?.fileName ?? undefined)));
         }, storedTimeoutMs);
-        storedWaiters.set(deviceId, (result) => {
+        session.storedWaiter = (result) => {
           clock.clearTimeout(timer);
-          resolve(generations.get(deviceId) === generation ? result : outcome(false, "DISCONNECTED", deviceId));
-        });
+          resolve(session.generation === generation ? result : outcome(false, "DISCONNECTED", deviceId));
+        };
       });
     }
     const terminal = readTerminal(sent.value);
-    return release(deviceId, finish(deviceId, false, terminal?.code ?? "RELAY_REJECTED", undefined, terminal?.platformError === undefined ? {} : { platformError: terminal.platformError }));
+    return release(session, finish(deviceId, session, false, terminal?.code ?? "RELAY_REJECTED", undefined, terminal?.platformError === undefined ? {} : { platformError: terminal.platformError }));
   };
-  const finish = (deviceId: string, ok: boolean, code: PhotoDispatchCode, fileName?: string, extra: Partial<Pick<PhotoDispatchResult, "platformError">> = {}): PhotoDispatchResult => {
-    publish(freeze({ deviceId, phase: ok ? "stored" as const : "failed" as const, fileName: fileName ?? identity.get(deviceId)?.fileName ?? null, code }));
+  const finish = (deviceId: string, session: PhotoDispatchSession, ok: boolean, code: PhotoDispatchCode, fileName?: string, extra: Partial<Pick<PhotoDispatchResult, "platformError">> = {}): PhotoDispatchResult => {
+    publish(session, freeze({ deviceId, phase: ok ? "stored" as const : "failed" as const, fileName: fileName ?? session.identity?.fileName ?? null, code }));
     return outcome(ok, code, deviceId, fileName, extra);
   };
   return freeze({
     capture: (deviceId) => dispatch(deviceId, "camera.photo.capture"),
     fetch: (deviceId) => dispatch(deviceId, "camera.photo.fetch"),
-    get: (deviceId) => validId(deviceId) ? snapshots.get(deviceId) ?? idle(deviceId) : idle("invalid"),
+    get: (deviceId) => validId(deviceId) ? sessions.get(deviceId)?.snapshot ?? idle(deviceId) : idle("invalid"),
     recordDisconnected: (deviceId) => {
       if (!validId(deviceId)) return null;
-      generations.set(deviceId, (generations.get(deviceId) ?? 0) + 1);
-      const snapshot = freeze({ deviceId, phase: "disconnected" as const, fileName: identity.get(deviceId)?.fileName ?? null, code: "DISCONNECTED" as const });
-      publish(snapshot);
-      release(deviceId, outcome(false, "DISCONNECTED", deviceId));
+      const session = sessionFor(deviceId);
+      session.generation += 1;
+      const snapshot = freeze({ deviceId, phase: "disconnected" as const, fileName: session.identity?.fileName ?? null, code: "DISCONNECTED" as const });
+      publish(session, snapshot);
+      release(session, outcome(false, "DISCONNECTED", deviceId));
       return snapshot;
     },
     recordStored: (deviceId, fileName, sha256) => {
-      if (!validId(deviceId) || typeof fileName !== "string" || typeof sha256 !== "string") return null;
-      const current = identity.get(deviceId);
-      if (current === undefined || current.fileName !== fileName) return snapshots.get(deviceId) ?? null;
-      const waiting = snapshots.get(deviceId)?.phase === "fetching" || storedWaiters.has(deviceId);
-      if (!waiting) return snapshots.get(deviceId) ?? null;
-      const snapshot = freeze({ deviceId, phase: "stored" as const, fileName, code: "SUCCEEDED" as const });
-      publish(snapshot);
-      const waiter = storedWaiters.get(deviceId);
-      if (waiter !== undefined) release(deviceId, outcome(true, "SUCCEEDED", deviceId, fileName));
-      return snapshot;
+      if (!validId(deviceId) || typeof fileName !== "string" || !validSha256(sha256)) return null;
+      const session = sessions.get(deviceId);
+      const current = session?.identity;
+      if (session === undefined || current === undefined || current.fileName !== fileName) return session?.snapshot ?? null;
+      const waiting = session.snapshot?.phase === "fetching" || session.storedWaiter !== undefined;
+      if (!waiting) return session.snapshot ?? null;
+      session.received = freeze({ fileName, sha256 });
+      if (!hasMatchingDelivery(session)) return session.snapshot ?? null;
+      finish(deviceId, session, true, "SUCCEEDED", fileName);
+      if (session.storedWaiter !== undefined) release(session, outcome(true, "SUCCEEDED", deviceId, fileName));
+      return session.snapshot ?? freeze({ deviceId, phase: "stored" as const, fileName, code: "SUCCEEDED" as const });
     },
     subscribe: (listener) => {
       listeners.add(listener);
@@ -188,6 +213,14 @@ function readCaptured(value: unknown): PhotoIdentity | null {
   const fileName = text(fields, "fileName");
   const index = number(fields, "index");
   return fileName !== null && index !== null && index >= 0 ? freeze({ fileName, index }) : null;
+}
+
+function readDelivered(value: unknown): PhotoDelivery | null {
+  const fields = resultFields(value);
+  if (fields === null || text(fields, "domain") !== "photo" || text(fields, "outcome") !== "DELIVERED") return null;
+  const fileName = text(fields, "fileName");
+  const sha256 = text(fields, "sha256", 64);
+  return fileName !== null && sha256 !== null && validSha256(sha256) ? freeze({ fileName, sha256 }) : null;
 }
 
 function readTerminal(value: unknown): Readonly<{ readonly code: PhotoDispatchCode; readonly platformError?: PhotoPlatformError }> | null {
@@ -223,6 +256,10 @@ function number(fields: Record<string, unknown>, name: string): number | null {
   if (!isRecord(field) || field.kind !== "number" || typeof field.value !== "string") return null;
   const parsed = Number(field.value);
   return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function validSha256(value: string): boolean {
+  return /^[0-9a-f]{64}$/u.test(value);
 }
 
 export const PhotoDispatcher = freeze({ create });

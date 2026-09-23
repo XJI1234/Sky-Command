@@ -1,6 +1,6 @@
 # 中继链路媒体接收模块契约
 
-状态：待实现
+状态：已实现
 所属一级模块：`relay-link`
 
 ## 职责与接口
@@ -11,11 +11,11 @@
 MediaIntake.create(options) -> MediaIntakeInstance
 instance.accept(connectionId, frame) -> void
 instance.cancelConnection(connectionId, reason) -> void
-instance.snapshot() -> readonly PendingMedia[]
-instance.subscribe(listener) -> unsubscribe
 ```
 
-它不写最终照片目录（那是 `photo-inbox`）、不发送拍照命令、不建 Socket、不调用 DJI。写入端是唯一出站效果：匹配终态时发送一次 `media-result`。
+它不写最终照片目录（那是 `photo-inbox`）、不发送拍照命令、不建 Socket、不调用 DJI。写入端是唯一出站效果：匹配终态时发送一次 `media-result`。每一个 `MediaSink.begin/append/complete/abort` 调用都必须带入站 `connectionId`；sink 不得依赖调用方维护的“当前连接”全局变量。这样多个已配对手机的传输可以交错，且完成文件只能落到发起该连接对应的设备。
+
+`MediaTransfer` 是尚未聚合字节的传输身份（`transferId`、安全基名、大小、SHA-256）；`MediaFile` 在其基础上增加完整字节。`begin` 只接收前者，`complete` 才接收后者。
 
 ## 规则和安全
 

@@ -1,6 +1,6 @@
 # photo-dispatcher 二级模块契约
 
-状态：待实现
+状态：已实现
 所属一级模块：`camera-photo-control`
 
 ## 唯一职责
@@ -21,7 +21,7 @@ instance.recordStored(deviceId, fileName, sha256) -> PhotoDispatchSnapshot | nul
 instance.subscribe(listener) -> unsubscribe
 ```
 
-`relay.sendCommand` 是唯一出站效果。`recordStored` 只能由 `photo-inbox` 在落盘成功后调用，用于把 `fetching` 转为 `stored`；命令 `ok: true` 本身还不够，必须与收件箱确认的基名和摘要一致。fetch 在命令 `succeeded` 之后若收件箱仍未确认，必须用注入的 `clock` 截止等待，到期返回 `TRANSFER_FAILED`，不得无期限挂起。
+`relay.sendCommand` 是唯一出站效果。`recordStored` 只能由 `photo-inbox` 在落盘成功后调用；它的文件名和 SHA-256 与手机 `DELIVERED` 结果是两个独立事实，先后顺序不限。只有两者都到达且完全一致时，才把 `fetching` 转为 `stored` 并完成 fetch。摘要不一致不能产生临时成功，必须继续等待匹配的收件箱事实，直到注入的 `clock` 截止并返回 `TRANSFER_FAILED`。
 
 ## 规则
 

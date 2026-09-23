@@ -15,7 +15,7 @@ describe("media-intake", () => {
       sink: {
         begin: () => "accepted",
         append: () => "accepted",
-        complete: (file) => { completed.push(file); return "accepted"; },
+        complete: (_connectionId, file) => { completed.push(file); return "accepted"; },
         abort: () => undefined,
       },
       results: { send: (_connectionId, frame) => { results.push(frame); } },
@@ -41,7 +41,7 @@ describe("media-intake", () => {
       sink: {
         begin: () => "accepted",
         append: () => "accepted",
-        complete: (file) => { completed.push(file); return "accepted"; },
+        complete: (_connectionId, file) => { completed.push(file); return "accepted"; },
         abort: () => { aborted.push("abort"); },
       },
       results: { send: (_connectionId, frame) => { results.push(frame); } },
