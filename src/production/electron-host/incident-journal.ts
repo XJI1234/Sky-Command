@@ -212,6 +212,15 @@ export function wrapGateway(gateway: DesktopUiGatewayInstance, journal: Incident
         if (action === null || reason === null || source === null || Object.keys(source).length !== 2) {
           return Object.freeze({ ok: false as const, code: "INVALID_INPUT" as const });
         }
+        if (action === "video-first-frame-rendered") {
+          journal.record({
+            link: "downlink",
+            level: "INFO",
+            event: "VIDEO_FIRST_FRAME_RENDERED",
+            detail: reason,
+          });
+          return Object.freeze({ ok: true as const, value: true });
+        }
         journal.record({
           link: action.startsWith("stream") || action.startsWith("video") || action.startsWith("webrtc") ? "downlink" : action.startsWith("pairing") ? "phone-pc" : "uplink",
           level: "WARN",

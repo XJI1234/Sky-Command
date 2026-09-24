@@ -98,6 +98,30 @@ describe("事故日志", () => {
     expect(recorded).toHaveLength(1);
   });
 
+  it("把实际首帧渲染作为下行事实记录，而不是操作台拦截", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    const gateway = wrapGateway({
+      invoke: async () => ({ ok: true as const, value: true }),
+      snapshot: () => ({}),
+      subscribe: () => () => undefined,
+      dispose: () => undefined,
+    }, journal);
+
+    await expect(gateway.invoke("diagnostics.record", {
+      action: "video-first-frame-rendered",
+      reason: "width=1920;height=1080",
+    })).resolves.toEqual({ ok: true, value: true });
+
+    await journal.flush();
+
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/INFO downlink VIDEO_FIRST_FRAME_RENDERED/);
+    expect(log).toContain("width=1920;height=1080");
+    expect(log).not.toContain("CONSOLE_BLOCKED");
+  });
+
   it("命令超时记为上行 WARN，渲染器高频图传轮询不写日志", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);

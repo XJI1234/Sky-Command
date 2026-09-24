@@ -602,6 +602,7 @@ let lastPlaybackHealthAt = 0;
 let attachedAtMs = 0;
 let lastPaintAtMs = 0;
 let lastSeenCurrentTime = 0;
+let firstPlaybackFrameReported = false;
 let selectedPlaybackDeviceId: string | null = null;
 let pendingMissionStart: MissionStartIntent | null = null;
 let pendingFlightConfirmation: FlightConfirmationIntent | null = null;
@@ -702,6 +703,7 @@ const detachVideo = (): void => {
   attachedAtMs = 0;
   lastPaintAtMs = 0;
   lastSeenCurrentTime = 0;
+  firstPlaybackFrameReported = false;
   lastLiveEdgeSeekAtMs = 0;
   selectedPlaybackDeviceId = null;
   video.removeAttribute("src");
@@ -780,8 +782,18 @@ const recoverStuckFlv = (video: HTMLVideoElement, url: string, reason: string): 
   scheduleFlvReattach(url);
 };
 
+const recordFirstPlaybackFrame = (video: HTMLVideoElement): void => {
+  if (firstPlaybackFrameReported || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+  firstPlaybackFrameReported = true;
+  void safeRenderInvoke("diagnostics-record", {
+    action: "video-first-frame-rendered",
+    reason: `width=${video.videoWidth};height=${video.videoHeight}`,
+  });
+};
+
 const notePaintProgress = (video: HTMLVideoElement): void => {
   if (!isPainting(video)) return;
+  recordFirstPlaybackFrame(video);
   const current = video.currentTime;
   if (lastPaintAtMs === 0 || Math.abs(current - lastSeenCurrentTime) >= 0.05) {
     lastPaintAtMs = Date.now();
