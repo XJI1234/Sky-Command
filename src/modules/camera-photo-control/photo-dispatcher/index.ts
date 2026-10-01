@@ -18,12 +18,13 @@ export type PhotoDispatchCode =
 
 export type PhotoPhase = "idle" | "capturing" | "captured" | "fetching" | "stored" | "failed" | "disconnected";
 export interface PhotoIdentity { readonly fileName: string; readonly index: number; }
-interface PhotoDelivery { readonly fileName: string; readonly sha256: string; }
+export interface PhotoManifestEntry { readonly fileName: string; readonly sha256: string; }
+interface PhotoDelivery extends PhotoManifestEntry { readonly count: number; }
 interface PhotoDispatchSession {
   busy: boolean;
   identity: PhotoIdentity | undefined;
   delivered: PhotoDelivery | undefined;
-  received: PhotoDelivery | undefined;
+  received: Map<string, string>;
   snapshot: PhotoDispatchSnapshot | undefined;
   generation: number;
   storedWaiter: ((result: PhotoDispatchResult) => void) | undefined;
@@ -40,11 +41,12 @@ export interface PhotoDispatchResult {
   readonly code: PhotoDispatchCode;
   readonly deviceId: string;
   readonly fileName?: string;
+  readonly count?: number;
   readonly platformError?: PhotoPlatformError;
 }
 export interface PhotoRelay {
   readonly latestTelemetry: (deviceId: string) => unknown;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> }>) => Promise<unknown>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> | Readonly<{ readonly knownPhotos: readonly PhotoManifestEntry[] }> }>) => Promise<unknown>;
 }
 export interface PhotoDispatcherClock {
   readonly setTimeout: (callback: () => void, milliseconds: number) => unknown;
@@ -70,7 +72,7 @@ const attemptAsync = async <T>(run: () => Promise<T>): Promise<Readonly<{ readon
 };
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object";
 const idle = (deviceId: string): PhotoDispatchSnapshot => freeze({ deviceId, phase: "idle" as const, fileName: null, code: null });
-const outcome = (ok: boolean, code: PhotoDispatchCode, deviceId: string, fileName?: string, extra: Partial<Pick<PhotoDispatchResult, "platformError">> = {}): PhotoDispatchResult =>
+const outcome = (ok: boolean, code: PhotoDispatchCode, deviceId: string, fileName?: string, extra: Partial<Pick<PhotoDispatchResult, "platformError" | "count">> = {}): PhotoDispatchResult =>
   freeze({ ok, code, deviceId, ...(fileName === undefined ? {} : { fileName }), ...extra });
 
 const defaultClock: PhotoDispatcherClock = freeze({
@@ -78,7 +80,7 @@ const defaultClock: PhotoDispatcherClock = freeze({
   clearTimeout: (handle: unknown): void => { clearTimeout(handle as ReturnType<typeof setTimeout>); },
 });
 
-function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly clock?: PhotoDispatcherClock; readonly storedTimeoutMs?: number }>): PhotoDispatcherInstance {
+function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly knownPhotos?: (deviceId: string) => readonly PhotoManifestEntry[]; readonly clock?: PhotoDispatcherClock; readonly storedTimeoutMs?: number }>): PhotoDispatcherInstance {
   const clock = dependencies.clock ?? defaultClock;
   const storedTimeoutMs = typeof dependencies.storedTimeoutMs === "number" && Number.isFinite(dependencies.storedTimeoutMs) && dependencies.storedTimeoutMs > 0 ? dependencies.storedTimeoutMs : 15_000;
   const sessions = new Map<string, PhotoDispatchSession>();
@@ -86,13 +88,13 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly cl
   const sessionFor = (deviceId: string): PhotoDispatchSession => {
     const current = sessions.get(deviceId);
     if (current !== undefined) return current;
-    const created: PhotoDispatchSession = { busy: false, identity: undefined, delivered: undefined, received: undefined, snapshot: undefined, generation: 0, storedWaiter: undefined };
+    const created: PhotoDispatchSession = { busy: false, identity: undefined, delivered: undefined, received: new Map(), snapshot: undefined, generation: 0, storedWaiter: undefined };
     sessions.set(deviceId, created);
     return created;
   };
   const hasMatchingDelivery = (session: PhotoDispatchSession): boolean => {
     const { delivered, received } = session;
-    return delivered !== undefined && received !== undefined && delivered.fileName === received.fileName && delivered.sha256 === received.sha256;
+    return delivered !== undefined && received.get(delivered.fileName) === delivered.sha256;
   };
   const publish = (session: PhotoDispatchSession, snapshot: PhotoDispatchSnapshot): void => {
     session.snapshot = snapshot;
@@ -121,40 +123,55 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly cl
     if (camera !== "CONNECTED") return "CAMERA_CONNECTION_UNKNOWN";
     return null;
   };
+  const known = (deviceId: string): readonly PhotoManifestEntry[] => {
+    if (dependencies.knownPhotos === undefined) return freeze([]);
+    try {
+      const entries = dependencies.knownPhotos(deviceId);
+      if (!Array.isArray(entries) || entries.length > 256) return freeze([]);
+      return freeze(entries.flatMap((entry) => validManifest(entry) ? [freeze({ fileName: entry.fileName, sha256: entry.sha256 })] : []));
+    } catch { return freeze([]); }
+  };
   const dispatch = async (deviceId: string, name: "camera.photo.capture" | "camera.photo.fetch"): Promise<PhotoDispatchResult> => {
     if (!validId(deviceId)) return outcome(false, "INVALID_INPUT", typeof deviceId === "string" ? deviceId : "invalid");
     const existing = sessions.get(deviceId);
     if (existing?.busy) return outcome(false, "OPERATION_IN_PROGRESS", deviceId);
-    if (name === "camera.photo.fetch" && existing?.identity === undefined) return outcome(false, "NOTHING_TO_FETCH", deviceId);
     const blocked = reachability(deviceId);
     if (blocked !== null) return outcome(false, blocked, deviceId);
     const session = existing ?? sessionFor(deviceId);
     session.busy = true;
     session.generation += 1;
+    if (name === "camera.photo.fetch") {
+      session.delivered = undefined;
+      session.received.clear();
+    }
     const generation = session.generation;
     publish(session, freeze({ deviceId, phase: name === "camera.photo.capture" ? "capturing" as const : "fetching" as const, fileName: session.identity?.fileName ?? null, code: null }));
-    const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, freeze({ name, fields: empty })));
+    const fields = name === "camera.photo.fetch" ? freeze({ knownPhotos: known(deviceId) }) : empty;
+    const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, freeze({ name, fields })));
     if (session.generation !== generation) return release(session, outcome(false, "DISCONNECTED", deviceId));
     if (!sent.ok) return release(session, finish(deviceId, session, false, "DEPENDENCY_FAILURE"));
     const status = isRecord(sent.value) && typeof sent.value.status === "string" ? sent.value.status : null;
     if (status === "timed-out" || status === "disconnected") return release(session, finish(deviceId, session, false, "RESULT_UNCONFIRMED"));
     if (status === "succeeded") {
+      if (name === "camera.photo.fetch" && text(resultFields(sent.value) ?? {}, "outcome") === "NONE") {
+        return release(session, finish(deviceId, session, false, "NOTHING_TO_FETCH", undefined, { count: 0 }));
+      }
       if (name === "camera.photo.capture") {
         const captured = readCaptured(sent.value);
         if (captured === null) return release(session, finish(deviceId, session, false, "DEPENDENCY_FAILURE"));
         session.identity = captured;
         session.delivered = undefined;
-        session.received = undefined;
+        session.received.clear();
         publish(session, freeze({ deviceId, phase: "captured" as const, fileName: captured.fileName, code: "CAPTURED" }));
         return release(session, outcome(true, "CAPTURED", deviceId, captured.fileName));
       }
-      const current = session.identity;
       const confirmed = readDelivered(sent.value);
-      if (current === undefined || confirmed === null || confirmed.fileName !== current.fileName) {
+      if (confirmed === null) {
         return release(session, finish(deviceId, session, false, "DEPENDENCY_FAILURE"));
       }
       session.delivered = confirmed;
-      if (hasMatchingDelivery(session)) return release(session, finish(deviceId, session, true, "SUCCEEDED", confirmed.fileName));
+      session.identity = freeze({ fileName: confirmed.fileName, index: session.identity?.fileName === confirmed.fileName ? session.identity.index : 0 });
+      if (hasMatchingDelivery(session)) return release(session, finish(deviceId, session, true, "SUCCEEDED", confirmed.fileName, { count: confirmed.count }));
       return await new Promise<PhotoDispatchResult>((resolve) => {
         const timer = clock.setTimeout(() => {
           if (session.storedWaiter === undefined) return;
@@ -169,7 +186,7 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly cl
     const terminal = readTerminal(sent.value);
     return release(session, finish(deviceId, session, false, terminal?.code ?? "RELAY_REJECTED", undefined, terminal?.platformError === undefined ? {} : { platformError: terminal.platformError }));
   };
-  const finish = (deviceId: string, session: PhotoDispatchSession, ok: boolean, code: PhotoDispatchCode, fileName?: string, extra: Partial<Pick<PhotoDispatchResult, "platformError">> = {}): PhotoDispatchResult => {
+  const finish = (deviceId: string, session: PhotoDispatchSession, ok: boolean, code: PhotoDispatchCode, fileName?: string, extra: Partial<Pick<PhotoDispatchResult, "platformError" | "count">> = {}): PhotoDispatchResult => {
     publish(session, freeze({ deviceId, phase: ok ? "stored" as const : "failed" as const, fileName: fileName ?? session.identity?.fileName ?? null, code }));
     return outcome(ok, code, deviceId, fileName, extra);
   };
@@ -189,14 +206,16 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly cl
     recordStored: (deviceId, fileName, sha256) => {
       if (!validId(deviceId) || typeof fileName !== "string" || !validSha256(sha256)) return null;
       const session = sessions.get(deviceId);
-      const current = session?.identity;
-      if (session === undefined || current === undefined || current.fileName !== fileName) return session?.snapshot ?? null;
+      if (session === undefined) return null;
       const waiting = session.snapshot?.phase === "fetching" || session.storedWaiter !== undefined;
       if (!waiting) return session.snapshot ?? null;
-      session.received = freeze({ fileName, sha256 });
+      const expected = session.delivered?.fileName;
+      if (expected !== undefined && expected !== fileName) return session.snapshot ?? null;
+      session.received.set(fileName, sha256);
       if (!hasMatchingDelivery(session)) return session.snapshot ?? null;
-      finish(deviceId, session, true, "SUCCEEDED", fileName);
-      if (session.storedWaiter !== undefined) release(session, outcome(true, "SUCCEEDED", deviceId, fileName));
+      const count = session.delivered?.count ?? 1;
+      const result = finish(deviceId, session, true, "SUCCEEDED", fileName, { count });
+      if (session.storedWaiter !== undefined) release(session, result);
       return session.snapshot ?? freeze({ deviceId, phase: "stored" as const, fileName, code: "SUCCEEDED" as const });
     },
     subscribe: (listener) => {
@@ -220,7 +239,15 @@ function readDelivered(value: unknown): PhotoDelivery | null {
   if (fields === null || text(fields, "domain") !== "photo" || text(fields, "outcome") !== "DELIVERED") return null;
   const fileName = text(fields, "fileName");
   const sha256 = text(fields, "sha256", 64);
-  return fileName !== null && sha256 !== null && validSha256(sha256) ? freeze({ fileName, sha256 }) : null;
+  const count = number(fields, "count");
+  return fileName !== null && sha256 !== null && validSha256(sha256) && count !== null && count > 0 ? freeze({ fileName, sha256, count }) : null;
+}
+
+function validManifest(value: unknown): value is PhotoManifestEntry {
+  if (!isRecord(value)) return false;
+  const fileName = value.fileName;
+  const sha256 = value.sha256;
+  return typeof fileName === "string" && fileName.trim().length > 0 && fileName.length <= 128 && !/[\\/]/u.test(fileName) && !fileName.includes("..") && !/[\p{Cc}]/u.test(fileName) && typeof sha256 === "string" && validSha256(sha256);
 }
 
 function readTerminal(value: unknown): Readonly<{ readonly code: PhotoDispatchCode; readonly platformError?: PhotoPlatformError }> | null {

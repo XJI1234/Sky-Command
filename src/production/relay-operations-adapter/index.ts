@@ -6,6 +6,7 @@ type JsonValue = Readonly<{ readonly kind: "null" }>
   | Readonly<{ readonly kind: "string"; readonly value: string }>
   | Readonly<{ readonly kind: "number"; readonly value: string }>
   | Readonly<{ readonly kind: "boolean"; readonly value: boolean }>
+  | Readonly<{ readonly kind: "array"; readonly values: readonly JsonValue[] }>
   | Readonly<{ readonly kind: "object"; readonly fields: Readonly<Record<string, JsonValue>> }>;
 
 type CommandStatus = "succeeded" | "rejected" | "timed-out" | "disconnected" | "transport-failed";
@@ -170,7 +171,7 @@ export interface RelaySettingsGateway {
 }
 export interface PhotoRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> | Readonly<{ readonly knownPhotos: readonly Readonly<{ readonly fileName: string; readonly sha256: string }>[] }> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
 }
 export interface RelayOperationsAdapterInstance {
   readonly telemetry: (deviceId: string) => DesktopRelayTelemetry | null;
@@ -210,6 +211,7 @@ const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value)
 const text = (value: string): JsonValue => freeze({ kind: "string" as const, value });
 const bool = (value: boolean): JsonValue => freeze({ kind: "boolean" as const, value });
 const object = (fields: Record<string, JsonValue>): Readonly<Record<string, JsonValue>> => freeze({ ...fields });
+const array = (values: readonly JsonValue[]): JsonValue => freeze({ kind: "array" as const, values: freeze([...values]) });
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const privateIpv4 = (value: unknown): value is string => {
   if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/u.test(value)) return false;
@@ -220,6 +222,7 @@ const privateIpv4 = (value: unknown): value is string => {
 };
 const validMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && value.toLowerCase().endsWith(".kmz") && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value);
 const validExecutingMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !value.includes("..") && !/[\\/\p{Cc}\\/]/u.test(value);
+const validPhotoName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value) && /\.(?:jpg|jpeg|dng)$/iu.test(value);
 const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const nonNegativeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const nonNegativeFinite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -688,7 +691,13 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   });
   const photoGateway: PhotoRelayGateway = freeze({
     latestTelemetry: telemetry,
-    sendCommand: async (deviceId, request) => (request.name === "camera.photo.capture" || request.name === "camera.photo.fetch") && Object.keys(request.fields).length === 0 ? send(deviceId, request.name, {}) : commandFailure()
+    sendCommand: async (deviceId, request) => {
+      if (request.name === "camera.photo.capture" && Object.keys(request.fields).length === 0) return send(deviceId, request.name, {});
+      if (request.name !== "camera.photo.fetch" || Object.keys(request.fields).length !== 1 || !Array.isArray(request.fields.knownPhotos) || request.fields.knownPhotos.length > 256) return commandFailure();
+      const entries = request.fields.knownPhotos;
+      if (entries.some((entry) => entry === null || typeof entry.fileName !== "string" || typeof entry.sha256 !== "string" || !validPhotoName(entry.fileName) || !/^[0-9a-f]{64}$/u.test(entry.sha256))) return commandFailure();
+      return send(deviceId, request.name, { knownPhotos: array(entries.map((entry) => freeze({ kind: "object" as const, fields: object({ fileName: text(entry.fileName), sha256: text(entry.sha256) }) }))) });
+    }
   });
   const settingsGateway: RelaySettingsGateway = freeze({
     sendCommand: async (deviceId, request) => {

@@ -5,7 +5,7 @@
 
 ## 唯一职责
 
-`photo-inbox` 接收已经由 `relay-link/media-intake` 校验过大小和 SHA-256 的原图字节，通过注入的原子写入端口持久化，并提供按设备隔离的只读清单。它拥有照片的去重规则和本地清单。
+`photo-inbox` 接收已经由 `relay-link/media-intake` 校验过大小和 SHA-256 的原图字节，通过注入的原子写入端口持久化，并提供按设备隔离的只读清单。它拥有照片的去重规则和本地清单；该清单是 `camera.photo.fetch` 判断当前电脑已同步照片的唯一输入。
 
 它不下发命令、不解析原始 WebSocket 字节、不调用 DJI、不打开系统相册 UI。
 

@@ -21,7 +21,7 @@ instance.recordStored(deviceId, fileName, sha256) -> PhotoDispatchSnapshot | nul
 instance.subscribe(listener) -> unsubscribe
 ```
 
-`relay.sendCommand` 是唯一出站效果。`recordStored` 只能由 `photo-inbox` 在落盘成功后调用；它的文件名和 SHA-256 与手机 `DELIVERED` 结果是两个独立事实，先后顺序不限。只有两者都到达且完全一致时，才把 `fetching` 转为 `stored` 并完成 fetch。摘要不一致不能产生临时成功，必须继续等待匹配的收件箱事实，直到注入的 `clock` 截止并返回 `TRANSFER_FAILED`。
+`relay.sendCommand` 是唯一出站效果。`fetch` 请求必须带入调用开始时的 `knownPhotos` 清单；`recordStored` 只能由 `photo-inbox` 在每张照片原子落盘成功后调用。一次批量中每张媒体结果都可先于最终 `DELIVERED` 命令结果到达，调度器必须按 `(fileName, sha256)` 累积收件箱事实。只有手机最终结果中的最后一张文件和数量与已确认收件箱事实匹配时，才把 `fetching` 转为 `stored` 并完成 fetch。摘要不一致不能产生临时成功，必须继续等待匹配的收件箱事实，直到注入的 `clock` 截止并返回 `TRANSFER_FAILED`。
 
 ## 规则
 

@@ -14,7 +14,18 @@ const captured = (fileName = "DJI_0001.jpg", index = 1) => ({
     },
   },
 });
-const delivered = (fileName = "DJI_0001.jpg", sha256 = "a".repeat(64)) => ({
+const none = () => ({
+  status: "succeeded",
+  result: {
+    kind: "object",
+      fields: {
+        domain: { kind: "string", value: "photo" },
+        outcome: { kind: "string", value: "NONE" },
+        count: { kind: "number", value: "0" },
+    },
+  },
+});
+const delivered = (fileName = "DJI_0001.jpg", sha256 = "a".repeat(64), count = 1) => ({
   status: "succeeded",
   result: {
     kind: "object",
@@ -24,19 +35,22 @@ const delivered = (fileName = "DJI_0001.jpg", sha256 = "a".repeat(64)) => ({
       fileName: { kind: "string", value: fileName },
       size: { kind: "number", value: "3" },
       sha256: { kind: "string", value: sha256 },
+      count: { kind: "number", value: String(count) },
     },
   },
 });
 
 describe("photo-dispatcher", () => {
-  it("只发送空字段命令，记下拍照身份，并在 fetch 等到收件箱确认后才成功", async () => {
+  it("把当前电脑清单带给 fetch，并在最终命令结果前等待收件箱确认", async () => {
     const sent: unknown[] = [];
     let releaseFetch: (() => void) | undefined;
     const dispatcher = PhotoDispatcher.create({
+      knownPhotos: () => [{ fileName: "DJI_0000.jpg", sha256: "0".repeat(64) }],
       relay: {
         latestTelemetry: () => ready(),
         sendCommand: async (_deviceId, request) => {
           sent.push(request);
+          if (request.name === "camera.photo.fetch" && sent.filter((item) => (item as { name?: string }).name === "camera.photo.fetch").length === 1) return none();
           if (request.name === "camera.photo.fetch") await new Promise<void>((resolve) => { releaseFetch = resolve; });
           return request.name === "camera.photo.capture" ? captured() : delivered();
         },
@@ -45,9 +59,12 @@ describe("photo-dispatcher", () => {
 
     await expect(dispatcher.fetch("phone-1")).resolves.toMatchObject({ ok: false, code: "NOTHING_TO_FETCH" });
     await expect(dispatcher.capture("phone-1")).resolves.toMatchObject({ ok: true, code: "CAPTURED", fileName: "DJI_0001.jpg" });
-    expect(sent).toEqual([{ name: "camera.photo.capture", fields: {} }]);
+    expect(sent).toEqual([
+      { name: "camera.photo.fetch", fields: { knownPhotos: [{ fileName: "DJI_0000.jpg", sha256: "0".repeat(64) }] } },
+      { name: "camera.photo.capture", fields: {} },
+    ]);
     expect(Object.isFrozen(sent[0])).toBe(true);
-    expect(Object.keys((sent[0] as { fields: object }).fields)).toEqual([]);
+    expect(Object.keys((sent[0] as { fields: object }).fields)).toEqual(["knownPhotos"]);
 
     const fetching = dispatcher.fetch("phone-1");
     for (let step = 0; step < 10 && releaseFetch === undefined; step += 1) await Promise.resolve();
@@ -55,9 +72,9 @@ describe("photo-dispatcher", () => {
     expect(dispatcher.get("phone-1").phase).toBe("fetching");
     expect(dispatcher.recordStored("phone-1", "DJI_0001.jpg", "a".repeat(64))).toMatchObject({ phase: "fetching", code: null });
     releaseFetch?.();
-    await expect(fetching).resolves.toMatchObject({ ok: true, code: "SUCCEEDED", fileName: "DJI_0001.jpg" });
+    await expect(fetching).resolves.toMatchObject({ ok: true, code: "SUCCEEDED", fileName: "DJI_0001.jpg", count: 1 });
     expect(dispatcher.get("phone-1")).toMatchObject({ phase: "stored", code: "SUCCEEDED" });
-    expect(sent[1]).toEqual({ name: "camera.photo.fetch", fields: {} });
+    expect(sent[2]).toEqual({ name: "camera.photo.fetch", fields: { knownPhotos: [{ fileName: "DJI_0000.jpg", sha256: "0".repeat(64) }] } });
   });
 
   it("fetch 命令成功但收件箱一直不确认时到期失败，不得永远等待", async () => {
@@ -65,7 +82,7 @@ describe("photo-dispatcher", () => {
     const dispatcher = PhotoDispatcher.create({
       relay: {
         latestTelemetry: () => ready(),
-        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : delivered(),
+        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : delivered("DJI_0001.jpg", "a".repeat(64), 3),
       },
       clock: {
         setTimeout: (callback) => { fire = callback; return 1; },
@@ -84,7 +101,7 @@ describe("photo-dispatcher", () => {
     const dispatcher = PhotoDispatcher.create({
       relay: {
         latestTelemetry: () => ready(),
-        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : delivered(),
+        sendCommand: async (_deviceId, request) => request.name === "camera.photo.capture" ? captured() : delivered("DJI_0001.jpg", "a".repeat(64), 1),
       },
       storedTimeoutMs: 1,
     });

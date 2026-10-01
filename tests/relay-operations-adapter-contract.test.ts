@@ -1298,15 +1298,15 @@ describe("RelayOperationsAdapter", () => {
     expect(await timedOut.pairingGateway().sendCommand("relay-1", { name: "pairing.status", fields: {} })).toMatchObject({ status: "timeout", detail: "timed-out" });
   });
 
-  it("只转发空字段拍照与回传命令", async () => {
+  it("只转发受限字段拍照与回传命令", async () => {
     const fixture = relayFixture();
     const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
     expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.capture", fields: {} })).status).toBe("succeeded");
-    expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.fetch", fields: {} })).status).toBe("succeeded");
+    expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.fetch", fields: { knownPhotos: [] } })).status).toBe("succeeded");
     expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.fetch", fields: { extra: true } as never })).status).toBe("rejected");
     expect(fixture.sent).toEqual([
       { deviceId: "relay-1", request: { name: "camera.photo.capture", fields: {} } },
-      { deviceId: "relay-1", request: { name: "camera.photo.fetch", fields: {} } },
+      { deviceId: "relay-1", request: { name: "camera.photo.fetch", fields: { knownPhotos: { kind: "array", values: [] } } } },
     ]);
   });
 });

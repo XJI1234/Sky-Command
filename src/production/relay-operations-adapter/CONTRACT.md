@@ -130,7 +130,7 @@ instance.dispose() -> void
 | 停止自动起飞/停止自动降落 | `flight.stop-takeoff` / `flight.stop-auto-landing` | `{ confirm: true }` |
 | 相机与图传设置 | `device.settings.*` | 由 `relay-device-settings` 契约规定的字段 |
 | 拍照 | `camera.photo.capture` | `{}` |
-| 回传照片 | `camera.photo.fetch` | `{}` |
+| 回传照片 | `camera.photo.fetch` | `{ knownPhotos: [{ fileName, sha256 }] }` |
 
 除表中五条飞控命令外，不得生成其他 `flight.*` 命令。调用方传入无效字段时，适配器在本地返回稳定拒绝且不产生网络效果。
 
@@ -146,7 +146,7 @@ instance.dispose() -> void
 - `telemetry.read` 的命令 `status=succeeded` 只表示手机已回复。返回的 `snapshot` 还必须说明本次快照是否可作为当前会话事实：`accepted` 表示完整解码并采用，`already-current` 表示完整解码但桌面已持有更新的同会话订阅事实，`invalid` 表示结果缺失、畸形或不可采纳，`session-changed` 表示请求期间会话替换，`unavailable` 表示命令未成功。只有 `accepted` 或 `already-current` 才能向设备页报告刷新成功。手机不重建硬件 Key 观察，也不启动 DJI、航线、图传或飞控操作。适配器仅在请求前后仍为同一 `deviceId + sessionId`、结构化 `result` 可按本契约完整解码且携带正 `deviceRevision` 时，才可在尚无较高 `telemetrySequence` 订阅事实的条件下将它写入该会话的当前设备事实。读取失败、超时、畸形或会话变化不得覆盖现有订阅事实，也不得制造控制授权；调用方仍必须逐项执行各自的门禁。
 - 设置读写成功必须携带可解码的 `command-result.result` 完整快照；缺失或畸形结果是 `invalid-result`，不得乐观更新。
 - `camera.photo.capture` 成功只表示 DJI 已拍下，结果必须带 `CAPTURED` 与安全文件名；不表示电脑已有文件。
-- `camera.photo.fetch` 成功只表示电脑 `media-result` 已确认收齐，并与 `photo-inbox` 落盘一致；失败不得改写图传状态。
+- `camera.photo.fetch` 成功只表示本次批量中所有媒体均收到电脑 `media-result` 确认，并与 `photo-inbox` 落盘一致；结果携带实际回传数量 `count`。失败不得改写图传状态。
 - `pairing.status` 仅在命令 `succeeded` 时携带根契约 §7.4 的结构化 `result`（`pairingState`、`flightControllerConnected`、`aircraftModel`、`motorsOn`、`sdkRegistered`）。失败、超时或 `pairing.start` / `pairing.stop` 不得附带该 `result`。实时配对显示仍以入站遥测的 `pairingState` 为准，命令成功不等于已配对。
 
 所有生产命令结果统一保留为业务模块已有的 `succeeded`、`rejected`、`timed-out`、`disconnected` 或 `transport-failed` 语义。`streamGateway` 可以把手机 `command-result.detail` 原样转成有界字符串（1..256 码点、无控制字符），供图传调度映射封闭原因码；不得泄露连接 ID、会话 ID、字节、路径、令牌、DJI 异常。

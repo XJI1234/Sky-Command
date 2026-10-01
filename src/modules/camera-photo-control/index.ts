@@ -1,9 +1,9 @@
-import { PhotoDispatcher, type PhotoDispatchResult, type PhotoDispatchSnapshot, type PhotoRelay } from "./photo-dispatcher/index.js";
+import { PhotoDispatcher, type PhotoDispatchResult, type PhotoDispatchSnapshot, type PhotoManifestEntry, type PhotoRelay } from "./photo-dispatcher/index.js";
 import { PhotoInbox, type PhotoInboxFs, type PhotoInboxInstance, type StoredPhoto } from "./photo-inbox/index.js";
 
 export { PhotoDispatcher } from "./photo-dispatcher/index.js";
 export { PhotoInbox } from "./photo-inbox/index.js";
-export type { PhotoDispatchResult, PhotoDispatchSnapshot, PhotoRelay } from "./photo-dispatcher/index.js";
+export type { PhotoDispatchResult, PhotoDispatchSnapshot, PhotoManifestEntry, PhotoRelay } from "./photo-dispatcher/index.js";
 export type { PhotoInboxInstance, StoredPhoto, PhotoMediaFile } from "./photo-inbox/index.js";
 
 export interface CameraPhotoControlDependencies {
@@ -26,8 +26,8 @@ export interface CameraPhotoControlInstance {
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 
 function create(dependencies: CameraPhotoControlDependencies): CameraPhotoControlInstance {
-  const dispatcher = PhotoDispatcher.create({ relay: dependencies.relay });
   const inbox = PhotoInbox.create({ now: dependencies.now, ...(dependencies.fs === undefined ? {} : { fs: dependencies.fs }) });
+  const dispatcher = PhotoDispatcher.create({ relay: dependencies.relay, knownPhotos: (deviceId): readonly PhotoManifestEntry[] => inbox.list(deviceId).map(({ fileName, sha256 }) => ({ fileName, sha256 })) });
   return freeze({
     capture: (deviceId) => dispatcher.capture(deviceId),
     fetch: (deviceId) => dispatcher.fetch(deviceId),
