@@ -127,8 +127,8 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly kn
     if (dependencies.knownPhotos === undefined) return freeze([]);
     try {
       const entries = dependencies.knownPhotos(deviceId);
-      if (!Array.isArray(entries) || entries.length > 256) return freeze([]);
-      return freeze(entries.flatMap((entry) => validManifest(entry) ? [freeze({ fileName: entry.fileName, sha256: entry.sha256 })] : []));
+      if (!Array.isArray(entries)) return freeze([]);
+      return freeze(entries.slice(0, 256).flatMap((entry) => validManifest(entry) ? [freeze({ fileName: entry.fileName, sha256: entry.sha256 })] : []));
     } catch { return freeze([]); }
   };
   const dispatch = async (deviceId: string, name: "camera.photo.capture" | "camera.photo.fetch"): Promise<PhotoDispatchResult> => {

@@ -11,7 +11,7 @@ export type { LinkProbeReport, ListenAddress, RelayConnection, RelayTransport };
 export type { MissionPayload } from "./mission-sender/index.js";
 export type TimerScheduler = ServerTimerScheduler & CommandTimerScheduler & MissionTimerScheduler;
 
-export interface CommandRequest { readonly name: string; readonly fields: JsonObject["fields"]; }
+export interface CommandRequest { readonly name: string; readonly fields: JsonObject["fields"]; readonly timeoutMs?: number; }
 export interface RelayDiagnosticSink {
   persist(input: Readonly<{ readonly deviceId: string; readonly runId: string; readonly events: readonly DiagnosticEventFrame[] }>): Promise<boolean>;
 }
@@ -269,7 +269,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     let frame: RelayFrame;
     try { frame = { type: "command", id: commandId, command: { name: request?.name, fields: request?.fields } }; } catch { return commandFailure(deviceId, commandId, "Command is invalid"); }
     const encoded = RelayFrameCodec.encode(frame); if (!encoded.ok) return commandFailure(deviceId, commandId, "Command is invalid");
-    const begun = tracker.begin({ connectionId: device.connectionId, commandId }); if (!begun.ok) return commandFailure(deviceId, commandId, "Command is already pending");
+    const begun = tracker.begin({ connectionId: device.connectionId, commandId, ...(typeof request?.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}) }); if (!begun.ok) return commandFailure(deviceId, commandId, "Command is already pending");
     const result = new Promise<CommandOutcome>((resolve) => { commandWaiters.set(key(device.connectionId, commandId), { deviceId, resolve }); });
     void server.send(device.connectionId, encoded.value).then((sent) => {
       if (!sent.ok) tracker.cancelConnection(device.connectionId, "Command could not be sent");

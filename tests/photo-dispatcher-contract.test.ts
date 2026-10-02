@@ -159,6 +159,29 @@ describe("photo-dispatcher", () => {
     await expect(fetching).resolves.toMatchObject({ ok: false, code: "TRANSFER_FAILED", fileName: "DJI_0001.jpg" });
   });
 
+  it("清单超过 256 张时仍发送前 256 张，避免整卡重传", async () => {
+    const sent: unknown[] = [];
+    const entries = Array.from({ length: 300 }, (_, index) => ({
+      fileName: `DJI_${String(index).padStart(4, "0")}.jpg`,
+      sha256: index.toString(16).padStart(64, "0"),
+    }));
+    const dispatcher = PhotoDispatcher.create({
+      knownPhotos: () => entries,
+      relay: {
+        latestTelemetry: () => ready(),
+        sendCommand: async (_deviceId, request) => {
+          sent.push(request);
+          return none();
+        },
+      },
+    });
+    await expect(dispatcher.fetch("phone-1")).resolves.toMatchObject({ ok: false, code: "NOTHING_TO_FETCH" });
+    const known = (sent[0] as { fields: { knownPhotos: { fileName: string }[] } }).fields.knownPhotos;
+    expect(known).toHaveLength(256);
+    expect(known[0]?.fileName).toBe("DJI_0000.jpg");
+    expect(known[255]?.fileName).toBe("DJI_0255.jpg");
+  });
+
   it("主相机未连接时本地拒绝，且不同设备互不阻塞", async () => {
     const sent: string[] = [];
     const dispatcher = PhotoDispatcher.create({

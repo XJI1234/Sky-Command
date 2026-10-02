@@ -1561,7 +1561,7 @@ async function run(
   const connectionEpoch = feedbackDeviceEpoch(view, deviceId);
   if (!decision.ok) { blocked(action, decision.reason ?? "无法执行", deviceId, connectionEpoch); return; }
   if (action === "photo-capture") show("正在拍照");
-  if (action === "photo-fetch") show("正在回传照片，界面应保持可操作");
+  if (action === "photo-fetch") show("正在补传电脑上没有的照片，界面应保持可操作");
   let result: unknown;
   try {
     result = await bridge().invoke(invokeName, input);
@@ -2628,10 +2628,10 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-photo]").forEach((bu
     }
     monitorPhotoBusy.add(deviceId);
     button.disabled = true;
-    monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在回传照片，界面应保持可操作" });
+    monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在补传电脑上没有的照片，界面应保持可操作" });
     monitorRailDeviceId = deviceId;
     monitorRailKind = "photo";
-    show(`${callSign(deviceId)}：正在回传照片，界面应保持可操作`);
+    show(`${callSign(deviceId)}：正在补传电脑上没有的照片，界面应保持可操作`);
     try { await render(); } catch { /* the transfer still runs */ }
     try {
       const result = await bridge().invoke("photo-fetch", { deviceId });

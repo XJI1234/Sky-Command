@@ -10,6 +10,13 @@ class Scheduler implements TimerScheduler {
   pending(): number { return this.timers.size; }
 }
 
+class RecordingScheduler implements TimerScheduler {
+  delays: number[] = [];
+  private next = 1;
+  setTimeout(_callback: () => void, milliseconds: number): number { this.delays.push(milliseconds); return this.next++; }
+  clearTimeout(_handle: number): void {}
+}
+
 class RetainedScheduler implements TimerScheduler {
   readonly callbacks: Array<() => void> = [];
   setTimeout(callback: () => void, _milliseconds: number): number { this.callbacks.push(callback); return this.callbacks.length - 1; }
@@ -206,6 +213,15 @@ describe("command-tracker contract", () => {
     expect(resolved).toEqual({ ok: true, value: { connectionId: "connection", commandId: "command", status: "succeeded", detail: "accepted" } });
     if (!resolved.ok) throw new Error("expected a completed command");
     expect(Object.hasOwn(resolved.value, "result")).toBe(false);
+  });
+
+  it("回传可以单独延长超时，其它命令仍用全局时限", () => {
+    const scheduler = new RecordingScheduler();
+    const tracker = CommandTracker.create({ scheduler, timeoutMs: 120_000 });
+    expect(tracker.begin({ connectionId: "connection-1", commandId: "capture" })).toMatchObject({ ok: true });
+    expect(tracker.begin({ connectionId: "connection-1", commandId: "fetch", timeoutMs: 3_600_000 })).toMatchObject({ ok: true });
+    expect(tracker.begin({ connectionId: "connection-1", commandId: "bad", timeoutMs: 50 })).toMatchObject({ ok: true });
+    expect(scheduler.delays).toEqual([120_000, 3_600_000, 120_000]);
   });
 
   it("does not deliver outcomes after its subscription is cancelled", () => {

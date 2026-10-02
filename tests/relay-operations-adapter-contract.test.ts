@@ -1324,7 +1324,7 @@ describe("RelayOperationsAdapter", () => {
     expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.fetch", fields: { extra: true } as never })).status).toBe("rejected");
     expect(fixture.sent).toEqual([
       { deviceId: "relay-1", request: { name: "camera.photo.capture", fields: {} } },
-      { deviceId: "relay-1", request: { name: "camera.photo.fetch", fields: { knownPhotos: { kind: "array", values: [] } } } },
+      { deviceId: "relay-1", request: { name: "camera.photo.fetch", fields: { knownPhotos: { kind: "array", values: [] } }, timeoutMs: 60 * 60 * 1000 } },
     ]);
   });
 });

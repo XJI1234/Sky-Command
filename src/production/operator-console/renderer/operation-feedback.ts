@@ -52,7 +52,7 @@ const photoLabel = (action: string): string => action === "photo-fetch" ? "回�
 const localReason = (code: string | null): string => {
     if (code === "DEVICE_OFFLINE" || code === "RELAY_OFFLINE") return "手机中继离线";
     if (code === "SDK_NOT_READY") return "手机端 MSDK 尚未就绪";
-    if (code === "NOTHING_TO_FETCH") return "还没有可回传的照片";
+    if (code === "NOTHING_TO_FETCH") return "飞机上没有电脑缺少的照片";
     if (code === "AIRLINK_OFFLINE") return "AirLink 未连接";
   if (code === "AIRLINK_CONNECTION_UNKNOWN") return "AirLink 状态未知";
   if (code === "CAMERA_OFFLINE") return "主相机未连接";
@@ -148,6 +148,7 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
     return { source: "desktop", outcome: "completed", message: `已取消${flightLabel(confirmedAction)}，未调用 DJI MSDK` };
   }
   if (code === "CAPTURED") return msdkCallback("dji", "accepted", "成功", "onSuccess", ["说明：已拍下原图，电脑尚未收齐文件"]);
+  if (code === "NOTHING_TO_FETCH") return { source: "relay", outcome: "completed", message: "飞机上没有电脑缺少的照片" };
   const reason = text(read(inner, "reason")) ?? text(read(value, "reason"));
   if (code !== null && code !== "SUCCEEDED") return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${localReason(reason ?? code)}` };
 

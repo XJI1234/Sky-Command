@@ -11,7 +11,7 @@
 ## 对外接口
 
 ```ts
-CameraPhotoControl.create({ relay, now, fs? }) -> CameraPhotoControlInstance
+CameraPhotoControl.create({ relay, now, fs?, storedPhotos? }) -> CameraPhotoControlInstance
 
 instance.capture(deviceId) -> Promise<PhotoDispatchResult>
 instance.fetch(deviceId) -> Promise<PhotoDispatchResult>
@@ -41,9 +41,9 @@ camera.photo.capture    fields: {}
 camera.photo.fetch      fields: { knownPhotos: [{ fileName, sha256 }] }
 ```
 
-桌面在发送前只检查：已选图传/任务所用的那台在线手机、MSDK 为 `READY`、主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 为 `CONNECTED`。不要求 AirLink（那是视频源，不是快门）。`fetch` 使用该设备收件箱当前的 `(fileName, sha256)` 清单，不要求本次桌面会话刚刚执行过 `capture`；手机会逐张回传清单中缺失的照片，直到明确返回 `NONE`。飞控、遥控器、电量、航线、图传是否正在推流均不得作为本地拒绝理由。手机将在调用 MSDK 前再次检查硬件；DJI 拒绝必须原样显示。
+桌面在发送前只检查：已选图传/任务所用的那台在线手机、MSDK 为 `READY`、主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 为 `CONNECTED`。不要求 AirLink（那是视频源，不是快门）。`fetch` 先把生产装配层给出的、已经落在该设备照片目录里的原图记入收件箱（只记文件名、大小和 SHA-256，不重写文件），再把收件箱当前的 `(fileName, sha256)` 清单交给手机。不要求本次桌面会话刚刚执行过 `capture`。手机会逐张回传清单中缺失的照片，直到明确返回 `NONE`。清单超过 256 条时只发送前 256 条，不得把超限清单当成空清单。飞控、遥控器、电量、航线、图传是否正在推流均不得作为本地拒绝理由。手机将在调用 MSDK 前再次检查硬件；DJI 拒绝必须原样显示。
 
-命令超时沿用桌面中继的 120_000 ms。回传期间桌面必须继续处理遥测、图传和其它命令；媒体分块不得堵住命令结果。
+拍照命令超时沿用桌面中继的 120_000 ms。回传命令单独使用 3_600_000 ms，避免一批原图还在传输时被标成失败。回传期间桌面必须继续处理遥测、图传和其它命令；媒体分块不得堵住命令结果。
 
 ## 状态、并发和断线
 

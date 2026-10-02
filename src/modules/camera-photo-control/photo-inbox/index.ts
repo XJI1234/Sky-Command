@@ -22,6 +22,8 @@ export interface PhotoInboxOptions {
 }
 export interface PhotoInboxInstance {
   accept(deviceId: string, file: PhotoMediaFile): PhotoInboxAccept;
+  /** Register a photo already stored on disk. Does not write or replace bytes. */
+  remember(deviceId: string, photo: Pick<StoredPhoto, "fileName" | "size" | "sha256">): PhotoInboxAccept;
   list(deviceId: string): readonly StoredPhoto[];
   forget(deviceId: string): boolean;
   subscribe(listener: (deviceId: string, photos: readonly StoredPhoto[]) => void): () => void;
@@ -49,7 +51,19 @@ function create(options: PhotoInboxOptions): PhotoInboxInstance {
     const current = freeze([...(photos.get(deviceId) ?? [])]);
     for (const listener of [...listeners]) { try { listener(deviceId, current); } catch { /* isolate */ } }
   };
+  const remember = (deviceId: string, photo: Pick<StoredPhoto, "fileName" | "size" | "sha256">): PhotoInboxAccept => {
+    if (!validId(deviceId) || !validPhotoName(photo?.fileName) || !sha256Pattern.test(photo?.sha256 ?? "")) return "rejected";
+    if (!Number.isSafeInteger(photo.size) || photo.size < 1 || photo.size > maxPhotoBytes) return "rejected";
+    const existing = photos.get(deviceId) ?? [];
+    if (existing.some((item) => item.fileName === photo.fileName || item.sha256 === photo.sha256)) return "duplicate";
+    const receivedAtMs = options.now();
+    if (!Number.isSafeInteger(receivedAtMs) || receivedAtMs < 0) return "rejected";
+    photos.set(deviceId, [...existing, freeze({ fileName: photo.fileName, size: photo.size, sha256: photo.sha256, receivedAtMs })]);
+    publish(deviceId);
+    return "accepted";
+  };
   return freeze({
+    remember,
     accept: (deviceId, file) => {
       if (!validId(deviceId) || !validPhotoFile(file)) return "rejected";
       const existing = photos.get(deviceId) ?? [];

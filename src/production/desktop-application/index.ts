@@ -1,4 +1,5 @@
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { RelayDeviceSettings } from "../../adapters/relay-device-settings/index.js";
 import { DeviceConsole } from "../../modules/device-console/index.js";
@@ -132,6 +133,31 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
 const result = (ok: boolean, value: DesktopApplicationSnapshot, code?: DesktopApplicationCode): DesktopApplicationResult => ok
   ? freeze({ ok: true as const, value })
   : freeze({ ok: false as const, code: code!, value });
+const photoFileName = /\.(?:jpg|jpeg|dng)$/iu;
+const maxStoredPhotoBytes = 100 * 1024 * 1024;
+const hashFile = (path: string): Promise<string> => new Promise((resolve, reject) => {
+  const hash = createHash("sha256");
+  const stream = createReadStream(path);
+  stream.on("data", (chunk) => hash.update(chunk));
+  stream.on("error", reject);
+  stream.on("end", () => resolve(hash.digest("hex")));
+});
+const listStoredPhotos = async (directory: string, deviceId: string): Promise<readonly { readonly fileName: string; readonly size: number; readonly sha256: string }[]> => {
+  if (typeof deviceId !== "string" || deviceId.trim().length === 0 || deviceId.includes("..") || /[\\/]/u.test(deviceId)) return [];
+  let names: string[];
+  try { names = readdirSync(join(directory, deviceId)); } catch { return []; }
+  const stored: { fileName: string; size: number; sha256: string }[] = [];
+  for (const fileName of names) {
+    if (!photoFileName.test(fileName) || fileName.includes("..") || /[\\/]/u.test(fileName)) continue;
+    try {
+      const path = join(directory, deviceId, fileName);
+      const info = statSync(path);
+      if (!info.isFile() || info.size < 1 || info.size > maxStoredPhotoBytes) continue;
+      stored.push({ fileName, size: info.size, sha256: await hashFile(path) });
+    } catch { /* an unreadable file stays out of the manifest and can be fetched again */ }
+  }
+  return stored;
+};
 const photoDirectoryFs = (directory: string) => freeze({
   writeAtomic: (deviceId: string, fileName: string, bytes: Uint8Array): boolean => {
     if (deviceId.includes("..") || fileName.includes("..") || /[\\/]/u.test(fileName)) return false;
@@ -209,7 +235,10 @@ function create(raw: unknown): DesktopApplicationCreateResult {
     const photos = CameraPhotoControl.create({
       relay: operations.photoGateway(),
       now: options.now,
-      ...(options.photos === undefined ? {} : { fs: photoDirectoryFs(options.photos.directory) }),
+      ...(options.photos === undefined ? {} : {
+        fs: photoDirectoryFs(options.photos.directory),
+        storedPhotos: (deviceId: string) => listStoredPhotos(options.photos!.directory, deviceId),
+      }),
     });
     photoHolder.control = photos;
     const runtime = DesktopRuntime.create({
