@@ -54,8 +54,8 @@ machine.reset() -> MissionPhaseState
 | `start-requested` | `uploaded`、`starting`、`pausing`、`resuming` | `starting` |
 | `start-succeeded` | `starting` | `running` |
 | `start-rejected` | `starting` | 首次拒绝恢复 `uploaded`；已在 `starting` 再次请求后的拒绝，以及从 `pausing`/`resuming` 改发启动后的拒绝，保持 `starting` |
-| `pause-requested` / `pause-succeeded` | `running` / `pausing` | `pausing` / `paused` |
-| `pause-rejected` | `pausing` | `running` |
+| `pause-requested` / `pause-succeeded` | `starting`、`running` / `pausing` | `pausing` / `paused` |
+| `pause-rejected` | `pausing` | 从 `starting` 请求则恢复 `starting`；从 `running` 请求则恢复 `running` |
 | `resume-requested` / `resume-succeeded` | `paused` / `resuming` | `resuming` / `running` |
 | `resume-rejected` | `resuming` | `paused` |
 | `stop-requested` / `stop-succeeded` | `starting`、`running`、`pausing`、`paused`、`resuming`、`stopping`、`disconnected` / `stopping` | `stopping` / `idle` |

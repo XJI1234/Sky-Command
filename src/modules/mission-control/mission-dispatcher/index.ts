@@ -62,11 +62,12 @@ export interface MissionDispatcherInstance {
   readonly get: (deviceId: string) => MissionDispatchSnapshot;
   readonly list: () => readonly MissionDispatchSnapshot[];
   readonly forget: (deviceId: string) => boolean;
+  readonly release: (deviceId: string) => MissionDispatchSnapshot | null;
   readonly subscribe: (listener: (snapshot: readonly MissionDispatchSnapshot[]) => void) => () => void;
 }
 
 interface MissionIdentity { readonly missionRevision: number; readonly deviceGeneration: number; }
-interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; missionIdentity: MissionIdentity | null; missionPhaseSequence: number | null; startPointReached: boolean; routeExecutionStarted: boolean; busy: boolean; inFlightCount: number; lastResult: LastDispatchResult | null; }
+interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; missionIdentity: MissionIdentity | null; missionPhaseSequence: number | null; startPointReached: boolean; routeExecutionStarted: boolean; busy: boolean; inFlightCount: number; epoch: number; lastResult: LastDispatchResult | null; }
 const beginFlight = (lane: Lane): void => {
   lane.inFlightCount += 1;
   lane.busy = true;
@@ -188,7 +189,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const missionId = missionIdAttempt.value;
     if (!validId(missionId)) return rejected("stage", "MISSION_ID_UNAVAILABLE", existing ?? null);
 
-    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, missionIdentity: null, missionPhaseSequence: null, startPointReached: false, routeExecutionStarted: false, busy: false, inFlightCount: 0, lastResult: null } as Lane;
+    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, missionIdentity: null, missionPhaseSequence: null, startPointReached: false, routeExecutionStarted: false, busy: false, inFlightCount: 0, epoch: 0, lastResult: null } as Lane;
     const requested = lane.machine.transition({ type: "stage-requested", missionId });
     if (!requested.ok) return rejected("stage", "ILLEGAL_PHASE", lane);
     lane.routeId = routeId;
@@ -198,11 +199,13 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     lane.startPointReached = false;
     lane.routeExecutionStarted = false;
     lanes.set(deviceId, lane);
+    const flightEpoch = lane.epoch;
     beginFlight(lane);
     publish();
 
     const payload: RelayMissionPayload = freeze({ missionId, fileName: routePayload.fileName, size: routePayload.sizeBytes, sha256: routePayload.sha256, bytes: routePayload.bytes.slice() });
     const sent = await attemptAsync(() => dependencies.relay.sendMission(deviceId, payload));
+    if (lane.epoch !== flightEpoch) return freeze({ ok: false as const, operation: "stage", code: "OPERATION_IN_PROGRESS" as const, state: snapshot(lane) });
     endFlight(lane);
     // A relay disappearance wins over any late transfer completion. The
     // caller must not mistake a stale acknowledgement for a current stage.
@@ -221,7 +224,8 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     if (!lane) return rejected(operation, "ILLEGAL_PHASE", null);
     const phase = lane.machine.state().phase;
     const stopCanPreempt = operation === "stop" && phase !== "stopping" && (phase === "starting" || phase === "running" || phase === "pausing" || phase === "paused" || phase === "resuming" || phase === "disconnected");
-    if (lane.busy && !stopCanPreempt) return rejected(operation, "OPERATION_IN_PROGRESS", lane);
+    const pauseCanPreempt = operation === "pause" && (phase === "starting" || phase === "running");
+    if (lane.busy && !stopCanPreempt && !pauseCanPreempt) return rejected(operation, "OPERATION_IN_PROGRESS", lane);
     if (operation === "upload" || operation === "start" || operation === "pause" || operation === "resume" || operation === "stop") {
       if (operation === "start") {
         const phase = lane.machine.state().phase;
@@ -243,9 +247,11 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     }
     const requested = lane.machine.transition({ type: requestType });
     if (!requested.ok) return rejected(operation, "ILLEGAL_PHASE", lane);
+    const flightEpoch = lane.epoch;
     beginFlight(lane);
     publish();
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, { name: commandName, fields: COMMANDS }));
+    if (lane.epoch !== flightEpoch) return freeze({ ok: false as const, operation, code: "OPERATION_IN_PROGRESS" as const, state: snapshot(lane) });
     endFlight(lane);
     // `recordDisconnected` may have settled the lane while the transport was
     // still pending. Keep that terminal observation authoritative.
@@ -291,6 +297,25 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     }
     lane.machine.transition({ type: "operation-failed", code: failureCode });
     return result(lane, operation, false, failureCode);
+  };
+  const release = (deviceId: string): MissionDispatchSnapshot | null => {
+    if (!validId(deviceId)) return null;
+    const lane = lanes.get(deviceId);
+    if (lane === undefined) return idleSnapshot(deviceId);
+    lane.epoch += 1;
+    lane.inFlightCount = 0;
+    lane.busy = false;
+    lane.machine.transition({ type: "reset" });
+    lane.routeId = null;
+    lane.fileName = null;
+    lane.missionIdentity = null;
+    lane.missionPhaseSequence = null;
+    lane.startPointReached = false;
+    lane.routeExecutionStarted = false;
+    lane.lastResult = null;
+    const state = snapshot(lane);
+    publish();
+    return state;
   };
   const forget = (deviceId: string): boolean => {
     const lane = lanes.get(deviceId); if (!lane || !["idle", "completed", "failed", "disconnected"].includes(lane.machine.state().phase)) return false;
@@ -372,7 +397,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     pause: (deviceId) => performCommand("pause", deviceId, "pause-requested", "wayline.pause", "WAYLINE_PAUSE_FAILED"),
     resume: (deviceId) => performCommand("resume", deviceId, "resume-requested", "wayline.resume", "WAYLINE_RESUME_FAILED"),
     stop: (deviceId) => performCommand("stop", deviceId, "stop-requested", "wayline.stop", "WAYLINE_STOP_FAILED"),
-    get, list, forget, recordDisconnected, recordMissionPhase, recordExecutionStarted, recordExecutionTerminal,
+    get, list, forget, release, recordDisconnected, recordMissionPhase, recordExecutionStarted, recordExecutionTerminal,
     subscribe: (listener) => { listeners.add(listener); let active = true; return () => { if (active) { active = false; listeners.delete(listener); } }; }
   });
 }

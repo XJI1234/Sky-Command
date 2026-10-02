@@ -33,6 +33,7 @@ const flightLabel = (action: unknown): string => {
   if (action === "return-home" || action === "returnHome" || action === "rth") return "返航";
   if (action === "stop-takeoff") return "停止自动起飞";
   if (action === "stop-auto-landing") return "停止自动降落";
+  if (action === "stop-go-home") return "退出返航";
   return text(action, 64) ?? "该动作";
 };
 
@@ -58,6 +59,8 @@ const localReason = (code: string | null): string => {
   if (code === "CAMERA_CONNECTION_UNKNOWN") return "主相机状态未知";
   if (code === "CAPABILITY_BLOCKED") return "必要的可达性条件未满足";
   if (code === "OPERATION_IN_PROGRESS") return "上一条命令仍在处理";
+  if (code === "ILLEGAL_PHASE") return "当前阶段不能从头重做这一步";
+  if (code === "TASK_ACTIVE") return "当前任务还在进行，不能重新准备航线";
   if (code === "INVALID_INPUT") return "输入无效";
   if (code === "DISPOSED") return "操作模块已停止";
   if (code === "DEPENDENCY_FAILURE") return "桌面依赖不可用";
@@ -153,7 +156,12 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
   if (code === "SUCCEEDED" && action.startsWith("flight-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action.startsWith("mission-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action.startsWith("stream-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
-  if (code === "SUCCEEDED" && action.startsWith("photo-")) return msdkCallback("dji", "accepted", "成功", "onSuccess", action === "photo-fetch" ? ["说明：原图已保存，可用系统看图软件打开"] : []);
+  if (code === "SUCCEEDED" && action === "photo-fetch") {
+    const count = read(inner, "count");
+    const saved = typeof count === "number" && Number.isInteger(count) && count > 0 ? `已回传 ${count} 张原图` : "原图已保存";
+    return msdkCallback("dji", "accepted", "成功", "onSuccess", [`说明：${saved}，可用系统看图软件打开`]);
+  }
+  if (code === "SUCCEEDED" && action.startsWith("photo-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (read(inner, "ok") === true || read(value, "ok") === true) return { source: "relay", outcome: "completed", message: "手机中继回调：已完成" };
   return { source: "desktop", outcome: "not-called", message: "未调用 DJI MSDK：没有获得可识别的操作结果" };
 };

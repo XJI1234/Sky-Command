@@ -288,7 +288,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 1. `requestFlightAction` 只负责释放前一次有效确认并委托 `flightControl.request` 创建新的显式二次确认；它不得读取控制遥测或替 DJI 预先拒绝任何六类动作。`flightControl` 在创建确认与实际发送前均重新执行同一最小可达性检查：目标 Relay 在线且 MSDK 已就绪。工作流不得以飞控、遥控器、飞行模式、电量、电机、降落确认或其它遥测替 DJI Action 裁决。
 2. `confirmFlightAction` 必须直接委托 `flightControl.confirm`，不得在消费确认前再次以工作流控制快照阻断。飞控调度器会在真正发送前重读最小可达性；因此下游的 `PREFLIGHT_BLOCKED`、DJI 明确拒绝、结果未确认或调用失败必须保留到界面。确认一经下游消费即不可重试；`cancelFlightAction` 不需要控制遥测或实机预检。确认不可跨设备、跨动作、重复或过期复用。
-3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 对应 `KeyConfirmLanding`，停止自动起飞/降落分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`，不表示停机、立即落地或已经悬停。它们的实际适用状态由 MSDK Action 回调裁决，不由工作流使用页面快照推断。
+3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 对应 `KeyConfirmLanding`，停止自动起飞、停止自动降落、退出返航分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`、`KeyStopGoHome`，不表示停机或已经落地。它们的实际适用状态由 MSDK Action 回调裁决，不由工作流使用页面快照推断。
 4. `flight.land` 的 DJI Action 成功只使该设备的 `landing.phase` 进入 `awaiting-msdk`，它只描述同一 Relay 会话观察到的降落进度，不表示已经着陆，也不构成后续 `land` 的本地拒绝理由。只要 Relay 在线且 MSDK 已就绪，新的人工 `land` 请求必须创建新的显式确认并交给 DJI Action 裁决。其后只能由同一会话的持续 MSDK 遥测改变：`KeyIsLandingConfirmationNeeded=true` 为 `confirmation-required`，`KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 为 `confirmed-grounded`，任一所需事实未知或飞控断开为 `state-unknown`。它绝不因时间流逝、命令回调、页面刷新或旧缓存显示为已落地。`flight.stop-auto-landing` 成功才进入 `stopped`；其它成功的直接飞行动作重置为 `idle`。
 5. 工作流只保存由 `requestFlightAction` 返回的待确认 ID 和上述已接受降落的最小意图。设备断连或会话替换时，如动作仍未确认，工作流只能调用既有 `flightControl.cancel(deviceId, confirmationId)` 取消确认，并丢弃该会话的降落意图；它绝不补发飞控命令。已经发送中的 DJI 调用不可由本模块撤销，其迟到结果也不得让离线设备重新出现在工作流快照中。
 

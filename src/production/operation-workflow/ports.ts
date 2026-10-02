@@ -13,7 +13,7 @@ export type RelayOperationsPort = Pick<RelayOperationsAdapterInstance, "devices"
 export type RouteLibraryPort = Pick<RouteLibraryInstance, "importFile" | "list" | "getPreview" | "select" | "remove">;
 
 /** Owns the device-side DJI waypoint mission lifecycle. */
-export type MissionControlPort = Pick<MissionControlInstance, "stage" | "upload" | "start" | "pause" | "resume" | "stop" | "get" | "forget" | "subscribe">;
+export type MissionControlPort = Pick<MissionControlInstance, "stage" | "upload" | "start" | "pause" | "resume" | "stop" | "get" | "forget" | "release" | "subscribe">;
 
 /** Owns the production RTMP start/stop lane and its observable state. */
 export type LiveStreamControlPort = Pick<LiveStreamControlInstance, "start" | "stop" | "get" | "recordDisconnected" | "recordSourceUnavailable" | "subscribe">;

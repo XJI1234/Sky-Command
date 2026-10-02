@@ -3,7 +3,7 @@ import type { FlightAction } from "../dangerous-action-confirm/index.js";
 export type { FlightAction } from "../dangerous-action-confirm/index.js";
 
 export type FlightCommandCode = "SUCCEEDED" | "PREFLIGHT_BLOCKED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "DEPENDENCY_FAILURE" | "OPERATION_IN_PROGRESS" | "INVALID_INPUT" | "DISPOSED" | "NO_PENDING_CONFIRMATION" | "CONFIRMATION_MISMATCH" | "CONFIRMATION_EXPIRED" | "CONFIGURATION_INVALID" | "ID_UNAVAILABLE";
-type FlightCommandName = "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing";
+type FlightCommandName = "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing" | "flight.stop-go-home";
 type FlightCheckCode = Exclude<FlightCommandCode, "SUCCEEDED" | "FLIGHT_ACTION_REJECTED" | "RESULT_UNCONFIRMED" | "FLIGHT_ACTION_INVOCATION_FAILED" | "RELAY_REJECTED" | "OPERATION_IN_PROGRESS">;
 type FlightCommandRequest = Readonly<{ readonly name: FlightCommandName; readonly fields: Readonly<{ readonly confirm: true }> }>;
 export interface FlightBlocker { readonly code: string; readonly message: string; }
@@ -20,7 +20,7 @@ export interface FlightPreflight { readonly evaluateFlightAction: (input: unknow
 export interface FlightCommandDispatcherDependencies { readonly relay: FlightRelay; readonly preflight: FlightPreflight; }
 export interface FlightCommandDispatcherInstance { readonly check: (deviceId: string, action: FlightAction) => FlightCommandCheck; readonly dispatch: (deviceId: string, action: FlightAction) => Promise<FlightCommandResult>; readonly isBusy: (deviceId: string) => boolean; }
 
-const actions: readonly FlightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"];
+const actions: readonly FlightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing", "stop-go-home"];
 const commands: Readonly<Record<FlightAction, FlightCommandName>> = Object.freeze({
   takeoff: "flight.takeoff",
   land: "flight.land",
@@ -28,6 +28,7 @@ const commands: Readonly<Record<FlightAction, FlightCommandName>> = Object.freez
   "return-home": "flight.return-home",
   "stop-takeoff": "flight.stop-takeoff",
   "stop-auto-landing": "flight.stop-auto-landing",
+  "stop-go-home": "flight.stop-go-home",
 });
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);

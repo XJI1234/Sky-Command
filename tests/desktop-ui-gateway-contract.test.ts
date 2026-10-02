@@ -34,7 +34,7 @@ describe("DesktopUiGateway", () => {
       measurePhoneLink: named("measurePhoneLink"),
       importRoute: named("importRoute"), getRoutePreview: named("getRoutePreview"), selectRoute: named("selectRoute"), removeRoute: named("removeRoute"),
       assignRoute: named("assignRoute"), clearAssignment: named("clearAssignment"),
-      stage: named("stage"), upload: named("upload"), start: named("start"), pause: named("pause"), resume: named("resume"), stop: named("stop"),
+      stage: named("stage"), upload: named("upload"), start: named("start"), pause: named("pause"), resume: named("resume"), stop: named("stop"), releaseMission: named("releaseMission"),
       startStream: named("startStream"), stopStream: named("stopStream"), refreshMedia: named("refreshMedia"), selectVideo: named("selectVideo"), clearVideo: named("clearVideo"),
       capturePhoto: named("capturePhoto"), fetchPhoto: named("fetchPhoto"),
       readTransmissionSettings: named("readTransmissionSettings"), writeTransmissionSettings: named("writeTransmissionSettings"), readCameraSettings: named("readCameraSettings"), writeCameraSettings: named("writeCameraSettings"),
@@ -54,7 +54,7 @@ describe("DesktopUiGateway", () => {
       { method: "route.import", input: { fileName: "route.kmz", bytes: new Uint8Array([1, 2]) } },
       { method: "route.preview", input: { routeId: "route-a" } }, { method: "route.select", input: { routeId: "route-a" } }, { method: "route.remove", input: { routeId: "route-a" } },
       { method: "assignment.assign", input: { deviceId: "device-a", routeId: "route-a" } }, { method: "assignment.clear", input: { deviceId: "device-a" } },
-      { method: "mission.stage", input: { deviceId: "device-a" } }, { method: "mission.upload", input: { deviceId: "device-a" } }, { method: "mission.start", input: { deviceId: "device-a" } }, { method: "mission.pause", input: { deviceId: "device-a" } }, { method: "mission.resume", input: { deviceId: "device-a" } }, { method: "mission.stop", input: { deviceId: "device-a" } },
+      { method: "mission.stage", input: { deviceId: "device-a" } }, { method: "mission.upload", input: { deviceId: "device-a" } }, { method: "mission.start", input: { deviceId: "device-a" } }, { method: "mission.pause", input: { deviceId: "device-a" } }, { method: "mission.resume", input: { deviceId: "device-a" } }, { method: "mission.stop", input: { deviceId: "device-a" } }, { method: "mission.release", input: { deviceId: "device-a" } },
       { method: "stream.start", input: { deviceId: "device-a" } }, { method: "stream.stop", input: { deviceId: "device-a" } }, { method: "stream.refresh", input: undefined }, { method: "stream.select", input: { deviceId: "device-a" } }, { method: "stream.clear", input: undefined },
       { method: "photo.capture", input: { deviceId: "device-a" } }, { method: "photo.fetch", input: { deviceId: "device-a" } },
       { method: "settings.transmission.read", input: { deviceId: "device-a" } }, { method: "settings.transmission.write", input: { deviceId: "device-a", patch: { bandwidth: "BANDWIDTH_20MHZ" } } },
@@ -68,7 +68,7 @@ describe("DesktopUiGateway", () => {
     await expect(gateway.invoke("video.playback", { deviceId: "device-b" })).resolves.toEqual({ ok: true, value: { ok: false, code: "VIDEO_NOT_READY" } });
     expect(calls.map((call) => call.name)).toEqual([
       "refreshDeviceState", "measurePhoneLink", "importRoute", "getRoutePreview", "selectRoute", "removeRoute", "assignRoute", "clearAssignment",
-      "stage", "upload", "start", "pause", "resume", "stop", "startStream", "stopStream", "refreshMedia", "selectVideo", "clearVideo",
+      "stage", "upload", "start", "pause", "resume", "stop", "releaseMission", "startStream", "stopStream", "refreshMedia", "selectVideo", "clearVideo",
       "capturePhoto", "fetchPhoto",
       "readTransmissionSettings", "writeTransmissionSettings", "readCameraSettings", "writeCameraSettings", "requestFlightAction", "confirmFlightAction", "cancelFlightAction",
     ]);

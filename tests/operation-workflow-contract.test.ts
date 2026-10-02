@@ -183,7 +183,7 @@ describe("飞行作业工作流模块契约", () => {
     expect({ uploads, streamStarts, cameraReads, flightRequests }).toEqual({ uploads: 1, streamStarts: 1, cameraReads: 1, flightRequests: 1 });
   });
 
-  it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"] as const)("收尾动作 %s 不由工作流的飞控就绪预检拦截", async (action) => {
+  it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing", "stop-go-home"] as const)("收尾动作 %s 不由工作流的飞控就绪预检拦截", async (action) => {
     const calls: string[] = [];
     const workflow = workflowWith({
       relayOperations: {

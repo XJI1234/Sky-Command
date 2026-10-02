@@ -315,6 +315,17 @@ describe("mission dispatcher contract", () => {
     expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload", "wayline.start", "wayline.pause", "wayline.resume", "wayline.stop"]);
   });
 
+  it("pauses after start is accepted and before the aircraft reports that the route is running", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    await fixture.dispatcher.start("phone-1");
+    expect(fixture.dispatcher.get("phone-1").phase).toBe("starting");
+
+    expect(await fixture.dispatcher.pause("phone-1")).toMatchObject({ ok: true, operation: "pause", state: { phase: "paused" } });
+    expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload", "wayline.start", "wayline.pause"]);
+  });
+
   it.each(["pause", "resume", "stop"] as const)("blocks %s before invocation when Relay/MSDK reachability is unavailable", async (operation) => {
     const fixture = makeFixture();
     await stage(fixture.dispatcher);
@@ -899,5 +910,38 @@ describe("mission dispatcher contract", () => {
     expect(dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0)).toMatchObject({ phase: "running" });
     resolveCommand({ deviceId: "phone-1", commandId: "command-1", status: "rejected", detail: "late" });
     await expect(pending).resolves.toMatchObject({ ok: true, state: { phase: "running" } });
+  });
+
+  it("把已经上传或启动过的任务收回到空闲，下一次准备从手机重新开始", async () => {
+    const fixture = makeFixture();
+    await stage(fixture.dispatcher);
+    await fixture.dispatcher.upload("phone-1");
+    expect(fixture.dispatcher.get("phone-1").phase).toBe("uploaded");
+    expect(fixture.dispatcher.release("phone-1")).toMatchObject({ phase: "idle", routeId: null });
+    expect(fixture.commands.map((command) => command.name)).toEqual(["wayline.upload"]);
+    const again = await fixture.dispatcher.stage("phone-1", "route-1");
+    expect(again.ok).toBe(true);
+    expect(fixture.dispatcher.get("phone-1").phase).toBe("staged");
+  });
+
+  it("收回仍在传输的任务后，迟到回执不能改写下一次从头准备", async () => {
+    const pendingMissions: Array<(value: { deviceId: string; missionId: string; status: "succeeded"; detail: string }) => void> = [];
+    const dispatcher = MissionDispatcher.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
+      relay: {
+        sendMission: (_deviceId, payload) => new Promise((resolve) => { pendingMissions.push(resolve); void payload; }),
+        sendCommand: async () => ({ deviceId: "phone-1", commandId: "command-1", status: "succeeded" as const, detail: "ok" }),
+        latestTelemetry: () => null,
+      },
+    }, { createMissionId: () => "mission-1" });
+    const first = dispatcher.stage("phone-1", "route-1");
+    expect(dispatcher.get("phone-1").phase).toBe("staging");
+    expect(dispatcher.release("phone-1")).toMatchObject({ phase: "idle", routeId: null });
+    const second = dispatcher.stage("phone-1", "route-1");
+    pendingMissions[1]?.({ deviceId: "phone-1", missionId: "mission-1", status: "succeeded", detail: "ok" });
+    await expect(second).resolves.toMatchObject({ ok: true, state: { phase: "staged" } });
+    pendingMissions[0]?.({ deviceId: "phone-1", missionId: "mission-1", status: "succeeded", detail: "late" });
+    await first;
+    expect(dispatcher.get("phone-1").phase).toBe("staged");
   });
 });

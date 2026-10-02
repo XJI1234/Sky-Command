@@ -1,5 +1,6 @@
 import { DeviceGuidance } from "../../modules/device-console/device-guidance/index.js";
 import { LinkChain } from "../../modules/device-console/link-chain/index.js";
+import { FlightControllerVideoHint } from "../operation-workflow/flight-controller-video-hint/index.js";
 
 type MarkerRole = "mission" | "stream" | "both" | "none";
 type WorkspaceName = "devices" | "routes" | "flight";
@@ -88,6 +89,8 @@ export interface OperatorView {
   readonly playbackReady: boolean;
   readonly streamCanStart: boolean;
   readonly streamCanStop: boolean;
+  readonly flightControllerVideoBanner: string | null;
+  readonly flightControllerVideoAfterStart: string | null;
   /** Shared desktop media-service facts, independent of an individual phone stream. */
   readonly media: unknown;
 }
@@ -232,6 +235,19 @@ const missionLabelOf = (mission: unknown): string => {
 };
 const streamSourceUnavailableOf = (device: Record<string, unknown> | undefined): boolean =>
   text(read(read(device, "stream"), "phase")) === "failed" && text(read(read(device, "stream"), "failureCode")) === "SOURCE_UNAVAILABLE";
+const flightControllerVideoHintOf = (device: Record<string, unknown> | undefined) => {
+  const connection = read(device, "connection");
+  const live = read(connection, "live");
+  const hint = FlightControllerVideoHint.evaluate({
+    hasConnectedOnce: read(connection, "flightControllerHasConnectedOnce"),
+    streaming: read(live, "streaming"),
+    fps: read(live, "fps"),
+  });
+  return freeze({
+    flightControllerVideoBanner: hint.banner,
+    flightControllerVideoAfterStart: hint.afterStart,
+  });
+};
 const streamRuntimeErrorOf = (device: Record<string, unknown> | undefined): Readonly<{ readonly code: string; readonly description: string }> | null => {
   const error = read(read(read(device, "connection"), "live"), "runtimeError");
   const code = text(read(error, "code"));
@@ -284,16 +300,19 @@ const streamStartIssueOf = (device: Record<string, unknown> | undefined): Stream
   });
   return null;
 };
+const phoneStillStreaming = (device: Record<string, unknown> | undefined): boolean =>
+  read(read(read(device, "connection"), "live"), "streaming") === true;
 const streamCanStartOf = (device: Record<string, unknown> | undefined): boolean => {
   if (device === undefined) return false;
   const streamPhase = text(read(read(device, "stream"), "phase"));
-  if (streamPhase === "starting" || streamPhase === "streaming") return false;
+  if (streamPhase === "starting" || streamPhase === "streaming" || phoneStillStreaming(device)) return false;
   return streamStartIssueOf(device) === null;
 };
 const streamCanStopOf = (device: Record<string, unknown> | undefined): boolean => {
   if (device === undefined) return false;
   // This terminal state already has one recovery stop queued on the phone.
   if (streamSourceUnavailableOf(device)) return false;
+  if (phoneStillStreaming(device)) return true;
   const streamPhase = text(read(read(device, "stream"), "phase"));
   // failed 也允许停：启动半成功或遥测抖动后控制态可能已 failed，手机仍可能在推。
   if (streamPhase === "starting" || streamPhase === "streaming" || streamPhase === "stopping" || streamPhase === "failed") return true;
@@ -441,6 +460,7 @@ const flightActionName = (action: string | null): string => {
   if (action === "return-home") return "返航";
   if (action === "stop-takeoff") return "停止自动起飞";
   if (action === "stop-auto-landing") return "停止自动降落";
+  if (action === "stop-go-home") return "退出返航";
   return action ?? "飞行动作";
 };
 const flightProgressOf = (device: Record<string, unknown> | undefined, confirmation: OperatorConfirmation | null): OperatorLaneProgress => {
@@ -561,6 +581,7 @@ function project(input: unknown): OperatorView {
     playbackReady: videoPhase === "ready" && !streamSourceUnavailable,
     streamCanStart: streamCanStartOf(streamDevice),
     streamCanStop: streamCanStopOf(streamDevice),
+    ...flightControllerVideoHintOf(streamDevice),
     media: read(read(snapshot, "workflow"), "media"),
   };
   const missionActions = missionActionsOf(view);
@@ -597,7 +618,7 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
     return issue === null ? accept() : reject(issue);
   }
   if (name === "flight-confirm" || name === "flight-cancel") return accept();
-  if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing") {
+  if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing" || name === "flight-stop-go-home") {
     const linkIssue = msdkInvocationIssue(device);
     if (linkIssue !== null) return reject(linkIssue);
     return accept();
@@ -614,7 +635,7 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
     return msdkIssue === null ? accept() : reject(msdkIssue);
   }
   if (name === "mission-pause") {
-    if (text(read(current.mission, "phase")) !== "running") return reject("当前阶段不能暂停");
+    if (text(read(current.mission, "phase")) !== "running" && text(read(current.mission, "phase")) !== "starting") return reject("当前阶段不能暂停");
     const msdkIssue = msdkInvocationIssue(device);
     return msdkIssue === null ? accept() : reject(msdkIssue);
   }

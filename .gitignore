@@ -12,3 +12,12 @@ tmp-hls/
 .claude/
 .worktrees/
 cross-runtime-verification-report.json
+
+# Local release builds, diagnostics and design preview sessions.
+/release*/
+/tmp-*
+/asar-inspect/
+/.superpowers/
+/main.mjs
+/auto.crt
+/auto.key

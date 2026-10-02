@@ -145,7 +145,7 @@ describe("preflight check contract", () => {
     expect(input.payload.batteryPercent).toBe(originalBattery);
   });
 
-  it.each(["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"] as const)("allows %s through a ready MSDK despite unfavorable or unavailable local device facts", (action) => {
+  it.each(["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing", "stop-go-home"] as const)("allows %s through a ready MSDK despite unfavorable or unavailable local device facts", (action) => {
     const input: FlightActionPreflightInput = {
       relayConnected: true,
       payload: {
@@ -262,7 +262,7 @@ describe("preflight check contract", () => {
     } as never)).toEqual({ ok: true, blockers: [] });
   });
 
-  it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"] as const)("allows recovery action %s through a ready MSDK despite stale or unavailable control telemetry", (action) => {
+  it.each(["land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing", "stop-go-home"] as const)("allows recovery action %s through a ready MSDK despite stale or unavailable control telemetry", (action) => {
     const input: FlightActionPreflightInput = {
       relayConnected: true,
       payload: {

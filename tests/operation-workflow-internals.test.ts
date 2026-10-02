@@ -300,6 +300,38 @@ describe("飞行作业工作流内部模块", () => {
     });
   });
 
+  it("保留进程内飞控曾经连过的事实，不把它当成当前飞控连接", () => {
+    const snapshot = WorkflowSnapshot.create({
+      devices: [{
+        deviceId: "relay-a",
+        telemetry: {
+          payload: {
+            flightController: "DISCONNECTED",
+            flightControllerHasConnectedOnce: true,
+            liveStreaming: true,
+            liveFps: 0,
+          },
+          capabilities: {},
+        },
+        assignment: null, mission: null, stream: null, settings: null, pendingFlightAction: null,
+      }],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0, media: { streams: [] }, disposed: false,
+    });
+    expect(snapshot.devices[0]?.connection).toMatchObject({
+      flightController: "disconnected",
+      flightControllerHasConnectedOnce: true,
+      live: { streaming: true, fps: 0 },
+    });
+    expect(WorkflowSnapshot.create({
+      devices: [{
+        deviceId: "relay-a",
+        telemetry: { payload: { flightControllerHasConnectedOnce: false }, capabilities: {} },
+        assignment: null, mission: null, stream: null, settings: null, pendingFlightAction: null,
+      }],
+      routes: [], selectedRouteId: null, selectedVideoDeviceId: null, revision: 0, media: { streams: [] }, disposed: false,
+    }).devices[0]?.connection.flightControllerHasConnectedOnce).toBe(false);
+  });
+
   it("在飞控断开时清空动态飞行事实，但保留当前图传观测", () => {
     const snapshot = WorkflowSnapshot.create({
       devices: [{

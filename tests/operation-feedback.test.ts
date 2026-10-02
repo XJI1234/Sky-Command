@@ -135,6 +135,7 @@ describe("操作回调展示", () => {
     });
     expect(operationFeedback("photo-capture", { ok: true, code: "CAPTURED" }).message).toContain("已拍下原图");
     expect(operationFeedback("photo-fetch", { ok: true, code: "SUCCEEDED" }).message).toContain("原图已保存");
+    expect(operationFeedback("photo-fetch", { ok: true, value: { code: "SUCCEEDED", count: 3, fileName: "DJI_1.jpg" } }).message).toContain("已回传 3 张原图");
     expect(operationFeedback("photo-capture", { ok: false, code: "PHOTO_ACTION_REJECTED", errorCode: "CAMERA_BUSY", errorDescription: "inner=Camera/StartShootPhoto:-1" }).message).toContain("错误码：CAMERA_BUSY");
     expect(operationFeedback("photo-capture", { ok: false, code: "PHOTO_ACTION_REJECTED", errorCode: "CAMERA_BUSY", errorDescription: "inner=Camera/StartShootPhoto:-1" }).message).toContain("错误说明：inner=Camera/StartShootPhoto:-1");
     expect(operationFeedback("photo-capture", {

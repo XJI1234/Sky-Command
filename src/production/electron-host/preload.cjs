@@ -5,7 +5,7 @@ const methods = Object.freeze([
   "device-refresh", "device-link-measure",
   "route-import", "route-preview", "route-select", "route-remove",
   "assignment-assign", "assignment-clear",
-  "mission-stage", "mission-upload", "mission-start", "mission-pause", "mission-resume", "mission-stop",
+  "mission-stage", "mission-upload", "mission-start", "mission-pause", "mission-resume", "mission-stop", "mission-release",
   "stream-start", "stream-stop", "stream-refresh", "stream-select", "stream-clear",
   "photo-capture", "photo-fetch",
   "settings-transmission-read", "settings-transmission-write", "settings-camera-read", "settings-camera-write",

@@ -1,4 +1,5 @@
 import mpegts from "mpegts.js";
+import { FlightControllerVideoHint } from "../../operation-workflow/flight-controller-video-hint/index.js";
 import { OperatorConsole } from "../index.js";
 import {
   ARM_HOLD_MS,
@@ -14,6 +15,7 @@ import {
   type ArmedCommand,
 } from "../action-arm/index.js";
 import {
+  EMPTY_STATUS,
   commandReachStatus,
   directAlertStatus,
   directProcessStatus,
@@ -22,6 +24,11 @@ import {
   hudFlying,
   hudMotors,
   hudText,
+  monitorAircraftStatus,
+  monitorHoverCommand,
+  monitorRouteControl,
+  monitorDirectFlight,
+  monitorStreamToggle,
   interruptStatus,
   missionExecutionNowStatus,
   missionUploadOrActionStatus,
@@ -33,9 +40,8 @@ import { operationFeedback, type OperationFeedback } from "./operation-feedback.
 import { createBackgroundRefresh, createRenderScheduler } from "./render-scheduler.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, routeMapNotice, setRouteMapVisible, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
-type WorkspaceName = "devices" | "routes" | "flight";
+type WorkspaceName = "devices" | "routes" | "flight" | "monitor";
 type FlightPanelName = "stream" | "mission" | "direct-flight";
-type MissionStartIntent = Readonly<{ deviceId: string; missionId: string; routeId: string; routeName: string }>;
 type FlightConfirmationIntent = Readonly<{ deviceId: string; action: string; confirmationId: string; expiresAtMs: number }>;
 type PhoneLinkProbeReport =
   | Readonly<{ readonly status: "measured"; readonly sampleCount: 10; readonly currentRttMs: number; readonly medianRttMs: number; readonly maximumRttMs: number; readonly jitterMs: number }>
@@ -452,7 +458,7 @@ const renderFlightConfirmationFallback = (): void => {
 };
 
 const renderMissionStartConfirmationFallback = (): void => {
-  /* 确认意图保留在 pendingMissionStart / armedCommand，不再写入独立确认框。 */
+  /* 执行航线已改为点一下即发，这里只保留刷新失败时的空回调。 */
 };
 
 const clearArmTimer = (): void => {
@@ -471,10 +477,6 @@ const scheduleArmExpiry = (): void => {
 
 const cancelArmedBackend = async (): Promise<void> => {
   if (armedCommand === null) return;
-  if (armedCommand.action === "mission-start") {
-    pendingMissionStart = null;
-    return;
-  }
   const confirmation = pendingFlightConfirmation;
   if (confirmation === null) return;
   pendingFlightConfirmation = null;
@@ -545,6 +547,7 @@ const flightActionLabel = (action: unknown): string => {
   if (action === "return-home" || action === "returnHome" || action === "rth") return "返航";
   if (action === "stop-takeoff") return "停止自动起飞";
   if (action === "stop-auto-landing") return "停止自动降落";
+  if (action === "stop-go-home") return "退出返航";
   return typeof action === "string" && action.length > 0 ? action : "该动作";
 };
 
@@ -595,6 +598,9 @@ const operatorNotice = (value: unknown): string => {
 };
 
 let flvPlayer: ReturnType<typeof mpegts.createPlayer> | null = null;
+let detachingFlightVideo = false;
+let flightPlaybackEpoch = 0;
+let monitorPlaybackEpoch = 0;
 let attachedUrl: string | null = null;
 let flvFatalStreak = 0;
 let flvRecoverTimer: number | null = null;
@@ -604,7 +610,6 @@ let lastPaintAtMs = 0;
 let lastSeenCurrentTime = 0;
 let firstPlaybackFrameReported = false;
 let selectedPlaybackDeviceId: string | null = null;
-let pendingMissionStart: MissionStartIntent | null = null;
 let pendingFlightConfirmation: FlightConfirmationIntent | null = null;
 let armedCommand: ArmedCommand | null = null;
 let armExpiryTimer: number | null = null;
@@ -686,6 +691,8 @@ const unbindVideoPlayEvents = (video: HTMLVideoElement): void => {
 };
 
 const detachVideo = (): void => {
+  detachingFlightVideo = true;
+  try {
   stopPlaybackWatch();
   clearFlvRecoverTimer();
   clearVideoPlayRetry();
@@ -709,6 +716,9 @@ const detachVideo = (): void => {
   video.removeAttribute("src");
   video.srcObject = null;
   video.load();
+  } finally {
+    detachingFlightVideo = false;
+  }
 };
 
 const playVideo = (video: HTMLVideoElement): void => {
@@ -763,6 +773,7 @@ const chaseLiveEdge = (video: HTMLVideoElement): void => {
 
 const scheduleFlvReattach = (retryUrl: string): void => {
   clearFlvRecoverTimer();
+  if (state.workspace === "monitor" || detachingFlightVideo) return;
   const delayMs = Math.min(5_000, 800 * (2 ** Math.min(flvFatalStreak - 1, 3)));
   flvRecoverTimer = window.setTimeout(() => {
     flvRecoverTimer = null;
@@ -875,6 +886,7 @@ const attachVideo = (url: string): void => {
       if (width > 0) show(`图传正在出画（${width}×${height}）`);
     });
     flvPlayer.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
+      if (detachingFlightVideo || state.workspace === "monitor") return;
       flvFatalStreak += 1;
       const retryUrl = attachedUrl;
       void errorType;
@@ -923,7 +935,8 @@ const playbackUrl = (value: unknown): string | null => {
 };
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, signal?: AbortSignal): Promise<void> {
-  if (!view.playbackReady || view.streamDeviceId === null) {
+  const epoch = ++flightPlaybackEpoch;
+  if (state.workspace === "monitor" || !view.playbackReady || view.streamDeviceId === null) {
     lastPlaybackIdentity = "off";
     if (attachedUrl !== null) detachVideo();
     return;
@@ -931,18 +944,211 @@ async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, 
   const identity = `on:${view.streamDeviceId}`;
   if (identity === lastPlaybackIdentity && attachedUrl !== null && flvPlayer !== null) return;
   const playbackResult = await safeRenderInvoke("video-playback", { deviceId: view.streamDeviceId }, signal);
-  if (playbackResult === null) return;
+  if (playbackResult === null || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
   const url = playbackUrl(playbackResult);
   if (url === null) return;
   attachVideo(url);
+  if (epoch !== flightPlaybackEpoch || state.workspace === "monitor") {
+    detachVideo();
+    return;
+  }
   if (flvPlayer === null || attachedUrl !== url) return;
   if (selectedPlaybackDeviceId !== view.streamDeviceId) {
     const selected = unwrap(await safeRenderInvoke("stream-select", { deviceId: view.streamDeviceId }, signal));
-    if (!accepted(selected)) return;
+    if (!accepted(selected) || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
     selectedPlaybackDeviceId = view.streamDeviceId;
   }
   lastPlaybackIdentity = identity;
   watchPlaybackStall(el("video") as HTMLVideoElement);
+}
+
+type MonitorPlayer = {
+  readonly deviceId: string;
+  readonly url: string;
+  readonly player: ReturnType<typeof mpegts.createPlayer>;
+  attachedAtMs: number;
+  lastPaintAtMs: number;
+  lastSeenCurrentTime: number;
+  watchTimer: number | null;
+};
+
+const monitorPlayers = new Map<number, MonitorPlayer>();
+const monitorRetryAt = new Map<number, number>();
+const monitorStreamBusy = new Set<string>();
+const monitorStreamHoldCleared = new Set<string>();
+const monitorHoldBusy = new Set<string>();
+const monitorHomeBusy = new Set<string>();
+const monitorLandBusy = new Set<string>();
+const monitorRouteActionBusy = new Set<string>();
+const monitorPhotoBusy = new Set<string>();
+const monitorPhotoProgress = new Map<string, { state: MonitorRouteStepState; detail: string | null }>();
+const monitorHoldProgress = new Map<string, { state: MonitorRouteStepState; detail: string | null }>();
+const monitorDirectProgress = new Map<string, { title: string; state: MonitorRouteStepState; detail: string | null }>();
+const monitorStreamProgress = new Map<string, { state: MonitorRouteStepState; detail: string | null }>();
+const monitorMissionProgress = new Map<string, { title: string; state: MonitorRouteStepState; detail: string | null }>();
+let monitorRailKind: "route" | "photo" | "hold" | "stream" | "mission" | "direct" = "route";
+const monitorFlightControllerHints = new Map<string, string>();
+let monitorViewMode: "grid" | "single" = "grid";
+let monitorSingleSlot = 0;
+type MonitorRouteStepState = "pending" | "running" | "done" | "failed";
+type MonitorRoutePlan = {
+  routeId: string | null;
+  rail: "pick" | "status";
+  resumeStatus: boolean;
+  resumePhoto: boolean;
+  resumeHold: boolean;
+  resumeDirect: boolean;
+  resumeStream: boolean;
+  button: "choose" | "execute" | "busy";
+  phone: MonitorRouteStepState;
+  aircraft: MonitorRouteStepState;
+  execute: MonitorRouteStepState;
+  failure: string | null;
+};
+const monitorRoutePlans = new Map<string, MonitorRoutePlan>();
+let monitorRailDeviceId: string | null = null;
+const monitorRouteStepText: Readonly<Record<MonitorRouteStepState, string>> = Object.freeze({
+  pending: "等待",
+  running: "进行中",
+  done: "已完成",
+  failed: "失败",
+});
+const monitorRoutePlan = (deviceId: string): MonitorRoutePlan => {
+  const existing = monitorRoutePlans.get(deviceId);
+  if (existing !== undefined) return existing;
+  const created: MonitorRoutePlan = {
+    routeId: null,
+    rail: "pick",
+    resumeStatus: false,
+    resumePhoto: false,
+    resumeHold: false,
+    resumeDirect: false,
+    resumeStream: false,
+    button: "choose",
+    phone: "pending",
+    aircraft: "pending",
+    execute: "pending",
+    failure: null,
+  };
+  monitorRoutePlans.set(deviceId, created);
+  return created;
+};
+
+const monitorDevices = (view: ReturnType<typeof OperatorConsole.project>): readonly Record<string, unknown>[] =>
+  (view.devices as readonly unknown[]).filter((device): device is Record<string, unknown> =>
+    device !== null && typeof device === "object" && !Array.isArray(device) && typeof read(device, "deviceId") === "string",
+  );
+
+const monitorVideoElement = (slot: number): HTMLVideoElement | null => {
+  const node = document.querySelector(`[data-monitor-video="${slot}"]`);
+  return node instanceof HTMLVideoElement ? node : null;
+};
+
+const releaseMonitorSlot = (slot: number, cooldownMs = 0): void => {
+  const lane = monitorPlayers.get(slot);
+  if (lane !== undefined) {
+    monitorPlayers.delete(slot);
+    if (lane.watchTimer !== null) window.clearInterval(lane.watchTimer);
+    try { lane.player.pause(); } catch { /* ignore */ }
+    try { lane.player.unload(); } catch { /* ignore */ }
+    try { lane.player.detachMediaElement(); } catch { /* ignore */ }
+    try { lane.player.destroy(); } catch { /* ignore */ }
+  }
+  const video = monitorVideoElement(slot);
+  if (video !== null) {
+    video.removeAttribute("src");
+    video.srcObject = null;
+    try { video.load(); } catch { /* ignore */ }
+  }
+  if (cooldownMs > 0) monitorRetryAt.set(slot, Date.now() + cooldownMs);
+};
+
+const releaseMonitorPlayers = (): void => {
+  for (const slot of [0, 1, 2, 3]) releaseMonitorSlot(slot);
+};
+
+const attachMonitorPlayer = (slot: number, deviceId: string, url: string): void => {
+  const existing = monitorPlayers.get(slot);
+  if (existing !== undefined && existing.deviceId === deviceId && existing.url === url) {
+    const current = monitorVideoElement(slot);
+    if (current !== null && current.paused) void current.play().catch(() => undefined);
+    return;
+  }
+  releaseMonitorSlot(slot);
+  const video = monitorVideoElement(slot);
+  if (video === null || !url.includes(".flv") || !mpegts.isSupported()) return;
+  const player = mpegts.createPlayer(
+    { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url },
+    { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true, autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S, autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S },
+  );
+  const lane: MonitorPlayer = {
+    deviceId,
+    url,
+    player,
+    attachedAtMs: Date.now(),
+    lastPaintAtMs: 0,
+    lastSeenCurrentTime: 0,
+    watchTimer: null,
+  };
+  monitorPlayers.set(slot, lane);
+  video.muted = true;
+  video.defaultMuted = true;
+  video.volume = 0;
+  video.setAttribute("playsinline", "");
+  const play = (): void => { void video.play().catch(() => undefined); };
+  player.on(mpegts.Events.MEDIA_INFO, () => { play(); });
+  player.on(mpegts.Events.ERROR, () => {
+    if (monitorPlayers.get(slot) !== lane) return;
+    releaseMonitorSlot(slot, 1_500);
+  });
+  player.attachMediaElement(video);
+  player.load();
+  play();
+  lane.watchTimer = window.setInterval(() => {
+    if (monitorPlayers.get(slot) !== lane || state.workspace !== "monitor") return;
+    if (isPainting(video)) {
+      if (lane.lastPaintAtMs === 0 || Math.abs(video.currentTime - lane.lastSeenCurrentTime) >= 0.05) {
+        lane.lastPaintAtMs = Date.now();
+        lane.lastSeenCurrentTime = video.currentTime;
+      }
+      if (lane.lastPaintAtMs > 0 && Date.now() - lane.lastPaintAtMs > STALL_MS) releaseMonitorSlot(slot, 1_000);
+      return;
+    }
+    if (Date.now() - lane.attachedAtMs > NO_FRAME_MS) releaseMonitorSlot(slot, 1_000);
+  }, PLAYBACK_WATCH_MS);
+};
+
+async function ensureMonitorPlayback(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
+  const epoch = ++monitorPlaybackEpoch;
+  flightPlaybackEpoch += 1;
+  if (attachedUrl !== null) detachVideo();
+  const devices = monitorDevices(view);
+  await Promise.all([0, 1, 2, 3].map(async (slot) => {
+    if (monitorViewMode === "single" && slot !== monitorSingleSlot) {
+      releaseMonitorSlot(slot);
+      return;
+    }
+    const device = devices[slot];
+    const deviceId = device === undefined ? null : text(read(device, "deviceId"));
+    const videoPhase = text(read(read(device, "video"), "phase"));
+    const streamPhase = text(read(read(device, "stream"), "phase"));
+    const unavailable = streamPhase === "failed" && text(read(read(device, "stream"), "failureCode")) === "SOURCE_UNAVAILABLE";
+    if (deviceId === null || videoPhase !== "ready" || unavailable) {
+      releaseMonitorSlot(slot);
+      return;
+    }
+    if ((monitorRetryAt.get(slot) ?? 0) > Date.now()) return;
+    const existing = monitorPlayers.get(slot);
+    if (existing !== undefined && existing.deviceId === deviceId) return;
+    const playbackResult = await safeRenderInvoke("video-playback", { deviceId });
+    if (epoch !== monitorPlaybackEpoch || state.workspace !== "monitor") return;
+    const url = playbackUrl(playbackResult);
+    if (url === null) {
+      releaseMonitorSlot(slot);
+      return;
+    }
+    attachMonitorPlayer(slot, deviceId, url);
+  }));
 }
 
 const connectionLabel = (connection: unknown, key: string, ok: string, disconnected: string, unknownLabel: string): string => {
@@ -980,6 +1186,40 @@ const pairingFact = (connection: unknown): { readonly label: string; readonly ok
 };
 
 const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+
+const CALL_SIGN_STORAGE_KEY = "sky-command.call-signs";
+
+const readCallSignNumbers = (): Readonly<Record<string, number>> => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CALL_SIGN_STORAGE_KEY) ?? "{}") as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const numbers: Record<string, number> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value === "number" && Number.isInteger(value) && value > 0) numbers[id] = value;
+    }
+    return numbers;
+  } catch {
+    return {};
+  }
+};
+
+const callSign = (deviceId: string): string => {
+  const id = deviceId.trim();
+  const numbers = { ...readCallSignNumbers() };
+  let number = numbers[id];
+  if (number === undefined) {
+    const used = new Set(Object.values(numbers));
+    number = 1;
+    while (used.has(number)) number += 1;
+    numbers[id] = number;
+    try {
+      localStorage.setItem(CALL_SIGN_STORAGE_KEY, JSON.stringify(numbers));
+    } catch {
+      /* the label still shows for this session */
+    }
+  }
+  return `采集 ${number}`;
+};
 
 const statusRow = (name: string, label: string, ok: boolean): string =>
   `<div class="connection-status-row"><span class="connection-status-name">${escapeHtml(name)}</span><span class="connection-status-value${ok ? " ok" : ""}">${escapeHtml(label)}</span></div>`;
@@ -1298,7 +1538,7 @@ async function projectView(signal?: AbortSignal): Promise<ReturnType<typeof Oper
 const projectCached = (): ReturnType<typeof OperatorConsole.project> => OperatorConsole.project({
   snapshot: lastSnapshot,
   selection: { missionDeviceId: state.missionDeviceId, streamDeviceId: state.streamDeviceId },
-  workspace: state.workspace,
+  workspace: state.workspace === "monitor" ? "flight" : state.workspace,
   relayHint: lastRelayHint.length > 0 ? lastRelayHint : bridge().relayHint,
 });
 
@@ -1340,57 +1580,6 @@ async function run(
   await render();
 }
 
-const createMissionStartIntent = (view: ReturnType<typeof OperatorConsole.project>): MissionStartIntent | null => {
-  const deviceId = view.missionDeviceId;
-  const missionId = text(read(view.mission, "missionId"));
-  const route = view.missionRoute;
-  return deviceId !== null && missionId !== null && route !== null
-    ? Object.freeze({ deviceId, missionId, routeId: route.routeId, routeName: route.displayName })
-    : null;
-};
-
-const requestMissionStartConfirmation = async (view: ReturnType<typeof OperatorConsole.project>): Promise<void> => {
-  const decision = OperatorConsole.evaluate("mission-start", view);
-  if (!decision.ok) { blocked("mission-start", decision.reason ?? "无法执行航线", view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId)); return; }
-  const intent = createMissionStartIntent(view);
-  if (intent === null) {
-    blocked("mission-start", "已上传任务的身份不完整，请重新准备并上传航线", view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
-    return;
-  }
-  pendingMissionStart = intent;
-  captureFeedback("mission-start", intent.deviceId, feedbackDeviceEpoch(view, intent.deviceId), {
-    ok: true,
-    value: { ok: true, code: "CONFIRMATION_REQUIRED", action: "start", confirmation: { deviceId: intent.deviceId, action: "start" } },
-  });
-  show("等待人工确认：执行航线尚未调用 DJI MSDK");
-  await render();
-};
-
-const confirmMissionStart = async (): Promise<void> => {
-  const intent = pendingMissionStart;
-  pendingMissionStart = null;
-  if (intent === null) { await render(); return; }
-  let view: ReturnType<typeof OperatorConsole.project>;
-  try {
-    view = await projectView();
-  } catch {
-    pendingMissionStart = intent;
-    show("界面读取失败，确认未发送；请确认手机仍连接后重试");
-    renderMissionStartConfirmationFallback();
-    return;
-  }
-  if (
-    view.missionDeviceId !== intent.deviceId ||
-    text(read(view.mission, "missionId")) !== intent.missionId ||
-    view.missionRoute?.routeId !== intent.routeId
-  ) {
-    blocked("mission-start", "任务、目标飞机或航线已变化，请重新确认", view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
-    await render();
-    return;
-  }
-  await run("mission-start", "mission-start", { deviceId: intent.deviceId }, view);
-};
-
 function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const devices = view.devices as readonly Record<string, unknown>[];
   const count = el("connection-count");
@@ -1401,8 +1590,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     node.className = "device";
     if (device.deviceId === view.missionDeviceId) node.classList.add("inspected");
     const connection = device.connection ?? {};
-    const msdk = msdkFact(connection);
-    node.innerHTML = `<strong>${escapeHtml(String(device.deviceId))}</strong><div class="muted">${msdk.label} · ${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")}</div>`;
+    node.innerHTML = `<strong>${escapeHtml(callSign(String(device.deviceId)))}</strong><div class="muted">${connectionLabel(connection, "remoteController", "遥控器已连接", "遥控器未连接", "遥控器状态未知")} · ${connectionLabel(connection, "flightController", "飞控已连接", "飞控未连接", "飞控状态未知")}</div>`;
     node.addEventListener("click", () => { state.missionDeviceId = String(device.deviceId); void render(); });
     return node;
   }));
@@ -1422,7 +1610,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const pairing = pairingFact(connection);
   const html = inspected === undefined
     ? "从左侧选择已连接的手机。"
-    : `<p class="muted">编号 ${escapeHtml(String(inspected.deviceId))}</p>
+    : `<p class="muted">${escapeHtml(callSign(String(inspected.deviceId)))}</p>
       <h3 class="device-status-heading">连接状态</h3>
       <div class="connection-status-list" aria-label="连接状态">
         ${statusRow("电脑到手机中继 [桌面 Relay Session]", "中继在线", true)}
@@ -1451,25 +1639,50 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在手机上开始对频。电脑关掉后，需要在手机上重新连接。`;
 }
 
+let routeMenuOpen = false;
+
+const setRouteMenuOpen = (open: boolean): void => {
+  routeMenuOpen = open;
+  const list = el("route-select-list");
+  const trigger = el("route-select");
+  list.hidden = !open;
+  trigger.setAttribute("aria-expanded", open ? "true" : "false");
+};
+
 function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
   const selected = view.selectedRoute;
   const hasRoute = view.routes.length > 0;
   el("route-picker-wrap").hidden = !hasRoute;
   el("route-details").hidden = selected === null || selected === undefined;
   el("route-empty").hidden = hasRoute;
-  const select = el("route-select") as HTMLSelectElement;
-  select.replaceChildren(...view.routes.map((route) => Object.assign(document.createElement("option"), {
-    value: route.routeId,
-    textContent: route.displayName,
-    selected: selected?.routeId === route.routeId,
-  })));
-  if (selected !== null && selected !== undefined) select.value = selected.routeId;
-  select.onchange = async () => {
-    const decision = OperatorConsole.evaluate("select-route", view);
-    if (!decision.ok) { show(decision.reason ?? "无法选择航线"); return; }
-    await bridge().invoke("route-select", { routeId: select.value });
-    await render();
-  };
+  if (!hasRoute) setRouteMenuOpen(false);
+  el("route-select-label").textContent = selected?.displayName ?? "尚未选择";
+  const list = el("route-select-list");
+  list.replaceChildren(...view.routes.map((route) => {
+    const current = selected?.routeId === route.routeId;
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = current ? "route-menu-option is-selected" : "route-menu-option";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", current ? "true" : "false");
+    const name = document.createElement("span");
+    name.textContent = route.displayName;
+    const hint = document.createElement("small");
+    hint.className = route.executable ? "is-ready" : "is-preview";
+    hint.textContent = route.executable ? "可执行" : "仅预览";
+    option.append(name, hint);
+    option.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      setRouteMenuOpen(false);
+      if (current) return;
+      const decision = OperatorConsole.evaluate("select-route", view);
+      if (!decision.ok) { show(decision.reason ?? "无法选择航线"); return; }
+      await bridge().invoke("route-select", { routeId: route.routeId });
+      await render();
+    });
+    return option;
+  }));
+  setRouteMenuOpen(routeMenuOpen);
   if (selected === null || selected === undefined) {
     el("route-file-name").textContent = "";
     el("route-meta").textContent = "";
@@ -1506,6 +1719,21 @@ function renderMissionButtons(view: ReturnType<typeof OperatorConsole.project>):
     button.title = availability.enabled ? button.textContent ?? "" : availability.reason ?? "当前阶段不能执行此操作";
     renderOperationFeedback(dataAction, view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
   }
+}
+
+function renderFlightControllerVideoHint(view: ReturnType<typeof OperatorConsole.project>): void {
+  const paint = (id: "flight-fc-banner" | "flight-fc-repeat", text: string | null): void => {
+    const node = el(id);
+    if (text === null) {
+      node.hidden = true;
+      node.textContent = "";
+      return;
+    }
+    node.hidden = false;
+    node.textContent = text;
+  };
+  paint("flight-fc-banner", view.flightControllerVideoBanner);
+  paint("flight-fc-repeat", view.flightControllerVideoAfterStart);
 }
 
 function renderStreamButtons(view: ReturnType<typeof OperatorConsole.project>): void {
@@ -1551,7 +1779,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
       Object.assign(document.createElement("option"), { value: "", textContent: "未选择" }),
       ...devices.map((device) => Object.assign(document.createElement("option"), {
         value: String(device.deviceId),
-        textContent: String(device.deviceId),
+        textContent: callSign(String(device.deviceId)),
         selected: device.deviceId === selected,
       })),
     ]);
@@ -1560,6 +1788,7 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("direct-flight-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
+  renderFlightControllerVideoHint(view);
   renderFlightPanelStatus(view);
   renderFlightPanelVisibility();
   renderMissionButtons(view);
@@ -1578,29 +1807,359 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
     button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
     renderOperationFeedback(action, view.missionDeviceId, feedbackDeviceEpoch(view, view.missionDeviceId));
   }
-  const startMission = document.querySelector('button[data-action="mission-start"]');
-  if (startMission instanceof HTMLButtonElement) {
-    startMission.textContent = buttonLabel("mission-start", armedCommand);
-    startMission.dataset.arm = armedCommand?.action === "mission-start" ? "armed" : "idle";
-  }
   const landingDevice = devices.find((device) => device.deviceId === view.missionDeviceId);
   void landingDevice;
   pendingFlightConfirmation = adoptPendingConfirmation(pendingFlightConfirmation, view.confirmation, Date.now());
-  const intent = pendingMissionStart;
-  const currentMissionId = text(read(view.mission, "missionId"));
-  if (
-    intent !== null && (
-      view.missionDeviceId !== intent.deviceId ||
-      currentMissionId !== intent.missionId ||
-      view.missionRoute?.routeId !== intent.routeId
-    )
-  ) {
-    pendingMissionStart = null;
-    if (armedCommand?.action === "mission-start") {
-      armedCommand = null;
-      clearArmTimer();
+}
+
+const paintMonitorFlightHint = (slot: HTMLElement, device: Record<string, unknown> | undefined, deviceId: string | null): void => {
+  const hint = slot.querySelector(".monitor-fc-hint");
+  if (!(hint instanceof HTMLElement)) return;
+  if (deviceId !== null && read(connectionOf(device), "flightControllerHasConnectedOnce") !== false) monitorFlightControllerHints.delete(deviceId);
+  const message = deviceId === null ? undefined : monitorFlightControllerHints.get(deviceId);
+  hint.hidden = message === undefined;
+  hint.textContent = message ?? "";
+};
+
+const paintMonitorStreamButton = (slot: HTMLElement, device: Record<string, unknown> | undefined, deviceId: string | null): void => {
+  const button = slot.querySelector("[data-monitor-stream]");
+  if (!(button instanceof HTMLButtonElement)) return;
+  const connection = connectionOf(device);
+  const msdk = read(connection, "msdk");
+  const toggle = monitorStreamToggle({
+    present: device !== undefined && deviceId !== null,
+    streamPhase: text(read(read(device, "stream"), "phase")),
+    videoPhase: text(read(read(device, "video"), "phase")),
+    failureCode: text(read(read(device, "stream"), "failureCode")),
+    sdkReady: msdk === undefined ? read(connection, "sdk") === "ready" : msdk === "ready",
+    airLink: text(read(connection, "airLink")),
+    camera: text(read(connection, "camera")),
+    playing: deviceId !== null && [...monitorPlayers.values()].some((lane) => lane.deviceId === deviceId) && !(text(read(read(device, "stream"), "phase")) === "failed" && text(read(read(device, "stream"), "failureCode")) === "SOURCE_UNAVAILABLE"),
+    phoneStreaming: read(read(connection, "live"), "streaming") === true,
+    releasePhoneHold: deviceId !== null && monitorStreamHoldCleared.has(deviceId),
+  });
+  if (deviceId !== null && read(read(connection, "live"), "streaming") !== true) monitorStreamHoldCleared.delete(deviceId);
+  button.textContent = toggle.label;
+  button.disabled = !toggle.enabled;
+  button.title = toggle.title;
+  button.dataset.monitorStreamMode = toggle.mode;
+};
+
+const paintMonitorRouteButton = (slot: HTMLElement, device: Record<string, unknown> | undefined, deviceId: string | null): void => {
+  const button = slot.querySelector("[data-monitor-route]");
+  if (!(button instanceof HTMLButtonElement)) return;
+  if (deviceId === null || device == null) {
+    button.textContent = "航线选择";
+    button.disabled = true;
+    button.title = "空位";
+    button.dataset.monitorRouteMode = "choose";
+    return;
+  }
+  const plan = monitorRoutePlans.get(deviceId);
+  const sequenceBusy = plan?.button === "busy";
+  const actionBusy = monitorRouteActionBusy.has(deviceId);
+  const picking = !sequenceBusy && plan !== undefined && monitorRailKind === "route" && monitorRailDeviceId === deviceId && plan.rail === "pick";
+  const control = monitorRouteControl({
+    missionPhase: text(read(read(device, "mission"), "phase")),
+    routeExecutionStarted: read(read(device, "mission"), "routeExecutionStarted") === true,
+    missionExecution: text(read(connectionOf(device), "missionExecution")),
+    djiMissionState: text(read(connectionOf(device), "missionDjiExecutionState")),
+  });
+  const sequenceFailed = plan !== undefined && (plan.phone === "failed" || plan.aircraft === "failed" || plan.execute === "failed");
+  const live = control === "await" && sequenceFailed ? "choose" : control;
+  if (live !== "choose" && plan !== undefined && monitorRailKind === "route" && monitorRailDeviceId === deviceId && plan.rail === "pick") {
+    plan.rail = "status";
+  }
+  if (sequenceBusy) {
+    button.textContent = "一键执行";
+    button.disabled = true;
+    button.title = "正在上传并执行航线";
+    button.dataset.monitorRouteMode = "busy";
+    return;
+  }
+  if (live === "stopping") {
+    button.textContent = "正在停止航线";
+    button.disabled = true;
+    button.title = "正在停止航线";
+    button.dataset.monitorRouteMode = "stopping";
+    return;
+  }
+  if (live === "pause" || live === "resume") {
+    button.textContent = live === "pause" ? "暂停航线" : "继续执行";
+    button.disabled = actionBusy;
+    button.title = live === "pause" ? "暂停航线，飞机悬停，之后可以继续" : "从暂停处继续执行航线";
+    button.dataset.monitorRouteMode = live;
+    return;
+  }
+  if (live === "await") {
+    button.textContent = "等待进入航线";
+    button.disabled = true;
+    button.title = "飞机还没进入航线。要收掉任务请点紧急悬停";
+    button.dataset.monitorRouteMode = "await";
+    return;
+  }
+  const chosen = picking && plan.routeId !== null;
+  button.textContent = chosen ? "一键执行" : picking ? "退出选择" : "航线选择";
+  button.dataset.monitorRouteMode = chosen ? "execute" : picking ? "exit" : "choose";
+  button.disabled = false;
+  button.title = button.textContent ?? "";
+};
+
+const paintMonitorPhotoButton = (slot: HTMLElement, view: ReturnType<typeof OperatorConsole.project>, deviceId: string | null): void => {
+  const button = slot.querySelector("[data-monitor-photo]");
+  if (!(button instanceof HTMLButtonElement)) return;
+  if (deviceId === null) {
+    button.disabled = true;
+    button.title = "空位";
+    return;
+  }
+  const decision = OperatorConsole.evaluate("photo-fetch", { ...view, workspace: "flight", streamDeviceId: deviceId });
+  const busy = monitorPhotoBusy.has(deviceId);
+  button.disabled = busy || !decision.ok;
+  button.title = decision.ok ? "回传照片" : decision.reason ?? "当前状态不允许此操作";
+};
+
+const paintMonitorHoldButton = (slot: HTMLElement, deviceId: string | null): void => {
+  const button = slot.querySelector("[data-monitor-hold]");
+  if (!(button instanceof HTMLButtonElement)) return;
+  const busy = deviceId !== null && monitorHoldBusy.has(deviceId);
+  button.disabled = deviceId === null || busy;
+  button.title = deviceId === null ? "空位" : "航线进行中将停止航线；其他时候按当前飞行动作刹车并悬停";
+};
+
+const paintMonitorDirectButtons = (slot: HTMLElement, device: Record<string, unknown> | undefined, deviceId: string | null): void => {
+  const home = slot.querySelector("[data-monitor-home]");
+  const land = slot.querySelector("[data-monitor-land]");
+  if (!(home instanceof HTMLButtonElement) || !(land instanceof HTMLButtonElement)) return;
+  if (deviceId === null || device == null) {
+    home.textContent = "返航";
+    land.textContent = "降落";
+    home.disabled = true;
+    land.disabled = true;
+    home.title = "空位";
+    land.title = "空位";
+    home.dataset.monitorHomeMode = "return-home";
+    land.dataset.monitorLandMode = "land";
+    return;
+  }
+  const facts = monitorFactsOf(device);
+  const direct = monitorDirectFlight({
+    flying: facts.flying,
+    motorsOn: facts.motorsOn,
+    flightMode: facts.flightMode,
+    landingConfirmationNeeded: facts.landingConfirmationNeeded,
+    lowBatteryRthState: facts.lowBatteryRthState,
+  });
+  home.textContent = direct.home.label;
+  land.textContent = direct.land.label;
+  home.disabled = monitorHomeBusy.has(deviceId);
+  land.disabled = monitorLandBusy.has(deviceId);
+  home.title = direct.home.label;
+  land.title = direct.land.label;
+  home.dataset.monitorHomeMode = direct.home.mode;
+  land.dataset.monitorLandMode = direct.land.mode;
+};
+
+function paintMonitorActionRail(rail: HTMLElement, deviceId: string, title: string, progress: { state: MonitorRouteStepState; detail: string | null }): void {
+  const head = document.createElement("div");
+  head.className = "monitor-rail-head";
+  const heading = document.createElement("strong");
+  heading.textContent = callSign(deviceId);
+  const subtitle = document.createElement("span");
+  subtitle.textContent = title;
+  head.append(heading, subtitle);
+  const body = document.createElement("div");
+  body.className = "monitor-rail-body";
+  const row = document.createElement("div");
+  row.className = progress.state === "done" ? "monitor-step is-done" : progress.state === "failed" ? "monitor-step is-failed" : "monitor-step";
+  const label = document.createElement("span");
+  label.textContent = title;
+  const value = document.createElement("small");
+  value.textContent = monitorRouteStepText[progress.state];
+  row.append(label, value);
+  body.append(row);
+  if (progress.detail !== null) {
+    const note = document.createElement("p");
+    note.className = "monitor-rail-note";
+    note.textContent = progress.detail;
+    body.append(note);
+  }
+  rail.append(head, body);
+}
+
+function renderMonitorRail(view: ReturnType<typeof OperatorConsole.project>): void {
+  const rail = document.querySelector(".monitor-rail-panel");
+  if (!(rail instanceof HTMLElement)) return;
+  const deviceId = monitorRailDeviceId;
+  const plan = deviceId === null ? undefined : monitorRoutePlans.get(deviceId);
+  rail.replaceChildren();
+  if (deviceId !== null && monitorRailKind === "photo") {
+    const photo = monitorPhotoProgress.get(deviceId);
+    if (photo !== undefined) {
+      paintMonitorActionRail(rail, deviceId, "回传照片", photo);
+      return;
     }
   }
+  if (deviceId !== null && monitorRailKind === "hold") {
+    const hold = monitorHoldProgress.get(deviceId);
+    if (hold !== undefined) {
+      paintMonitorActionRail(rail, deviceId, "紧急悬停", hold);
+      return;
+    }
+  }
+  if (deviceId !== null && monitorRailKind === "direct") {
+    const direct = monitorDirectProgress.get(deviceId);
+    if (direct !== undefined) {
+      paintMonitorActionRail(rail, deviceId, direct.title, direct);
+      return;
+    }
+  }
+  if (deviceId !== null && monitorRailKind === "stream") {
+    const stream = monitorStreamProgress.get(deviceId);
+    if (stream !== undefined) {
+      paintMonitorActionRail(rail, deviceId, "图传", stream);
+      const hint = monitorFlightControllerHints.get(deviceId);
+      const body = rail.querySelector(".monitor-rail-body");
+      if (hint !== undefined && body instanceof HTMLElement) {
+        const banner = document.createElement("p");
+        banner.className = "monitor-fc-hint";
+        banner.setAttribute("role", "status");
+        banner.textContent = hint;
+        body.append(banner);
+      }
+      return;
+    }
+  }
+  if (deviceId !== null && monitorRailKind === "mission") {
+    const mission = monitorMissionProgress.get(deviceId);
+    if (mission !== undefined) {
+      paintMonitorActionRail(rail, deviceId, mission.title, mission);
+      return;
+    }
+  }
+  if (deviceId === null || plan === undefined) return;
+  const route = plan.routeId === null ? undefined : view.routes.find((item) => item.routeId === plan.routeId);
+  const head = document.createElement("div");
+  head.className = "monitor-rail-head";
+  const title = document.createElement("strong");
+  title.textContent = callSign(deviceId);
+  head.append(title);
+  if (plan.rail === "status" && route !== undefined) {
+    const subtitle = document.createElement("span");
+    subtitle.textContent = route.displayName;
+    head.append(subtitle);
+  } else if (plan.rail === "pick") {
+    const subtitle = document.createElement("span");
+    subtitle.textContent = "选择要执行的航线";
+    head.append(subtitle);
+  }
+  const body = document.createElement("div");
+  body.className = "monitor-rail-body";
+  if (plan.rail === "pick") {
+    const routes = view.routes.filter((item) => item.executable);
+    if (routes.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "monitor-rail-empty";
+      empty.textContent = "还没有可执行的航线";
+      body.append(empty);
+    }
+    for (const item of routes) {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = item.routeId === plan.routeId ? "monitor-route is-selected" : "monitor-route";
+      choice.dataset.monitorRouteId = item.routeId;
+      choice.textContent = item.displayName;
+      body.append(choice);
+    }
+  } else {
+    const steps: ReadonlyArray<readonly [string, MonitorRouteStepState]> = [
+      ["上传到手机", plan.phone],
+      ["上传到飞机", plan.aircraft],
+      ["执行航线", plan.execute],
+    ];
+    for (const [name, state] of steps) {
+      const row = document.createElement("div");
+      row.className = state === "done" ? "monitor-step is-done" : state === "failed" ? "monitor-step is-failed" : "monitor-step";
+      const label = document.createElement("span");
+      label.textContent = name;
+      const value = document.createElement("small");
+      value.textContent = monitorRouteStepText[state];
+      row.append(label, value);
+      body.append(row);
+    }
+    if (plan.failure !== null) {
+      const note = document.createElement("p");
+      note.className = "monitor-rail-note";
+      note.textContent = plan.failure;
+      body.append(note);
+    }
+  }
+  rail.append(head, body);
+}
+
+const applyMonitorView = (): void => {
+  const workspace = document.querySelector("#workspace-monitor");
+  if (workspace instanceof HTMLElement) workspace.classList.toggle("is-single", monitorViewMode === "single");
+  document.querySelectorAll<HTMLButtonElement>("[data-monitor-mode]").forEach((button) => {
+    const selected = button.dataset.monitorMode === monitorViewMode;
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+  });
+  document.querySelectorAll<HTMLElement>("[data-monitor-slot]").forEach((slot) => {
+    slot.classList.toggle("is-focused", Number(slot.dataset.monitorSlot) === monitorSingleSlot);
+  });
+};
+
+function renderMonitor(view: ReturnType<typeof OperatorConsole.project>): void {
+  const devices = monitorDevices(view);
+  document.querySelectorAll<HTMLElement>("[data-monitor-slot]").forEach((slot) => {
+    const index = Number(slot.dataset.monitorSlot);
+    const device = Number.isInteger(index) ? devices[index] : undefined;
+    const name = slot.querySelector("[data-monitor-name]");
+    const stateNode = slot.querySelector("[data-monitor-state]");
+    const detailNode = slot.querySelector("[data-monitor-detail]");
+    const setHud = (key: string, value: string): void => {
+      const node = slot.querySelector(`[data-monitor-hud="${key}"]`);
+      if (node instanceof HTMLElement) node.textContent = value;
+    };
+    if (device === undefined) {
+      if (name instanceof HTMLElement) name.textContent = "空位";
+      if (stateNode instanceof HTMLElement) stateNode.textContent = "未确认";
+      if (detailNode instanceof HTMLElement) detailNode.textContent = "";
+      for (const key of ["flying", "motors", "battery", "altitude", "gps", "mode"]) setHud(key, EMPTY_STATUS);
+      paintMonitorStreamButton(slot, undefined, null);
+      paintMonitorRouteButton(slot, undefined, null);
+      paintMonitorPhotoButton(slot, view, null);
+      paintMonitorHoldButton(slot, null);
+      paintMonitorDirectButtons(slot, undefined, null);
+      paintMonitorFlightHint(slot, undefined, null);
+      return;
+    }
+    const deviceId = text(read(device, "deviceId"));
+    if (name instanceof HTMLElement) name.textContent = deviceId === null ? "空位" : callSign(deviceId);
+    const connection = connectionOf(device);
+    const flying = text(read(connection, "flightState"));
+    const motorsRaw = read(connection, "motorsOn");
+    const motorsOn = motorsRaw === true ? true : motorsRaw === false ? false : null;
+    const pose = read(connection, "pose");
+    const status = monitorAircraftStatus(monitorFactsOf(device));
+    if (stateNode instanceof HTMLElement) stateNode.textContent = status.label;
+    if (detailNode instanceof HTMLElement) detailNode.textContent = status.detail;
+    setHud("flying", hudFlying(flying));
+    setHud("motors", hudMotors(motorsOn));
+    setHud("battery", hudBattery(read(connection, "batteryPercent")));
+    setHud("altitude", hudAltitude(read(pose, "altitudeMeters")));
+    setHud("gps", hudText(read(connection, "gpsSignalLevel")));
+    setHud("mode", hudText(read(connection, "flightMode")));
+    paintMonitorStreamButton(slot, device, deviceId);
+    paintMonitorRouteButton(slot, device, deviceId);
+    paintMonitorPhotoButton(slot, view, deviceId);
+    paintMonitorHoldButton(slot, deviceId);
+    paintMonitorDirectButtons(slot, device, deviceId);
+    paintMonitorFlightHint(slot, device, deviceId);
+  });
+  applyMonitorView();
+  renderMonitorRail(view);
 }
 
 const deepUnwrap = (value: unknown, key: string): unknown => {
@@ -1710,8 +2269,14 @@ const paintOnce = (): void => {
   try { renderDevices(view); } catch (error) { console.error("[sky-render]", error); }
   try { renderRoutes(view); } catch (error) { console.error("[sky-render]", error); }
   try { renderFlight(view); } catch (error) { console.error("[sky-render]", error); }
+  try { renderMonitor(view); } catch (error) { console.error("[sky-render]", error); }
   try { applyRouteMap(view); } catch (error) { console.error("[sky-render]", error); }
-  void ensurePlayback(view);
+  if (state.workspace === "monitor") void ensureMonitorPlayback(view);
+  else {
+    monitorPlaybackEpoch += 1;
+    releaseMonitorPlayers();
+    void ensurePlayback(view);
+  }
 };
 
 const paintScheduler = createRenderScheduler(async () => { paintOnce(); }, { deadlineMs: 60_000 });
@@ -1734,7 +2299,7 @@ const render = async (): Promise<void> => {
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
     const workspace = (button as HTMLButtonElement).dataset.workspace;
-    if (workspace === "devices" || workspace === "routes" || workspace === "flight") state.workspace = workspace;
+    if (workspace === "devices" || workspace === "routes" || workspace === "flight" || workspace === "monitor") state.workspace = workspace;
     void render();
   });
 });
@@ -1823,6 +2388,18 @@ el("route-import").addEventListener("click", async () => {
 });
 
 el("route-locate").addEventListener("click", () => { locateDrawnRoute(); });
+el("route-select").addEventListener("click", (event) => {
+  event.stopPropagation();
+  setRouteMenuOpen(!routeMenuOpen);
+});
+document.addEventListener("click", (event) => {
+  if (!routeMenuOpen) return;
+  if (event.target instanceof Node && el("route-picker-wrap").contains(event.target)) return;
+  setRouteMenuOpen(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setRouteMenuOpen(false);
+});
 el("route-remove").addEventListener("click", async () => {
   const view = await projectView();
   const routeId = view.selectedRoute?.routeId;
@@ -1843,6 +2420,477 @@ el("route-remove").addEventListener("click", async () => {
   await render();
 });
 
+const monitorStepSucceeded = (feedback: OperationFeedback): boolean => feedback.outcome === "accepted" || feedback.outcome === "completed";
+
+async function runMonitorRoute(deviceId: string, routeId: string): Promise<void> {
+  const plan = monitorRoutePlan(deviceId);
+  const fail = async (step: "phone" | "aircraft" | "execute", message: string): Promise<void> => {
+    plan[step] = "failed";
+    plan.failure = message;
+    plan.button = "choose";
+    show(`${callSign(deviceId)}：${message}`);
+    try { await render(); } catch { /* the status row stays on the failed step */ }
+  };
+  const paint = async (): Promise<void> => {
+    try { await render(); } catch { /* keep going to the next step */ }
+  };
+  let view: ReturnType<typeof OperatorConsole.project>;
+  try {
+    view = projectCached();
+  } catch {
+    await fail("phone", "界面读取失败，本次操作未发送");
+    return;
+  }
+  const route = view.routes.find((item) => item.routeId === routeId);
+  if (route === undefined || route.executable !== true) {
+    await fail("phone", route?.blockedReason ?? "这条航线现在不能执行");
+    return;
+  }
+  const epoch = feedbackDeviceEpoch(view, deviceId);
+  try {
+    const released = unwrap(await bridge().invoke("mission-release", { deviceId }));
+    if (accepted(released) !== true) {
+      await fail("phone", captureFeedback("mission-release", deviceId, epoch, released).message);
+      return;
+    }
+    const assigned = unwrap(await bridge().invoke("assignment-assign", { deviceId, routeId }));
+    if (accepted(assigned) !== true) {
+      await fail("phone", "航线未能赋给这架飞机");
+      return;
+    }
+    const staged = await bridge().invoke("mission-stage", { deviceId });
+    const stageFeedback = captureFeedback("mission-stage", deviceId, epoch, staged);
+    if (!monitorStepSucceeded(stageFeedback)) {
+      await fail("phone", stageFeedback.message);
+      return;
+    }
+    plan.phone = "done";
+    plan.aircraft = "running";
+    await paint();
+    const uploaded = await bridge().invoke("mission-upload", { deviceId });
+    const uploadFeedback = captureFeedback("mission-upload", deviceId, epoch, uploaded);
+    if (!monitorStepSucceeded(uploadFeedback)) {
+      await fail("aircraft", uploadFeedback.message);
+      return;
+    }
+    plan.aircraft = "done";
+    plan.execute = "running";
+    await paint();
+    const started = await bridge().invoke("mission-start", { deviceId });
+    const startFeedback = captureFeedback("mission-start", deviceId, epoch, started);
+    if (!monitorStepSucceeded(startFeedback)) {
+      await fail("execute", startFeedback.message);
+      return;
+    }
+    plan.execute = "done";
+    plan.failure = null;
+    plan.button = "choose";
+    show(`${callSign(deviceId)}：${startFeedback.message}`);
+    await paint();
+  } catch {
+    const step = plan.phone !== "done" ? "phone" : plan.aircraft !== "done" ? "aircraft" : "execute";
+    await fail(step, "暂时无法完成，请稍后重试");
+  }
+}
+
+document.querySelector(".monitor-rail")?.addEventListener("click", (event) => {
+  const choice = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("[data-monitor-route-id]") : null;
+  const deviceId = monitorRailDeviceId;
+  const routeId = choice?.dataset.monitorRouteId;
+  if (choice === null || deviceId === null || routeId === undefined || routeId.length === 0) return;
+  const plan = monitorRoutePlan(deviceId);
+  if (plan.rail !== "pick" || plan.button === "busy") return;
+  plan.routeId = plan.routeId === routeId ? null : routeId;
+  plan.button = plan.routeId === null ? "choose" : "execute";
+  void render();
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-monitor-route]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const tile = button.closest("[data-monitor-slot]");
+    const slot = Number(tile instanceof HTMLElement ? tile.dataset.monitorSlot : "");
+    if (!Number.isInteger(slot)) return;
+    let view: ReturnType<typeof OperatorConsole.project>;
+    try {
+      view = projectCached();
+    } catch {
+      show("界面读取失败，本次操作未发送；请确认手机仍连接后重试");
+      return;
+    }
+    const device = monitorDevices(view)[slot];
+    const deviceId = device === undefined ? null : text(read(device, "deviceId"));
+    if (deviceId === null) return;
+    const mode = button.dataset.monitorRouteMode;
+    if (mode === "pause" || mode === "resume") {
+      if (monitorRouteActionBusy.has(deviceId)) return;
+      const action = mode === "pause" ? "mission-pause" : "mission-resume";
+      const runningDetail = mode === "pause" ? "正在暂停航线" : "正在继续执行";
+      const title = mode === "pause" ? "暂停航线" : "继续执行";
+      monitorRouteActionBusy.add(deviceId);
+      button.disabled = true;
+      monitorMissionProgress.set(deviceId, { title, state: "running", detail: runningDetail });
+      monitorRailDeviceId = deviceId;
+      monitorRailKind = "mission";
+      show(`${callSign(deviceId)}：${runningDetail}`);
+      try { await render(); } catch { /* the command still runs */ }
+      try {
+        const result = await bridge().invoke(action, { deviceId });
+        const feedback = captureFeedback(action, deviceId, feedbackDeviceEpoch(view, deviceId), result);
+        const illegal = text(read(unwrapAll(result), "code")) === "ILLEGAL_PHASE";
+        const message = illegal ? (mode === "pause" ? "当前阶段不能暂停" : "当前阶段不能继续") : feedback.message;
+        const done = !illegal && monitorStepSucceeded(feedback);
+        monitorMissionProgress.set(deviceId, { title, state: done ? "done" : "failed", detail: message });
+        show(`${callSign(deviceId)}：${message}`);
+      } catch {
+        monitorMissionProgress.set(deviceId, { title, state: "failed", detail: "暂时无法完成，请稍后重试" });
+        show(`${callSign(deviceId)}：暂时无法完成，请稍后重试`);
+      } finally {
+        monitorRouteActionBusy.delete(deviceId);
+        try { await render(); } catch { /* the button is redrawn on the next snapshot */ }
+      }
+      return;
+    }
+    if (mode === "await" || mode === "stopping" || mode === "busy") return;
+    const plan = monitorRoutePlan(deviceId);
+    if (plan.button === "busy") return;
+    const picking = monitorRailKind === "route" && monitorRailDeviceId === deviceId && plan.rail === "pick";
+    if (!picking) {
+      plan.resumeStatus = monitorRailKind === "route" && plan.rail === "status";
+      plan.resumePhoto = monitorRailKind === "photo" && monitorPhotoProgress.has(deviceId);
+      plan.resumeHold = monitorRailKind === "hold" && monitorHoldProgress.has(deviceId);
+      plan.resumeDirect = monitorRailKind === "direct" && monitorDirectProgress.has(deviceId);
+      plan.resumeStream = monitorRailKind === "stream" && monitorStreamProgress.has(deviceId);
+      if (plan.routeId === null) {
+        const assigned = text(read(read(device, "assignment"), "routeId"));
+        const known = assigned === null ? undefined : view.routes.find((item) => item.routeId === assigned && item.executable);
+        if (known !== undefined) plan.routeId = known.routeId;
+      }
+      plan.rail = "pick";
+      monitorRailKind = "route";
+      monitorRailDeviceId = deviceId;
+      await render();
+      return;
+    }
+    if (plan.routeId === null) {
+      if (plan.resumeStatus) {
+        plan.rail = "status";
+        monitorRailKind = "route";
+      } else if (plan.resumePhoto && monitorPhotoProgress.has(deviceId)) {
+        monitorRailKind = "photo";
+      } else if (plan.resumeHold && monitorHoldProgress.has(deviceId)) {
+        monitorRailKind = "hold";
+      } else if (plan.resumeDirect && monitorDirectProgress.has(deviceId)) {
+        monitorRailKind = "direct";
+      } else if (plan.resumeStream && monitorStreamProgress.has(deviceId)) {
+        monitorRailKind = "stream";
+      } else monitorRailDeviceId = null;
+      plan.resumeStatus = false;
+      plan.resumePhoto = false;
+      plan.resumeHold = false;
+      plan.resumeDirect = false;
+      plan.resumeStream = false;
+      await render();
+      return;
+    }
+    const routeId = plan.routeId;
+    plan.button = "busy";
+    plan.rail = "status";
+    plan.phone = "running";
+    plan.aircraft = "pending";
+    plan.execute = "pending";
+    plan.failure = null;
+    monitorRailKind = "route";
+    monitorRailDeviceId = deviceId;
+    try { await render(); } catch { /* the sequence still runs */ }
+    await runMonitorRoute(deviceId, routeId);
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-monitor-photo]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const tile = button.closest("[data-monitor-slot]");
+    const slot = Number(tile instanceof HTMLElement ? tile.dataset.monitorSlot : "");
+    if (!Number.isInteger(slot)) return;
+    let view: ReturnType<typeof OperatorConsole.project>;
+    try {
+      view = projectCached();
+    } catch {
+      show("界面读取失败，本次操作未发送；请确认手机仍连接后重试");
+      return;
+    }
+    const device = monitorDevices(view)[slot];
+    const deviceId = device === undefined ? null : text(read(device, "deviceId"));
+    if (deviceId === null || monitorPhotoBusy.has(deviceId)) return;
+    const decision = OperatorConsole.evaluate("photo-fetch", { ...view, workspace: "flight", streamDeviceId: deviceId });
+    if (!decision.ok) {
+      show(`${callSign(deviceId)}：${decision.reason ?? "当前状态不允许此操作"}`);
+      return;
+    }
+    monitorPhotoBusy.add(deviceId);
+    button.disabled = true;
+    monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在回传照片，界面应保持可操作" });
+    monitorRailDeviceId = deviceId;
+    monitorRailKind = "photo";
+    show(`${callSign(deviceId)}：正在回传照片，界面应保持可操作`);
+    try { await render(); } catch { /* the transfer still runs */ }
+    try {
+      const result = await bridge().invoke("photo-fetch", { deviceId });
+      const feedback = captureFeedback("photo-fetch", deviceId, feedbackDeviceEpoch(view, deviceId), result);
+      const done = feedback.outcome === "accepted" || feedback.outcome === "completed";
+      monitorPhotoProgress.set(deviceId, { state: done ? "done" : "failed", detail: feedback.message });
+      show(`${callSign(deviceId)}：${feedback.message}`);
+    } catch {
+      monitorPhotoProgress.set(deviceId, { state: "failed", detail: "暂时无法完成，请稍后重试" });
+      show(`${callSign(deviceId)}：暂时无法完成，请稍后重试`);
+    } finally {
+      monitorPhotoBusy.delete(deviceId);
+      try { await render(); } catch { /* the button state is redrawn on the next snapshot */ }
+    }
+  });
+});
+
+const confirmMonitorFlight = async (deviceId: string, action: "land" | "confirm-landing" | "return-home" | "stop-takeoff" | "stop-auto-landing" | "stop-go-home"): Promise<unknown> => {
+  const requested = await bridge().invoke("flight-request", { deviceId, action });
+  const confirmation = confirmationFromResult(requested, deviceId, action);
+  if (confirmation === null || confirmation.deviceId !== deviceId || confirmation.action !== action) return requested;
+  return bridge().invoke("flight-confirm", { deviceId, confirmationId: confirmation.confirmationId });
+};
+
+const monitorFactsOf = (device: Record<string, unknown>): Parameters<typeof monitorAircraftStatus>[0] => {
+  const connection = connectionOf(device);
+  const motorsRaw = read(connection, "motorsOn");
+  const waypoint = read(connection, "currentWaypointIndex");
+  return {
+    flying: text(read(connection, "flightState")),
+    motorsOn: motorsRaw === true ? true : motorsRaw === false ? false : null,
+    flightMode: text(read(connection, "flightMode")),
+    landingConfirmationNeeded: read(connection, "landingConfirmationNeeded") === true ? true : read(connection, "landingConfirmationNeeded") === false ? false : null,
+    landingProtectionState: text(read(connection, "landingProtectionState")),
+    lowBatteryRthState: text(read(connection, "lowBatteryRthState")),
+    missionExecution: text(read(connection, "missionExecution")),
+    djiMissionState: text(read(connection, "missionDjiExecutionState")),
+    waypointIndex: typeof waypoint === "number" && Number.isSafeInteger(waypoint) && waypoint >= 0 ? waypoint : null,
+    flightController: text(read(connection, "flightController")),
+  };
+};
+
+document.querySelectorAll<HTMLButtonElement>("[data-monitor-hold]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const tile = button.closest("[data-monitor-slot]");
+    const slot = Number(tile instanceof HTMLElement ? tile.dataset.monitorSlot : "");
+    if (!Number.isInteger(slot)) return;
+    let view: ReturnType<typeof OperatorConsole.project>;
+    try {
+      view = projectCached();
+    } catch {
+      show("界面读取失败，本次操作未发送；请确认手机仍连接后重试");
+      return;
+    }
+    const device = monitorDevices(view)[slot];
+    const deviceId = device === undefined ? null : text(read(device, "deviceId"));
+    if (device === undefined || deviceId === null || monitorHoldBusy.has(deviceId)) return;
+    const command = monitorHoverCommand(monitorFactsOf(device));
+    monitorHoldBusy.add(deviceId);
+    button.disabled = true;
+    monitorRailDeviceId = deviceId;
+    monitorRailKind = "hold";
+    if (command.kind === "none") {
+      monitorHoldProgress.set(deviceId, { state: command.state, detail: command.detail });
+      show(`${callSign(deviceId)}：${command.detail}`);
+      monitorHoldBusy.delete(deviceId);
+      try { await render(); } catch { /* the rail is redrawn on the next snapshot */ }
+      return;
+    }
+    monitorHoldProgress.set(deviceId, { state: "running", detail: command.detail });
+    show(`${callSign(deviceId)}：${command.detail}`);
+    try { await render(); } catch { /* the command still runs */ }
+    try {
+      const result = command.kind === "stop"
+        ? await bridge().invoke("mission-stop", { deviceId })
+        : await confirmMonitorFlight(deviceId, command.action);
+      const feedbackAction = command.kind === "stop" ? "mission-stop" : `flight-${command.action}`;
+      const feedback = captureFeedback(feedbackAction, deviceId, feedbackDeviceEpoch(view, deviceId), result);
+      const code = text(read(unwrapAll(result), "code"));
+      const message = command.kind === "stop" && code === "ILLEGAL_PHASE" ? "当前阶段不能停止航线" : feedback.message;
+      const done = code !== "ILLEGAL_PHASE" && (feedback.outcome === "accepted" || feedback.outcome === "completed");
+      monitorHoldProgress.set(deviceId, { state: done ? "done" : "failed", detail: message });
+      show(`${callSign(deviceId)}：${message}`);
+    } catch {
+      monitorHoldProgress.set(deviceId, { state: "failed", detail: "暂时无法完成，请稍后重试" });
+      show(`${callSign(deviceId)}：暂时无法完成，请稍后重试`);
+    } finally {
+      monitorHoldBusy.delete(deviceId);
+      try { await render(); } catch { /* the button state is redrawn on the next snapshot */ }
+    }
+  });
+});
+
+const monitorDirectRunningDetail = (mode: "return-home" | "stop-go-home" | "land" | "confirm-landing"): string => {
+  if (mode === "return-home") return "正在返航";
+  if (mode === "stop-go-home") return "正在停止返航";
+  if (mode === "confirm-landing") return "正在确认降落";
+  return "正在降落";
+};
+
+const bindMonitorDirect = (selector: "[data-monitor-home]" | "[data-monitor-land]", which: "home" | "land"): void => {
+  document.querySelectorAll<HTMLButtonElement>(selector).forEach((button) => {
+    button.addEventListener("click", async () => {
+      const tile = button.closest("[data-monitor-slot]");
+      const slot = Number(tile instanceof HTMLElement ? tile.dataset.monitorSlot : "");
+      if (!Number.isInteger(slot)) return;
+      let view: ReturnType<typeof OperatorConsole.project>;
+      try {
+        view = projectCached();
+      } catch {
+        show("界面读取失败，本次操作未发送；请确认手机仍连接后重试");
+        return;
+      }
+      const device = monitorDevices(view)[slot];
+      const deviceId = device === undefined ? null : text(read(device, "deviceId"));
+      const busy = which === "home" ? monitorHomeBusy : monitorLandBusy;
+      if (device === undefined || deviceId === null || busy.has(deviceId)) return;
+      const facts = monitorFactsOf(device);
+      const direct = monitorDirectFlight({
+        flying: facts.flying,
+        motorsOn: facts.motorsOn,
+        flightMode: facts.flightMode,
+        landingConfirmationNeeded: facts.landingConfirmationNeeded,
+        lowBatteryRthState: facts.lowBatteryRthState,
+      });
+      const control = which === "home" ? direct.home : direct.land;
+      const detail = monitorDirectRunningDetail(control.mode);
+      busy.add(deviceId);
+      button.disabled = true;
+      monitorDirectProgress.set(deviceId, { title: control.label, state: "running", detail });
+      monitorRailDeviceId = deviceId;
+      monitorRailKind = "direct";
+      show(`${callSign(deviceId)}：${detail}`);
+      try { await render(); } catch { /* the command still runs */ }
+      try {
+        const result = await confirmMonitorFlight(deviceId, control.mode);
+        const feedback = captureFeedback(`flight-${control.mode}`, deviceId, feedbackDeviceEpoch(view, deviceId), result);
+        const done = feedback.outcome === "accepted" || feedback.outcome === "completed";
+        monitorDirectProgress.set(deviceId, { title: control.label, state: done ? "done" : "failed", detail: feedback.message });
+        show(`${callSign(deviceId)}：${feedback.message}`);
+      } catch {
+        monitorDirectProgress.set(deviceId, { title: control.label, state: "failed", detail: "暂时无法完成，请稍后重试" });
+        show(`${callSign(deviceId)}：暂时无法完成，请稍后重试`);
+      } finally {
+        busy.delete(deviceId);
+        try { await render(); } catch { /* the button state is redrawn on the next snapshot */ }
+      }
+    });
+  });
+};
+bindMonitorDirect("[data-monitor-home]", "home");
+bindMonitorDirect("[data-monitor-land]", "land");
+
+document.querySelectorAll<HTMLButtonElement>("[data-monitor-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.monitorMode;
+    if (mode !== "grid" && mode !== "single") return;
+    if (mode === monitorViewMode) return;
+    monitorViewMode = mode;
+    applyMonitorView();
+    void render();
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-monitor-step]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (monitorViewMode !== "single") return;
+    const step = Number(button.dataset.monitorStep);
+    if (step !== -1 && step !== 1) return;
+    monitorSingleSlot = (monitorSingleSlot + step + 4) % 4;
+    applyMonitorView();
+    void render();
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-monitor-stream]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const tile = button.closest("[data-monitor-slot]");
+    const slot = Number(tile instanceof HTMLElement ? tile.dataset.monitorSlot : "");
+    if (!Number.isInteger(slot)) return;
+    let view: ReturnType<typeof OperatorConsole.project>;
+    try {
+      view = projectCached();
+    } catch {
+      show("界面读取失败，本次操作未发送；请确认手机仍连接后重试");
+      return;
+    }
+    const device = monitorDevices(view)[slot];
+    const deviceId = device === undefined ? null : text(read(device, "deviceId"));
+    const phoneStreaming = read(read(connectionOf(device), "live"), "streaming") === true;
+    const released = deviceId !== null && monitorStreamHoldCleared.has(deviceId);
+    const mode = phoneStreaming && !released ? "stop" : button.dataset.monitorStreamMode;
+    if (deviceId === null || (mode !== "start" && mode !== "stop")) {
+      if (button.title.length > 0) show(button.title);
+      return;
+    }
+    if (monitorStreamBusy.has(deviceId)) {
+      monitorStreamProgress.set(deviceId, { state: "running", detail: mode === "start" ? "正在启动图传" : "正在停止图传" });
+      monitorRailDeviceId = deviceId;
+      monitorRailKind = "stream";
+      show(`${callSign(deviceId)}：${mode === "start" ? "正在启动图传" : "正在停止图传"}`);
+      try { await render(); } catch { /* the button stays clickable */ }
+      return;
+    }
+    const clickReminder = mode === "start"
+      ? FlightControllerVideoHint.evaluate({
+        hasConnectedOnce: read(connectionOf(device), "flightControllerHasConnectedOnce"),
+        streaming: read(read(connectionOf(device), "live"), "streaming"),
+        fps: read(read(connectionOf(device), "live"), "fps"),
+      }).banner
+      : null;
+    if (clickReminder === null) monitorFlightControllerHints.delete(deviceId);
+    else monitorFlightControllerHints.set(deviceId, clickReminder);
+    const runningDetail = mode === "start" ? "正在启动图传" : "正在停止图传";
+    monitorStreamBusy.add(deviceId);
+    monitorStreamProgress.set(deviceId, { state: "running", detail: runningDetail });
+    monitorRailDeviceId = deviceId;
+    monitorRailKind = "stream";
+    show(`${callSign(deviceId)}：${mode === "start" ? "正在启动图传" : "正在停止图传"}`);
+    try { await render(); } catch { /* the command still runs */ }
+    try {
+      if (mode === "stop") {
+        for (const [index, lane] of monitorPlayers) {
+          if (lane.deviceId === deviceId) releaseMonitorSlot(index);
+        }
+      }
+      const result = await bridge().invoke(mode === "start" ? "stream-start" : "stream-stop", { deviceId });
+      const feedback = captureFeedback(mode === "start" ? "stream-start" : "stream-stop", deviceId, feedbackDeviceEpoch(view, deviceId), result);
+      let latest = device;
+      try {
+        const refreshed = monitorDevices(projectCached())[slot];
+        if (refreshed !== undefined) latest = refreshed;
+      } catch { /* keep the device read at click time */ }
+      const connection = connectionOf(latest);
+      const live = read(connection, "live");
+      const reminder = mode === "start"
+        ? FlightControllerVideoHint.evaluate({
+          hasConnectedOnce: read(connection, "flightControllerHasConnectedOnce"),
+          streaming: read(live, "streaming"),
+          fps: read(live, "fps"),
+        }).banner
+        : null;
+      if (mode === "stop" || reminder === null) monitorFlightControllerHints.delete(deviceId);
+      else monitorFlightControllerHints.set(deviceId, reminder);
+      const done = feedback.outcome === "accepted" || feedback.outcome === "completed";
+      if (mode === "stop") monitorStreamHoldCleared.add(deviceId);
+      if (mode === "start" && !done) monitorStreamHoldCleared.delete(deviceId);
+      monitorStreamProgress.set(deviceId, { state: done ? "done" : "failed", detail: feedback.message });
+      show(`${callSign(deviceId)}：${feedback.message}`);
+    } catch {
+      monitorStreamProgress.set(deviceId, { state: "failed", detail: "暂时无法完成，请稍后重试" });
+      show(`${callSign(deviceId)}：暂时无法完成，请稍后重试`);
+    } finally {
+      monitorStreamBusy.delete(deviceId);
+      try { await render(); } catch { /* the button state is redrawn on the next snapshot */ }
+    }
+  });
+});
+
   document.querySelectorAll("[data-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     const action = (button as HTMLButtonElement).dataset.action ?? "";
@@ -1859,13 +2907,6 @@ el("route-remove").addEventListener("click", async () => {
     if (isArmableAction(action)) {
       if (armDecision.kind === "ignore") return;
       if (armDecision.kind === "confirm") {
-        if (action === "mission-start") {
-          if (pendingMissionStart === null) return;
-          armedCommand = null;
-          clearArmTimer();
-          await confirmMissionStart();
-          return;
-        }
         const dispatch = flightConfirmDispatch(pendingFlightConfirmation, {
           deviceId: view.missionDeviceId,
           uiAction: action,
@@ -1880,14 +2921,6 @@ el("route-remove").addEventListener("click", async () => {
       if (armDecision.kind !== "arm") return;
       if (armedCommand !== null && armedCommand.action !== action) await cancelArmedBackend();
       armedCommand = armDecision.next;
-      if (action === "mission-start") {
-        await requestMissionStartConfirmation(view);
-        if (pendingMissionStart === null) {
-          armedCommand = null;
-          clearArmTimer();
-        } else scheduleArmExpiry();
-        return;
-      }
       await run(action, "flight-request", { deviceId: view.missionDeviceId, action: action.replace("flight-", "") }, view);
       if (!confirmationMatchesClick(pendingFlightConfirmation, { deviceId: view.missionDeviceId, uiAction: action, nowMs: Date.now() })) {
         armedCommand = null;
@@ -1911,6 +2944,7 @@ el("route-remove").addEventListener("click", async () => {
     const names: Record<string, string> = {
       "mission-stage": "mission-stage",
       "mission-upload": "mission-upload",
+      "mission-start": "mission-start",
       "mission-pause": "mission-pause",
       "mission-resume": "mission-resume",
       "mission-stop": "mission-stop",

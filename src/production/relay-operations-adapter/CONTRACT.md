@@ -127,12 +127,12 @@ instance.dispose() -> void
 | 图传开始 | `live-stream.start` | `{ rtmpUrl: string }` |
 | 图传停止 | `live-stream.stop` | `{}` |
 | 起飞/降落/返航 | `flight.takeoff` / `flight.land` / `flight.return-home` | `{ confirm: true }` |
-| 停止自动起飞/停止自动降落 | `flight.stop-takeoff` / `flight.stop-auto-landing` | `{ confirm: true }` |
+| 停止自动起飞/停止自动降落/退出返航 | `flight.stop-takeoff` / `flight.stop-auto-landing` / `flight.stop-go-home` | `{ confirm: true }` |
 | 相机与图传设置 | `device.settings.*` | 由 `relay-device-settings` 契约规定的字段 |
 | 拍照 | `camera.photo.capture` | `{}` |
 | 回传照片 | `camera.photo.fetch` | `{ knownPhotos: [{ fileName, sha256 }] }` |
 
-除表中五条飞控命令外，不得生成其他 `flight.*` 命令。调用方传入无效字段时，适配器在本地返回稳定拒绝且不产生网络效果。
+除表中六条飞控命令外，不得生成其他 `flight.*` 命令。调用方传入无效字段时，适配器在本地返回稳定拒绝且不产生网络效果。
 
 ## 结果与状态语义
 

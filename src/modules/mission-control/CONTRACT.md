@@ -24,6 +24,7 @@ instance.stop(deviceId) -> Promise<DispatchResult>
 instance.get(deviceId) -> MissionDispatchSnapshot
 instance.list() -> readonly MissionDispatchSnapshot[]
 instance.forget(deviceId) -> boolean
+instance.release(deviceId) -> MissionDispatchSnapshot | null
 instance.subscribe(listener) -> unsubscribe
 instance.dispose() -> void
 ```
@@ -31,6 +32,8 @@ instance.dispose() -> void
 `create` 接受兼容 `RouteLibrary`、`RelayLink` 的公开一级接口和 `createMissionId(deviceId, routeId)`。它只创建一个调度器实例，并对上层隐藏全部二级模块。所有返回对象和数组都是复制且冻结的；依赖异常、无在线手机或已释放的实例均不得向调用方抛出原始异常。
 
 ## 3. 组合规则
+
+`release(deviceId)` 委托调度器收回本地任务，并清除该设备的阶段去重水位；它不发送航线停止或飞控命令，也不证明飞机已停止。
 
 航线适配层只能调用 `RouteLibrary.getMissionPayload(routeId)`；中继适配层只能调用 `RelayLink.sendMission`、`RelayLink.sendCommand` 和 `RelayLink.latestTelemetry`。任务阶段、预检、命令发送和每设备状态仅由 `mission-dispatcher` 及其子模块拥有，本模块不得复制另一套状态机。
 

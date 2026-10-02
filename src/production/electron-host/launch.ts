@@ -11,6 +11,7 @@ import { createMediaPorts } from "./media-ports.js";
 import { IncidentJournal, mediaLogger, watchApplication, wrapGateway, wrapPhoneDiagnostics } from "./incident-journal.js";
 import { runtimeDataPaths } from "./runtime-paths.js";
 import { shutdownDesktopHost } from "./shutdown-sequence.js";
+import { forgetRouteFile, importedRouteSha256, invocationFailed, loadRouteFiles, rememberRouteFile, routeSha256 } from "./route-files.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = [here, join(here, ".."), join(here, "..", "..", "..")].find((dir) => existsSync(join(dir, "package.json"))) ?? join(here, "..");
@@ -75,7 +76,7 @@ const lanCards = (): readonly { readonly name: string; readonly enabled: true; r
 async function launch(): Promise<void> {
   delete process.env.NODE_OPTIONS;
   app.setName("Sky Command");
-  const { httpFlvRoot, logPath, photosRoot } = runtimeDataPaths(app.getPath("userData"));
+  const { httpFlvRoot, logPath, photosRoot, routesRoot } = runtimeDataPaths(app.getPath("userData"));
   const launchLog = (message: string): void => log(logPath, message);
   launchLog("launch begin");
   const journal = IncidentJournal.create();
@@ -140,6 +141,10 @@ async function launch(): Promise<void> {
     throw new Error(detail);
   }
   watchApplication(created.value, journal);
+  const workflow = created.value.workflow();
+  for (const saved of loadRouteFiles(routesRoot)) {
+    try { await workflow.importRoute({ fileName: saved.fileName, bytes: saved.bytes }); } catch { /* a damaged copy stays on disk */ }
+  }
   const gateway = wrapGateway(DesktopUiGateway.create({
     application: created.value,
     relayHint: () => lanCards().map((card) => `ws://${card.ipv4}:${relayPort}/relay`),
@@ -168,15 +173,10 @@ async function launch(): Promise<void> {
         window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
           callback({ responseHeaders: { ...details.responseHeaders, "Content-Security-Policy": [csp] } });
         });
-        app.on("second-instance", () => {
-          if (window === null) return;
-          if (window.isMinimized()) window.restore();
-          window.show();
-          window.focus();
-        });
+        primaryWindow = window;
       },
       focus: () => { window?.show(); window?.focus(); },
-      close: () => { window?.close(); window = null; },
+      close: () => { window?.close(); window = null; primaryWindow = null; },
     },
     renderer: {
       load: async (entry: string) => { if (window === null) throw new Error("window"); await window.loadURL(entry); },
@@ -186,7 +186,21 @@ async function launch(): Promise<void> {
   }, { csp: "default-src 'self' file: blob: http://127.0.0.1:* http://localhost:*; script-src 'self' file: blob: 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' file:; img-src 'self' data: blob: file: http://127.0.0.1:* http://localhost:* https://server.arcgisonline.com; connect-src 'self' blob: file: http://127.0.0.1:* http://localhost:* https://server.arcgisonline.com; media-src 'self' blob: http://127.0.0.1:* http://localhost:*; worker-src 'self' blob: file:; object-src 'none'" });
 
   for (const name of Object.keys(DesktopShell.methods)) {
-    ipcMain.handle(name, (_event, input) => shell.invoke(name, input));
+    ipcMain.handle(name, async (_event, input) => {
+      const routeId = input !== null && typeof input === "object" ? (input as { routeId?: unknown }).routeId : undefined;
+      const removedSha = name === "route-remove" ? routeSha256(workflow.snapshot().routes, routeId) : null;
+      const result = await shell.invoke(name, input);
+      if (invocationFailed(result)) return result;
+      if (name === "route-import") {
+        const sha256 = importedRouteSha256(result);
+        const fileName = input !== null && typeof input === "object" ? (input as { fileName?: unknown }).fileName : undefined;
+        const bytes = input !== null && typeof input === "object" ? (input as { bytes?: unknown }).bytes : undefined;
+        if (sha256 !== null) rememberRouteFile(routesRoot, fileName, bytes, sha256);
+      } else if (name === "route-remove") {
+        forgetRouteFile(routesRoot, removedSha);
+      }
+      return result;
+    });
   }
   ipcMain.handle("route-select-file", async () => {
     if (window === null) return { ok: false };
@@ -214,9 +228,19 @@ async function launch(): Promise<void> {
   });
 }
 
+let primaryWindow: BrowserWindow | null = null;
+const focusPrimaryWindow = (): void => {
+  const current = primaryWindow;
+  if (current === null || current.isDestroyed()) return;
+  if (current.isMinimized()) current.restore();
+  current.show();
+  current.focus();
+};
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  app.on("second-instance", focusPrimaryWindow);
   app.whenReady().then(() => launch()).catch((error: unknown) => {
     const { logPath } = runtimeDataPaths(app.getPath("userData"));
     log(logPath, error instanceof Error ? error.stack ?? error.message : String(error));

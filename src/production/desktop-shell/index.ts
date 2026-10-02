@@ -33,6 +33,7 @@ const gatewayMethods = freeze({
   "mission-pause": "mission.pause",
   "mission-resume": "mission.resume",
   "mission-stop": "mission.stop",
+  "mission-release": "mission.release",
   "stream-start": "stream.start",
   "stream-stop": "stream.stop",
   "stream-refresh": "stream.refresh",

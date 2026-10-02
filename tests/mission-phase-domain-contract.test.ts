@@ -64,6 +64,14 @@ describe("mission phase domain contract", () => {
     expect(transition(machine, { type: rejected } as never).phase).toBe(after);
   });
 
+  it("pauses a started route before execution is confirmed and restores starting if that pause is rejected", () => {
+    const machine = MissionPhaseDomain.create();
+    stageAndUpload(machine);
+    transition(machine, { type: "start-requested" });
+    expect(transition(machine, { type: "pause-requested" }).phase).toBe("pausing");
+    expect(transition(machine, { type: "pause-rejected" } as never).phase).toBe("starting");
+  });
+
   it("returns an explicitly rejected upload to staged without inventing a failed mission", () => {
     const machine = MissionPhaseDomain.create();
     transition(machine, { type: "stage-requested", missionId: "mission-1" });

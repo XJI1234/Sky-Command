@@ -102,6 +102,7 @@ const includes = (values: readonly MissionPhase[], value: MissionPhase): boolean
 function create(initial?: MissionPhaseState): MissionPhaseMachine {
   let current = idleState();
   let stoppedFrom: MissionPhase | null = null;
+  let pausedFrom: "starting" | "running" | null = null;
   let startRetry = false;
   try {
     if (validState(initial)) current = makeState(initial.missionId, initial.phase, initial.failureCode);
@@ -116,7 +117,7 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
     const type = parsedType.type;
 
     try {
-      if (type === "reset") { stoppedFrom = null; startRetry = false; current = idleState(); return success(current); }
+      if (type === "reset") { stoppedFrom = null; pausedFrom = null; startRetry = false; current = idleState(); return success(current); }
       if (type === "stage-requested") {
         const missionId = (event as unknown as { missionId?: unknown }).missionId;
         if (!validText(missionId)) return error("INVALID_MISSION_ID", current.phase, "Mission ID is invalid");
@@ -169,16 +170,20 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         current = makeState(current.missionId, "uploaded", null); return success(current);
       }
       if (type === "pause-requested") {
-        if (current.phase !== "running") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        if (current.phase !== "running" && current.phase !== "starting") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        pausedFrom = current.phase;
         current = makeState(current.missionId, "pausing", null); return success(current);
       }
       if (type === "pause-succeeded") {
         if (current.phase !== "pausing") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        pausedFrom = null;
         current = makeState(current.missionId, "paused", null); return success(current);
       }
       if (type === "pause-rejected") {
         if (current.phase !== "pausing") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
-        current = makeState(current.missionId, "running", null); return success(current);
+        const restore = pausedFrom === "starting" ? "starting" : "running";
+        pausedFrom = null;
+        current = makeState(current.missionId, restore, null); return success(current);
       }
       if (type === "resume-requested") {
         if (current.phase !== "paused") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");

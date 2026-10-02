@@ -56,7 +56,7 @@ interface PreflightInput {
 PreflightCheck.evaluateFlightAction(input) -> PreflightResult
 ```
 
-`input.action` 只能是 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff` 或 `stop-auto-landing`。它不读取任务阶段、航线能力、遥控器、飞控、电量、飞行状态、电机或降落确认状态。所有动作都要求当前中继会话存在且 MSDK 明确为 `READY`；这是桌面可以确认命令能送达并安全调用 MSDK 的最小条件。只要该条件满足，就必须把准确的 Action 交给 MSDK；MSDK 拒绝时保留其原始错误，未获得终态时报告结果未确认。本模块绝不自动调用动作。
+`input.action` 只能是 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff`、`stop-auto-landing` 或 `stop-go-home`。它不读取任务阶段、航线能力、遥控器、飞控、电量、飞行状态、电机或降落确认状态。所有动作都要求当前中继会话存在且 MSDK 明确为 `READY`；这是桌面可以确认命令能送达并安全调用 MSDK 的最小条件。只要该条件满足，就必须把准确的 Action 交给 MSDK；MSDK 拒绝时保留其原始错误，未获得终态时报告结果未确认。本模块绝不自动调用动作。
 
 直接飞行动作仍必须由 `flight-control` 创建一次性确认。确认消费前，调度器重新读取原始遥测并再次调用本接口；任一动作的最小可达性不再满足时均不得发送命令。
 

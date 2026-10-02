@@ -51,6 +51,7 @@ export interface DesktopRelayTelemetryPayload {
   /** Compatibility projections for existing control gates. Do not use for device facts. */
   readonly remoteControllerConnected?: boolean;
   readonly flightControllerConnected?: boolean;
+  readonly flightControllerHasConnectedOnce?: boolean;
   readonly connected?: boolean;
   readonly isFlying?: boolean;
   readonly motorsOn?: boolean;
@@ -164,7 +165,7 @@ export interface WhipStreamRelayGateway {
 }
 export interface AdapterFlightRelay extends FlightRelay {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing"; readonly fields: Readonly<{ readonly confirm: true }> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "flight.takeoff" | "flight.land" | "flight.confirm-landing" | "flight.return-home" | "flight.stop-takeoff" | "flight.stop-auto-landing" | "flight.stop-go-home"; readonly fields: Readonly<{ readonly confirm: true }> }>) => Promise<Readonly<{ readonly status: CommandStatus }>>;
 }
 export interface RelaySettingsGateway {
   readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "device.settings.camera.read" | "device.settings.camera.write" | "device.settings.transmission.read" | "device.settings.transmission.write"; readonly fields: Readonly<Record<string, JsonValue>> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly detail: string; readonly result?: JsonValue }>>;
@@ -210,8 +211,8 @@ type UnknownRecord = Record<string, unknown>;
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const text = (value: string): JsonValue => freeze({ kind: "string" as const, value });
 const bool = (value: boolean): JsonValue => freeze({ kind: "boolean" as const, value });
-const object = (fields: Record<string, JsonValue>): Readonly<Record<string, JsonValue>> => freeze({ ...fields });
 const array = (values: readonly JsonValue[]): JsonValue => freeze({ kind: "array" as const, values: freeze([...values]) });
+const object = (fields: Record<string, JsonValue>): Readonly<Record<string, JsonValue>> => freeze({ ...fields });
 const validId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !/[\p{Cc}]/u.test(value);
 const privateIpv4 = (value: unknown): value is string => {
   if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}$/u.test(value)) return false;
@@ -221,8 +222,8 @@ const privateIpv4 = (value: unknown): value is string => {
   return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
 };
 const validMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && value.toLowerCase().endsWith(".kmz") && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value);
-const validExecutingMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !value.includes("..") && !/[\\/\p{Cc}\\/]/u.test(value);
 const validPhotoName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !value.includes("..") && !/[\\/\p{Cc}]/u.test(value) && /\.(?:jpg|jpeg|dng)$/iu.test(value);
+const validExecutingMissionFileName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= 128 && !value.includes("..") && !/[\\/\p{Cc}\\/]/u.test(value);
 const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 const nonNegativeInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const nonNegativeFinite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -413,6 +414,8 @@ function projectDeviceFacts(payload: UnknownRecord, outputPayload: MutableDeskto
     if (flight === "CONNECTED") outputPayload.flightControllerConnected = true;
     else if (flight === "DISCONNECTED") outputPayload.flightControllerConnected = false;
   }
+  const flightControllerHasConnectedOnce = boolean(payload.flightControllerHasConnectedOnce);
+  if (flightControllerHasConnectedOnce !== undefined) outputPayload.flightControllerHasConnectedOnce = flightControllerHasConnectedOnce;
   const aircraft = msdkLinkState(payload.aircraft);
   if (aircraft !== undefined) {
     outputPayload.aircraft = aircraft;
@@ -687,7 +690,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   });
   const flightGateway: AdapterFlightRelay = freeze({
     latestTelemetry: telemetry,
-    sendCommand: async (deviceId, request) => (request.name === "flight.takeoff" || request.name === "flight.land" || request.name === "flight.confirm-landing" || request.name === "flight.return-home" || request.name === "flight.stop-takeoff" || request.name === "flight.stop-auto-landing") && request.fields.confirm === true ? send(deviceId, request.name, { confirm: bool(true) }) : commandFailure()
+    sendCommand: async (deviceId, request) => (request.name === "flight.takeoff" || request.name === "flight.land" || request.name === "flight.confirm-landing" || request.name === "flight.return-home" || request.name === "flight.stop-takeoff" || request.name === "flight.stop-auto-landing" || request.name === "flight.stop-go-home") && request.fields.confirm === true ? send(deviceId, request.name, { confirm: bool(true) }) : commandFailure()
   });
   const photoGateway: PhotoRelayGateway = freeze({
     latestTelemetry: telemetry,

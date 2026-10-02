@@ -282,6 +282,16 @@ function create(dependencies: OperationWorkflowDependencies) {
     assignRoute: (deviceId: string, routeId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId) || !validId(routeId)) return failure("INVALID_INPUT"); if (!online(deviceId)) return failure("DEVICE_OFFLINE"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); if (read(route(routeId), "classification") !== "upload-candidate") return failure("ROUTE_NOT_UPLOADABLE"); assignments.assign(deviceId, routeId); publish(); return success(); },
     clearAssignment: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); assignments.clear(deviceId); publish(); return success(); },
     stage: (deviceId: string) => mission("stage", deviceId), upload: (deviceId: string) => mission("upload", deviceId), start: (deviceId: string) => mission("start", deviceId), pause: (deviceId: string) => mission("pause", deviceId), resume: (deviceId: string) => mission("resume", deviceId), stop: (deviceId: string) => mission("stop", deviceId),
+    releaseMission: (deviceId: string): WorkflowResult => {
+      if (disposed) return failure("DISPOSED");
+      if (!validId(deviceId)) return failure("INVALID_INPUT");
+      try {
+        const released = dependencies.missionControl.release(deviceId);
+        if (released === null) return failure("OPERATION_IN_PROGRESS");
+        publish();
+        return success();
+      } catch { return failure("DEPENDENCY_FAILURE"); }
+    },
     startStream: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
       if (!validId(deviceId) || !online(deviceId)) return actions.startStream(deviceId);
       const decision = readiness(deviceId, "legacy-video");
@@ -341,11 +351,36 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!online(deviceId)) return failure("DEVICE_OFFLINE");
       const control = dependencies.photoControl;
       if (control === undefined) return failure("DEPENDENCY_FAILURE");
-      try {
-        const result = await control.fetch(deviceId);
+      const seen = new Set<string>();
+      let count = 0;
+      let consecutiveFailures = 0;
+      let lastName: string | undefined;
+      for (;;) {
+        let result: unknown;
+        try { result = await control.fetch(deviceId); } catch { return failure("DEPENDENCY_FAILURE"); }
         const code = read(result, "code");
-        return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
-      } catch { return failure("DEPENDENCY_FAILURE"); }
+        if (code === "NOTHING_TO_FETCH") {
+          return count === 0 ? failure("NOTHING_TO_FETCH", result) : success({ code: "SUCCEEDED", count, fileName: lastName ?? null });
+        }
+        if (read(result, "ok") !== true) {
+          consecutiveFailures += 1;
+          if (count === 0 || consecutiveFailures >= 4) {
+            return count === 0 ? failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result) : success({ code: "SUCCEEDED", count, fileName: lastName ?? null });
+          }
+          publish();
+          continue;
+        }
+        consecutiveFailures = 0;
+        const name = read(result, "fileName");
+        if (typeof name !== "string" || seen.has(name)) {
+          return success(count === 0 ? result : { code: "SUCCEEDED", count, fileName: lastName ?? null });
+        }
+        seen.add(name);
+        lastName = name;
+        count += 1;
+        if (count >= 200) return success({ code: "SUCCEEDED", count, fileName: lastName });
+        publish();
+      }
     }),
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
@@ -370,7 +405,7 @@ function create(dependencies: OperationWorkflowDependencies) {
           const action = read(inner, "action");
           if (action === "land" || action === "confirm-landing") landingIntents.set(deviceId, "requested");
           else if (action === "stop-auto-landing") landingIntents.set(deviceId, "stopped");
-          else if (action === "takeoff" || action === "return-home" || action === "stop-takeoff") landingIntents.delete(deviceId);
+          else if (action === "takeoff" || action === "return-home" || action === "stop-takeoff" || action === "stop-go-home") landingIntents.delete(deviceId);
         }
       }
       publish(); return result;

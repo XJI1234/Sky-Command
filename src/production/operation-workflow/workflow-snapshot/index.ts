@@ -154,6 +154,9 @@ const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
     pose: flightFactsAvailable ? pose(payload) : null,
     live: live(payload),
     cameraFrames: cameraFrames(payload),
+    flightControllerHasConnectedOnce: read(payload, "flightControllerHasConnectedOnce") === true
+      ? true
+      : read(payload, "flightControllerHasConnectedOnce") === false ? false : null,
   });
 };
 const control = (payload: unknown) => freeze({

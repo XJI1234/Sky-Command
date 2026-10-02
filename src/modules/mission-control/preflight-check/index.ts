@@ -44,7 +44,7 @@ export interface PreflightPolicy {
   readonly minimumBatteryPercent: number;
 }
 
-export type FlightActionPreflightAction = "takeoff" | "land" | "confirm-landing" | "return-home" | "stop-takeoff" | "stop-auto-landing";
+export type FlightActionPreflightAction = "takeoff" | "land" | "confirm-landing" | "return-home" | "stop-takeoff" | "stop-auto-landing" | "stop-go-home";
 export interface FlightActionPreflightInput {
   readonly relayConnected: boolean;
   readonly payload: {
@@ -112,7 +112,7 @@ const result = (codes: readonly PreflightBlockerCode[]): PreflightResult => {
   const blockers = Object.freeze(codes.map(blocker));
   return blockers.length === 0 ? Object.freeze({ ok: true as const, blockers: Object.freeze([]) as readonly [] }) : Object.freeze({ ok: false as const, blockers });
 };
-const flightActions: readonly FlightActionPreflightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing"];
+const flightActions: readonly FlightActionPreflightAction[] = ["takeoff", "land", "confirm-landing", "return-home", "stop-takeoff", "stop-auto-landing", "stop-go-home"];
 const flightActionOf = (value: unknown): FlightActionPreflightAction | null => {
   try {
     if (!isRecord(value) || typeof value.action !== "string") return null;

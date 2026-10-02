@@ -12,6 +12,7 @@ describe("Electron runtime writable paths", () => {
     expect(paths.httpFlvRoot).not.toContain("app.asar");
     expect(paths.logPath).not.toContain("app.asar");
     expect(paths.photosRoot).not.toContain("app.asar");
+    expect(paths.routesRoot).not.toContain("app.asar");
   });
 
   it("stores original photos next to incident logs instead of Electron's hidden userData", () => {
@@ -20,6 +21,7 @@ describe("Electron runtime writable paths", () => {
     const paths = runtimeDataPaths(userData, localAppData);
 
     expect(paths.photosRoot).toBe(join(localAppData, "Sky Command", "photos"));
+    expect(paths.routesRoot).toBe(join(localAppData, "Sky Command", "routes"));
     expect(paths.photosRoot).not.toContain("Roaming");
     expect(paths.photosRoot).not.toContain("Electron");
   });

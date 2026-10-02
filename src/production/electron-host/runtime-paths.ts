@@ -4,6 +4,7 @@ export interface ElectronRuntimeDataPaths {
   readonly httpFlvRoot: string;
   readonly logPath: string;
   readonly photosRoot: string;
+  readonly routesRoot: string;
 }
 
 /** Runtime outputs are deliberately separate from packaged, read-only app resources. */
@@ -18,5 +19,6 @@ export function runtimeDataPaths(
     httpFlvRoot: join(userDataDirectory, "tmp-http-flv"),
     logPath: join(userDataDirectory, "tmp", "desktop-launch.log"),
     photosRoot: join(localRoot, "photos"),
+    routesRoot: join(localRoot, "routes"),
   });
 }

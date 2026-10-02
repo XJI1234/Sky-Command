@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { OperatorConsole } from "../src/production/operator-console/index.js";
 
-const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8");
+const renderer = () => readFileSync(new URL("../src/production/operator-console/renderer/main.ts", import.meta.url), "utf8").replaceAll("\r\n", "\n");
 const page = () => readFileSync(new URL("../src/production/operator-console/renderer/index.html", import.meta.url), "utf8");
 const operatorConsole = () => readFileSync(new URL("../src/production/operator-console/index.ts", import.meta.url), "utf8");
 
@@ -88,13 +88,13 @@ describe("操作台投影", () => {
     expect(source).toContain("renderFlightConfirmationFallback();");
   });
 
-  it("航线执行确认在刷新失败时保留意图，并复用确认前已读取的快照", () => {
+  it("执行航线点一下即发，不再先武装确认", () => {
     const source = renderer();
 
-    expect(source).toContain("const renderMissionStartConfirmationFallback");
-    expect(source).toContain("renderMissionStartConfirmationFallback();");
-    expect(source).toContain("pendingMissionStart = intent;");
-    expect(source).toContain('await run("mission-start", "mission-start", { deviceId: intent.deviceId }, view);');
+    expect(source).toContain('"mission-start": "mission-start"');
+    expect(source).not.toContain("requestMissionStartConfirmation");
+    expect(source).not.toContain("pendingMissionStart");
+    expect(source).not.toContain("确认执行航线");
   });
 
   it("飞行页危险动作在同一按钮上两下确认，不弹出确认框也不滚动定位", () => {
@@ -112,7 +112,7 @@ describe("操作台投影", () => {
     expect(page()).not.toContain('id="confirm-yes"');
   });
 
-  it("飞行页不得用残留确认发出另一种 MSDK 动作，也不得在意图未建立时武装执行航线", () => {
+  it("飞行页不得用残留确认发出另一种 MSDK 动作", () => {
     const source = renderer();
     const contract = readFileSync(new URL("../src/production/operator-console/CONTRACT.md", import.meta.url), "utf8");
 
@@ -121,12 +121,12 @@ describe("操作台投影", () => {
     expect(source).toContain("adoptPendingConfirmation");
     expect(source).toContain("confirmationMatchesClick");
     expect(source).not.toContain("if (view.confirmation !== null) pendingFlightConfirmation = view.confirmation");
-    expect(source).toContain("await requestMissionStartConfirmation(view);\n        if (pendingMissionStart === null) {\n          armedCommand = null;");
+    expect(source).not.toContain("requestMissionStartConfirmation");
     expect(source).toContain("if (dispatch.kind === \"wait\") return;");
     expect(contract).toContain("只能消费本次点击新建且动作匹配的待确认");
   });
 
-  it.each(["flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing"] as const)("收尾动作 %s 不由页面上的遥控器、飞控或飞行状态推断拦截", (action) => {
+  it.each(["flight-land", "flight-confirm-landing", "flight-return-home", "flight-stop-takeoff", "flight-stop-auto-landing", "flight-stop-go-home"] as const)("收尾动作 %s 不由页面上的遥控器、飞控或飞行状态推断拦截", (action) => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
         control: { sdk: "ready", remoteController: "disconnected", flightController: "unknown" },
@@ -647,7 +647,7 @@ describe("操作台工作区", () => {
     const starting = flight({ mission: { phase: "starting", routeId: "route-1" } });
     expect(OperatorConsole.evaluate("mission-start", starting)).toEqual({ ok: true });
     expect(OperatorConsole.evaluate("mission-stop", starting)).toEqual({ ok: true });
-    expect(OperatorConsole.evaluate("mission-pause", starting)).toEqual({ ok: false, reason: "当前阶段不能暂停" });
+    expect(OperatorConsole.evaluate("mission-pause", starting)).toEqual({ ok: true });
 
     const stopping = flight({ mission: { phase: "stopping", routeId: "route-1" } });
     expect(OperatorConsole.evaluate("mission-stop", stopping)).toEqual({ ok: true });
@@ -763,6 +763,18 @@ describe("操作台工作区", () => {
     expect(commandOnly.playbackReady).toBe(false);
     expect(commandOnly.streamLabel).toBe("手机已接命令，电脑还没收到画面");
     expect(commandOnly.streamCanStop).toBe(true);
+
+    const zeroFps = OperatorConsole.project({
+      snapshot: snapshot([device({
+        stream: { phase: "idle" },
+        video: { phase: "unavailable", selected: false },
+        connection: { ...device().connection, live: { streaming: true, fps: 0 } },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(zeroFps.streamCanStart).toBe(false);
+    expect(zeroFps.streamCanStop).toBe(true);
 
     const ready = OperatorConsole.project({
       snapshot: snapshot([device({ stream: { phase: "streaming" }, video: { phase: "ready", selected: true } })], { selectedVideoDeviceId: "phone-1" }),
@@ -1013,12 +1025,11 @@ describe("航线操作台渲染契约", () => {
     expect(source).toContain("phoneLinkProbeInFlightDeviceId = null;\n    try { await render(); }");
   });
 
-  it("由任务投影禁用不合法按钮，并在执行前重新确认已上传任务身份", () => {
+  it("由任务投影禁用不合法按钮，执行航线点一下即发", () => {
     const source = renderer();
     expect(source).toContain("view.missionActions[action]");
-    expect(source).toContain("pendingMissionStart");
-    expect(source).toContain("confirmMissionStart");
-    expect(source).toContain("intent.missionId");
+    expect(source).toContain('"mission-start": "mission-start"');
+    expect(source).not.toContain("confirmMissionStart");
     expect(page()).toContain('data-action="mission-start"');
     expect(page()).not.toContain('id="mission-confirm-yes"');
   });
@@ -1303,5 +1314,63 @@ describe("航线操作台渲染契约", () => {
     expect(paintSlice).not.toContain('invoke("network-hint")');
     expect(paintSlice).not.toContain('invoke("stream-refresh")');
     expect(paintSlice).not.toContain('invoke("video-playback")');
+  });
+
+  it("图传页在飞控从未连过时固定提示，fps 为 0 时再提示同一句，连过一次后不再提示", () => {
+    const source = renderer();
+    const markup = page();
+    expect(source).toContain("renderFlightControllerVideoHint(view)");
+    expect(source).toContain('paint("flight-fc-banner", view.flightControllerVideoBanner)');
+    expect(source).toContain('paint("flight-fc-repeat", view.flightControllerVideoAfterStart)');
+    expect(markup).toContain('id="flight-fc-banner"');
+    expect(markup).toContain('id="flight-fc-repeat"');
+
+    const banner = OperatorConsole.project({
+      snapshot: snapshot([device({
+        connection: {
+          ...device().connection,
+          flightController: "disconnected",
+          flightControllerHasConnectedOnce: false,
+          live: { streaming: false, fps: null },
+        },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(banner.flightControllerVideoBanner).toContain("摇杆");
+    expect(banner.flightControllerVideoBanner).toContain("再点一次开始");
+    expect(banner.flightControllerVideoAfterStart).toBeNull();
+    expect(OperatorConsole.evaluate("stream-start", banner)).toEqual({ ok: true });
+
+    const zeroFps = OperatorConsole.project({
+      snapshot: snapshot([device({
+        connection: {
+          ...device().connection,
+          flightController: "disconnected",
+          flightControllerHasConnectedOnce: false,
+          live: { streaming: true, fps: 0 },
+        },
+        stream: { phase: "streaming" },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(zeroFps.flightControllerVideoAfterStart).toBe(zeroFps.flightControllerVideoBanner);
+
+    const warmed = OperatorConsole.project({
+      snapshot: snapshot([device({
+        connection: {
+          ...device().connection,
+          flightController: "disconnected",
+          flightControllerHasConnectedOnce: true,
+          live: { streaming: true, fps: 0 },
+        },
+        stream: { phase: "streaming" },
+      })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "flight",
+    });
+    expect(warmed.flightControllerVideoBanner).toBeNull();
+    expect(warmed.flightControllerVideoAfterStart).toBeNull();
   });
 });

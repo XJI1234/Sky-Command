@@ -29,6 +29,7 @@ instance.isBusy(deviceId) -> boolean
 | `return-home` | `flight.return-home` |
 | `stop-takeoff` | `flight.stop-takeoff` |
 | `stop-auto-landing` | `flight.stop-auto-landing` |
+| `stop-go-home` | `flight.stop-go-home` |
 
 所有命令字段固定为冻结的 `{ confirm: true }`；不允许桌面端传入其他飞行参数。
 
@@ -38,7 +39,7 @@ instance.isBusy(deviceId) -> boolean
 
 `FlightCommandResult` 只能是：`SUCCEEDED`、`PREFLIGHT_BLOCKED`、`FLIGHT_ACTION_REJECTED`、`RESULT_UNCONFIRMED`、`FLIGHT_ACTION_INVOCATION_FAILED`、`RELAY_REJECTED`、`DEPENDENCY_FAILURE`、`OPERATION_IN_PROGRESS`、`INVALID_INPUT`。中继只在 `status === "succeeded"` 时表示成功。`status === "timed-out"` 或 `"disconnected"` 表示本机未确认手机端飞行动作的最终结果，必须归为 `RESULT_UNCONFIRMED`；不能推断命令没有执行。只有 `status === "rejected"` 且 `result` 是完整、受协议校验的 `{ domain: "flight", outcome: "ACTION_REJECTED", errorCode, errorDescription }` 时，才归为 `FLIGHT_ACTION_REJECTED` 并保留两个平台错误字段；对应 `RESULT_UNCONFIRMED` 和 `INVOCATION_FAILED` 结构分别映射为 `RESULT_UNCONFIRMED` 与 `FLIGHT_ACTION_INVOCATION_FAILED`。其余合法拒绝保留 `RELAY_REJECTED`，畸形或异常返回为 `DEPENDENCY_FAILURE`，绝不抛出。
 
-手机端已注册六条飞控命令，生产组合必须通过 `relay-operations-adapter` 编码 `{ confirm: true }`，不得直接传递协议 JSON 或生成其他 `flight.*` 命令。
+手机端已注册七条飞控命令，生产组合必须通过 `relay-operations-adapter` 编码 `{ confirm: true }`，不得直接传递协议 JSON 或生成其他 `flight.*` 命令。
 
 ## 4. 并发与依赖
 

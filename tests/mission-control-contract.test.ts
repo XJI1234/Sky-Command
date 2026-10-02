@@ -379,8 +379,10 @@ describe("飞行任务控制模块契约", () => {
     await control.stage("phone-1", "route-1");
     expect((await control.upload("phone-1")).ok).toBe(true);
     expect((await control.start("phone-1")).ok).toBe(true);
-    expect((await control.pause("phone-1")).ok).toBe(false);
-    expect((await control.resume("phone-1")).ok).toBe(false);
+    expect(control.get("phone-1").phase).toBe("starting");
+    expect((await control.pause("phone-1")).ok).toBe(true);
+    expect(control.get("phone-1").phase).toBe("paused");
+    expect((await control.resume("phone-1")).ok).toBe(true);
     expect((await control.stop("phone-1")).ok).toBe(true);
     expect(control.list()).toHaveLength(1);
     expect(control.forget("phone-1")).toBe(true);

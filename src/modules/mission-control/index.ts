@@ -28,6 +28,7 @@ export interface MissionControlInstance {
   readonly get: (deviceId: string) => MissionDispatchSnapshot;
   readonly list: () => readonly MissionDispatchSnapshot[];
   readonly forget: (deviceId: string) => boolean;
+  readonly release: (deviceId: string) => MissionDispatchSnapshot | null;
   readonly subscribe: (listener: (lanes: readonly MissionDispatchSnapshot[]) => void) => () => void;
   readonly dispose: () => void;
 }
@@ -149,6 +150,11 @@ function create(dependencies: MissionControlDependencies, options: MissionContro
     get: dispatcher.get,
     list: dispatcher.list,
     forget: dispatcher.forget,
+    release: (deviceId) => {
+      const released = dispatcher.release(deviceId);
+      if (released !== null) appliedPhases.delete(deviceId);
+      return released;
+    },
     subscribe: dispatcher.subscribe,
     dispose: () => {
       if (disposed) return;

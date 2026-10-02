@@ -11,6 +11,7 @@ import {
   flightConfirmDispatch,
   flightWorkflowAction,
   interpretArmClick,
+  isArmableAction,
   isSameClickFlightConfirm,
   sameClickConfirmDispatch,
 } from "../src/production/operator-console/action-arm/index.js";
@@ -29,7 +30,7 @@ const stopTakeoff = Object.freeze({
 });
 
 describe("飞行页两下确认", () => {
-  it("起飞降落返航和执行航线点一下只武装，连点忽略，过了settle再点才确认", () => {
+  it("起飞降落返航点一下只武装，连点忽略，过了settle再点才确认，执行航线不再武装", () => {
     const armed = interpretArmClick(null, "flight-takeoff", 1_000);
     expect(armed).toEqual({ kind: "arm", next: { action: "flight-takeoff", armedAtMs: 1_000 } });
     expect(interpretArmClick(armed.next, "flight-takeoff", 1_000 + ARM_SETTLE_MS - 1)).toEqual({
@@ -41,8 +42,8 @@ describe("飞行页两下确认", () => {
       next: null,
     });
     expect(buttonLabel("flight-takeoff", armed.next)).toBe("确认起飞");
-    expect(buttonLabel("mission-start", null)).toBe("执行航线");
-    expect(buttonLabel("mission-start", { action: "mission-start", armedAtMs: 1 })).toBe("确认执行航线");
+    expect(isArmableAction("mission-start")).toBe(false);
+    expect(interpretArmClick(null, "mission-start", 1_000)).toEqual({ kind: "disarm", next: null });
   });
 
   it("五秒过期后同一键重新武装，点其他键解除武装", () => {
@@ -62,6 +63,7 @@ describe("飞行页两下确认", () => {
     expect(isSameClickFlightConfirm("flight-confirm-landing")).toBe(true);
     expect(isSameClickFlightConfirm("flight-stop-takeoff")).toBe(true);
     expect(isSameClickFlightConfirm("flight-stop-auto-landing")).toBe(true);
+    expect(isSameClickFlightConfirm("flight-stop-go-home")).toBe(true);
     expect(isSameClickFlightConfirm("flight-takeoff")).toBe(false);
     expect(isSameClickFlightConfirm("mission-stop")).toBe(false);
   });

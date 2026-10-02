@@ -194,6 +194,23 @@ describe("RelayOperationsAdapter", () => {
     });
   });
 
+  it("一对一保留进程内飞控曾经连过的布尔事实", () => {
+    const fixture = relayFixture();
+    const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
+    fixture.replaceTelemetry(
+      object({
+        flightController: text("DISCONNECTED"),
+        flightControllerHasConnectedOnce: bool(true),
+      }),
+      object({}),
+    );
+    expect(adapter.telemetry("relay-1")?.payload).toEqual({
+      flightController: "DISCONNECTED",
+      flightControllerConnected: false,
+      flightControllerHasConnectedOnce: true,
+    });
+  });
+
   it("逐项保留 DJI 飞控与飞控辅助 Key 的原始事实", () => {
     const fixture = relayFixture();
     const adapter = RelayOperationsAdapter.create({ relay: fixture.relay });
@@ -1085,12 +1102,13 @@ describe("RelayOperationsAdapter", () => {
     await adapter.flightGateway().sendCommand("relay-1", { name: "flight.return-home", fields: { confirm: true } });
     await adapter.flightGateway().sendCommand("relay-1", { name: "flight.stop-takeoff", fields: { confirm: true } });
     await adapter.flightGateway().sendCommand("relay-1", { name: "flight.stop-auto-landing", fields: { confirm: true } });
+    await adapter.flightGateway().sendCommand("relay-1", { name: "flight.stop-go-home", fields: { confirm: true } });
     expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.start", fields: {} })).status).toBe("rejected");
     await adapter.settingsGateway().sendCommand("relay-1", { name: "device.settings.camera.write", fields: { autoExposureLockEnabled: bool(true) } });
     await adapter.settingsGateway().sendCommand("relay-1", { name: "device.settings.transmission.write", fields: { bandwidth: text("BANDWIDTH_10MHZ") } });
 
     expect(fixture.sent.map((entry) => (entry as { request: { name: string } }).request.name)).toEqual([
-      "wayline.pause", "wayline.resume", "wayline.stop", "flight.takeoff", "flight.land", "flight.confirm-landing", "flight.return-home", "flight.stop-takeoff", "flight.stop-auto-landing", "device.settings.camera.write", "device.settings.transmission.write",
+      "wayline.pause", "wayline.resume", "wayline.stop", "flight.takeoff", "flight.land", "flight.confirm-landing", "flight.return-home", "flight.stop-takeoff", "flight.stop-auto-landing", "flight.stop-go-home", "device.settings.camera.write", "device.settings.transmission.write",
     ]);
     adapter.dispose();
     expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.start", fields: {} })).status).toBe("rejected");

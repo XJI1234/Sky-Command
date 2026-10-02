@@ -1,12 +1,13 @@
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 
-export const ARMABLE_ACTIONS = Object.freeze(["flight-takeoff", "flight-land", "flight-return-home", "mission-start"] as const);
+export const ARMABLE_ACTIONS = Object.freeze(["flight-takeoff", "flight-land", "flight-return-home"] as const);
 export type ArmableAction = (typeof ARMABLE_ACTIONS)[number];
 
 export const SAME_CLICK_FLIGHT_CONFIRM = Object.freeze([
   "flight-confirm-landing",
   "flight-stop-takeoff",
   "flight-stop-auto-landing",
+  "flight-stop-go-home",
 ] as const);
 
 export const ARM_SETTLE_MS = 300;
@@ -16,14 +17,12 @@ export const IDLE_LABELS: Readonly<Record<ArmableAction, string>> = Object.freez
   "flight-takeoff": "起飞",
   "flight-land": "降落",
   "flight-return-home": "返航",
-  "mission-start": "执行航线",
 });
 
 export const ARMED_LABELS: Readonly<Record<ArmableAction, string>> = Object.freeze({
   "flight-takeoff": "确认起飞",
   "flight-land": "确认降落",
   "flight-return-home": "确认返航",
-  "mission-start": "确认执行航线",
 });
 
 export type PendingFlightConfirmation = Readonly<{
