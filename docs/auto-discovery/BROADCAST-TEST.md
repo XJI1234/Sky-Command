@@ -32,11 +32,11 @@ ADB 自带的 am broadcast 是 Android 进程内的 Intent 广播，不是 UDP �
 
 ## 电脑侧测试发送示例
 
-接收器准备好后，在普通 PowerShell 运行。首先核对网卡；以下两个默认地址是 2026-10-12 本机值，网络变化时必须更新。测试单播时，将 destination 改为手机的当前 IPv4。
+接收器准备好后，在普通 PowerShell 运行。先核对网卡，再按提示填写当前地址；定向广播地址由当前 IPv4 和子网掩码计算。测试单播时，目标填写手机当前 IPv4。
 
 ```powershell
-$wlanIp = '10.208.168.217'
-$destination = '10.208.191.255'
+$wlanIp = Read-Host '电脑当前 WLAN IPv4'
+$destination = Read-Host '目标 IPv4（手机单播 / 当前子网广播 / 255.255.255.255）'
 $probePort = 39081
 $testId = [guid]::NewGuid().ToString()
 $localEndpoint = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Parse($wlanIp), 0)

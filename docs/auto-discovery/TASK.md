@@ -47,5 +47,6 @@
 - [当前最小方案与待决策项](DESIGN.md)
 - [已完成、待完成和验证证据](PROGRESS.md)
 - [校园 Wi-Fi 广播测试方法](BROADCAST-TEST.md)
+- [GitHub 交付与排除范围](GITHUB-DELIVERY.md)
 - 手机端仓库索引：同级 MSDK-Relay 的 `docs/auto-discovery/README.md`。
 - 本机独立启动：工作区父目录 `START-HERE.md`；通用启动步骤见本仓库 `docs/LOCAL_DEVELOPMENT.md`。
