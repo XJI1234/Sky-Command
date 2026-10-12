@@ -1,6 +1,6 @@
 # 如何验证当前校园 Wi-Fi 的广播可行性
 
-状态：测试方法已记录；手机当前未连接 ADB，UDP 接收探针尚未准备，实际测试未执行。
+状态：2026-10-13 已连接无线 ADB，并构建、安装独立 Android 前台接收探针；当前校园位置完成 UDP 对照及 WebSocket 握手。结果及未覆盖范围见 NETWORK-RESULTS.md。生产自动发现仍未实现。
 
 ## 测试要回答的问题
 
@@ -14,7 +14,7 @@
 
 - 电脑和手机保持当前校园 Wi-Fi，记录手机 IPv4；相同网络名称不保证相同 AP、VLAN 或允许广播。
 - 用本机网卡 IPv4 和子网掩码计算定向广播地址。不能默认把最后一个字节改为 255。
-- 在 Android 上准备临时测试接收器：申请 INTERNET 权限，监听 UDP 39081，记录来源 IP、测试标识、序号和接收时间。先前台测试，不连接 DJI、不发送飞行命令。39081 仅为本测试选定的临时端口，生产端口尚未决定。
+- 在 Android 上使用 MSDK-Relay 的 `tools/network-probe` 独立测试 App（构建安装见其 README）：申请 INTERNET 权限，监听 UDP 39081，记录来源 IP、测试标识、序号和接收时间。先前台测试，不连接 DJI、不发送飞行命令。39081 仅为本测试选定的临时端口，生产端口尚未决定。
 - 发送器绑定实际 WLAN IPv4。只向手机单播、当前 WLAN 定向广播及必要的有限广播发送小测试包，不枚举或扫描校园所有设备。
 - 电脑防火墙如有拦截，记录当前网络类别和应用/端口的实际拦截信息；不以关闭整个防火墙作为测试步骤。
 
@@ -27,12 +27,20 @@ ADB 自带的 am broadcast 是 Android 进程内的 Intent 广播，不是 UDP �
 3. 使用同样接收器，向电脑 WLAN 定向广播地址发送另一组 20 个包。
 4. 如定向广播未收到，再单独测试 255.255.255.255；为各组使用不同测试标识，避免混淆。
 5. 重复至少三轮。覆盖手机/电脑重连 Wi-Fi；实际部署若会跨 AP，追加不同 AP 下的验证。
-6. 打开 Sky Command，手机直接访问其实际 IPv4 的 8080/relay，记录 WebSocket 开启和合法 hello/paired。测试连接完成后关闭该测试会话，不下发业务命令。
+6. 打开 Sky Command，手机直接访问其实际 IPv4 的 8080/relay，记录 WebSocket 开启和合法 hello/paired。现有协议使用二进制帧承载 UTF-8 JSON；探针需发送二进制 hello 并接收二进制 paired，不能使用文本帧代替。测试连接完成后关闭该测试会话，不下发业务命令。
 7. 网络可行后，另行测试 Android 后台和锁屏；前台能收到包不代表锁屏也可靠。
 
 ## 电脑侧测试发送示例
 
 接收器准备好后，在普通 PowerShell 运行。先核对网卡，再按提示填写当前地址；定向广播地址由当前 IPv4 和子网掩码计算。测试单播时，目标填写手机当前 IPv4。
+
+可在 Sky-Command 根目录运行已保存的发送脚本，参数中的地址使用本机当前值；每组默认 20 包、间隔 1 秒，输出 testId 和发送数量。mode 用于记录目标类型，不自动选择网卡或计算广播地址。
+
+```powershell
+./scripts/send-network-probe.ps1 -LocalIPv4 '<电脑WLAN_IP>' -DestinationIPv4 '<手机IP>' -Mode unicast
+./scripts/send-network-probe.ps1 -LocalIPv4 '<电脑WLAN_IP>' -DestinationIPv4 '<当前子网广播地址>' -Mode directed-broadcast
+./scripts/send-network-probe.ps1 -LocalIPv4 '<电脑WLAN_IP>' -DestinationIPv4 '255.255.255.255' -Mode limited-broadcast
+```
 
 ```powershell
 $wlanIp = Read-Host '电脑当前 WLAN IPv4'
