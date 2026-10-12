@@ -179,7 +179,15 @@ async function launch(): Promise<void> {
       close: () => { window?.close(); window = null; primaryWindow = null; },
     },
     renderer: {
-      load: async (entry: string) => { if (window === null) throw new Error("window"); await window.loadURL(entry); },
+      load: async (entry: string) => {
+        if (window === null) throw new Error("window");
+        try {
+          await window.loadURL(entry);
+        } catch (error) {
+          launchLog(`renderer load failed: ${error instanceof Error ? error.message : String(error)}`);
+          throw error;
+        }
+      },
       clearCache: async () => { await window?.webContents.session.clearCache(); },
     },
     paths: { userData: app.getPath("userData"), appRoot: projectRoot, rendererEntry, packaged: app.isPackaged },

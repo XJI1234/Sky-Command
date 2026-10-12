@@ -26,6 +26,8 @@ Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡�
 
 ## 旧 RTMP 图传
 
+RTMP 客户端在发送 connect 命令前关闭 TCP 连接时，宿主必须为 NMS 2.6.6 的清理提供空连接元数据，继续释放原会话和 socket；不得因此抛出未捕获异常或退出桌面程序。
+
 旧图传由 `node-media-server` 收手机 RTMP（`19500`，`gop_cache: true`），HTTP 口（`18080`）用官方 `NodeFlvSession` **直连发布会话播放器槽位**输出 HTTP-FLV：`http://127.0.0.1:18080/live/{deviceId}.flv`。禁止再对本机 `19500` 做 RTMP 回环拉流。写出路径只过滤无图像的 SEI-only AVC 包，不得因 TCP 背压丢弃普通视频帧；无法按 AVC NAL 切开的大包必须仍送给播放器。同一 `deviceId` 新附着须停止旧 `NodeFlvSession`。不得再切 HLS，也不得默认拉起 `ffplay`。FULL_HD 若为 HEVC（FLV codec 12），写出给页面之前须用本机 `ffmpeg`/`libx264` 转成 H.264 HTTP-FLV：Electron Chromium 的 MSE 会对 `hvc1` 报支持却不出画。操作台飞行页用 `mpegts.js` 播转码后的 HTTP-FLV（`isLive`、关闭 stash buffer，并在附着期间用播放时钟追直播前沿）到本页 `<video>`。不得再用只认 H.264 且不转码的 `flv.js`。及时性优先于把积压播完，但不得用高频 seek 打断解码：`timeupdate` 时仅当落后缓冲末端超过约 1.5s 才跳到末端附近，跳转中及随后约 2s 冷却期内不得再 seek。MSE 已播过的旧缓冲保留约 3s。卡死看门狗独立、放慢；首次出画宽限约 25s，避免 1080p GOP 未到就拆掉唯一 HTTP-FLV 会话。GOP 关键帧送出前不得因 TCP 背压跳帧。
 
 HTTP-FLV 输出必须在**单个播放器连接**的 `ServerResponse.writableLength` 到达 `2 MiB` 时停止该 `NodeFlvSession` 并销毁该播放器 socket，释放已积压的媒体字节；这不是按帧降级或丢弃 P 帧。正常可排空的短暂 TCP 背压不改变视频内容。达到上限只终止那个 `deviceId` 的本地播放器会话，现有渲染器恢复机制负责重挂 HTTP-FLV；它不得停止 RTMP 发布者、共享服务、其他设备或手机端 DJI 推流。
