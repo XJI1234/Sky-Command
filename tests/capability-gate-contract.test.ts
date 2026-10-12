@@ -17,9 +17,18 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
   });
 
-  it("配对只在遥控器已明确连接且飞控已明确断开时允许", () => {
+  it("旧输入缺失飞控事实或遥控器未连接时不允许配对", () => {
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: undefined })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN" } });
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteControllerConnected: false, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
+  });
+
+  it("飞控原始 Key 未回报连接时允许遥控器对频，并保留其它门禁", () => {
+    const input = { operation: "pairing", relayConnected: true, sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "UNKNOWN" };
+    expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: "pairing", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ ...input, flightController: "CONNECTED" })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
+    expect(CapabilityGate.evaluate({ ...input, remoteController: "UNKNOWN" })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
+    expect(CapabilityGate.evaluate({ ...input, sdkAvailability: "STARTING" })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "SDK_NOT_READY" } });
+    expect(CapabilityGate.evaluate({ ...input, relayConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "RELAY_OFFLINE" } });
   });
 
   it("直接飞行只判断 MSDK 可达，不把遥控器显示状态当作本地硬拦截", () => {

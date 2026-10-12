@@ -121,7 +121,7 @@ instance.dispose() -> void
 | 桌面动作 | 线协议命令 | 唯一允许字段 |
 | --- | --- | --- |
 | 配对查询 | `pairing.status` | `{}` |
-| 配对开始/停止 | 不下发 | 桌面适配器本地拒绝；对频只在手机上操作 |
+| 对频开始/停止 | `pairing.start` / `pairing.stop` | `{}`；手机端再次校验后调用 DJI |
 | 一次性遥测刷新 | `telemetry.read` | `{}` |
 | 航线上传/启动/暂停/继续/停止 | `wayline.*` | `{ confirm: true }` |
 | 图传开始 | `live-stream.start` | `{ rtmpUrl: string }` |

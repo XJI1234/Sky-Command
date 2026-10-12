@@ -23,6 +23,8 @@ instance.cancelConnection(connectionId, reason) -> void
 
 分块原始上限 256 KiB，文件上限 100 MiB，文件名规则与双方 `protocol-core` 的媒体基名一致。协议层已校验的帧本模块不再重复 JSON 解析。`MediaSink` 拒绝细节不得发回手机。成功 `media-result.ok=true` 的 `detail` 只含固定短句；结构化身份由桌面收件箱持有，不回显路径。
 
+SHA-256 在每个分块到达时增量更新，complete 不得重新对整张原图同步计算摘要。累计数据超过声明大小立即拒绝。MediaSink.complete 允许返回 Promise；保存完成前不回复成功，也不阻塞其它协议帧。等待异步保存时重复 complete 忽略；断线或替换后迟到的保存结果不得发送旧媒体回执。保存拒绝、异常或 Promise 拒绝均回复失败。
+
 断线必须 abort sink、不发成功结果。入站媒体分块是业务帧：超过 `relay-server` 等待上限时按普通溢出关闭会话，不得像 `diagnostic-report` 那样丢帧保活。
 
 结果状态为 `succeeded`、`rejected`、`disconnected`、`transfer-failed`。快照、帧、字节均冻结或复制。测试覆盖完整往返、边界分块、摘要失败、替换、断线和恶意文件名。

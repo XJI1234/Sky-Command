@@ -76,6 +76,8 @@ WebSocket 中继口取自 `network.relayPort`，RTMP 收流口取自 `network.li
 
 ## 6. 错误语义
 
+照片原子保存使用异步目录创建、写入与重命名；只有保存完成且收件箱登记成功才确认媒体交付。异步写入等待不得阻塞 RTMP、遥测和其它命令。同名重复交付必须核对已保存名称和摘要一致，不得确认与磁盘不一致的数据。回传前的照片目录读取、状态读取和摘要计算必须避免整张文件同步读取。
+
 允许的装配错误码：`INVALID_CONFIGURATION`、`ALREADY_RUNNING`、`NOT_RUNNING`、`OPERATION_IN_PROGRESS`、`DISPOSED`、`RELAY_START_FAILED`、`MEDIA_START_FAILED`、`MEDIA_STOP_FAILED`、`RELAY_STOP_FAILED`、`DEPENDENCY_FAILURE`。
 
 错误只表达可恢复的领域事实，绝不泄露内部异常文本或敏感运行时细节。

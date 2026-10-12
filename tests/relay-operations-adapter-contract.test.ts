@@ -472,7 +472,7 @@ describe("RelayOperationsAdapter", () => {
     });
   });
 
-  it("pairing.status 失败时不附带结构化 result，且桌面不得下发 pairing.start/stop", async () => {
+  it("对频命令只发送空字段，且仅查询成功时附带结构化 result", async () => {
     const result = object({ pairingState: text("PAIRED") });
     const sent: string[] = [];
     const adapter = RelayOperationsAdapter.create({ relay: {
@@ -492,14 +492,14 @@ describe("RelayOperationsAdapter", () => {
       detail: "rejected"
     });
     await expect(adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.start", fields: {} })).resolves.toEqual({
-      status: "rejected",
-      detail: "请到手机上开始或停止对频。"
+      status: "accepted",
+      detail: "succeeded"
     });
     await expect(adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.stop", fields: {} })).resolves.toEqual({
-      status: "rejected",
-      detail: "请到手机上开始或停止对频。"
+      status: "accepted",
+      detail: "succeeded"
     });
-    expect(sent).toEqual(["pairing.status"]);
+    expect(sent).toEqual(["pairing.status", "pairing.start", "pairing.stop"]);
   });
 
   it("通过 telemetry.read 请求一次遥测刷新，成功不代表链路已就绪", async () => {
@@ -1053,7 +1053,7 @@ describe("RelayOperationsAdapter", () => {
     });
     expect((await adapter.missionGateway().sendCommand("relay-1", { name: "wayline.upload", fields: { confirm: true } })).status).toBe("timed-out");
     expect((await adapter.streamGateway().sendCommand("relay-1", { name: "live-stream.stop", fields: {} })).status).toBe("disconnected");
-    expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.stop", fields: {} })).status).toBe("rejected");
+    expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.stop", fields: {} })).status).toBe("timeout");
     expect((await adapter.flightGateway().sendCommand("relay-1", { name: "flight.land", fields: { confirm: true } })).status).toBe("transport-failed");
     expect(await adapter.settingsGateway().sendCommand("relay-1", { name: "device.settings.camera.read", fields: {} })).toMatchObject({ status: "rejected", detail: "denied" });
     expect((await adapter.missionGateway().sendMission("relay-1", { missionId: "mission-1", fileName: "survey.kmz", size: 1, sha256: "a".repeat(64), bytes: new Uint8Array([1]) })).status).toBe("transport-failed");
@@ -1064,7 +1064,7 @@ describe("RelayOperationsAdapter", () => {
     publish?.({ missionPhases: "invalid" });
     expect(received).toHaveLength(1);
     adapter.dispose();
-    expect(sent).toEqual(["wayline.upload", "live-stream.stop", "flight.land", "device.settings.camera.read"]);
+    expect(sent).toEqual(["wayline.upload", "live-stream.stop", "pairing.stop", "flight.land", "device.settings.camera.read"]);
   });
 
   it("在中继端口缺失、抛出或返回畸形快照时保持本地故障隔离", async () => {
@@ -1103,12 +1103,12 @@ describe("RelayOperationsAdapter", () => {
     await adapter.flightGateway().sendCommand("relay-1", { name: "flight.stop-takeoff", fields: { confirm: true } });
     await adapter.flightGateway().sendCommand("relay-1", { name: "flight.stop-auto-landing", fields: { confirm: true } });
     await adapter.flightGateway().sendCommand("relay-1", { name: "flight.stop-go-home", fields: { confirm: true } });
-    expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.start", fields: {} })).status).toBe("rejected");
+    expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.start", fields: {} })).status).toBe("accepted");
     await adapter.settingsGateway().sendCommand("relay-1", { name: "device.settings.camera.write", fields: { autoExposureLockEnabled: bool(true) } });
     await adapter.settingsGateway().sendCommand("relay-1", { name: "device.settings.transmission.write", fields: { bandwidth: text("BANDWIDTH_10MHZ") } });
 
     expect(fixture.sent.map((entry) => (entry as { request: { name: string } }).request.name)).toEqual([
-      "wayline.pause", "wayline.resume", "wayline.stop", "flight.takeoff", "flight.land", "flight.confirm-landing", "flight.return-home", "flight.stop-takeoff", "flight.stop-auto-landing", "flight.stop-go-home", "device.settings.camera.write", "device.settings.transmission.write",
+      "wayline.pause", "wayline.resume", "wayline.stop", "flight.takeoff", "flight.land", "flight.confirm-landing", "flight.return-home", "flight.stop-takeoff", "flight.stop-auto-landing", "flight.stop-go-home", "pairing.start", "device.settings.camera.write", "device.settings.transmission.write",
     ]);
     adapter.dispose();
     expect((await adapter.pairingGateway().sendCommand("relay-1", { name: "pairing.start", fields: {} })).status).toBe("rejected");
@@ -1324,7 +1324,7 @@ describe("RelayOperationsAdapter", () => {
     expect((await adapter.photoGateway().sendCommand("relay-1", { name: "camera.photo.fetch", fields: { extra: true } as never })).status).toBe("rejected");
     expect(fixture.sent).toEqual([
       { deviceId: "relay-1", request: { name: "camera.photo.capture", fields: {} } },
-      { deviceId: "relay-1", request: { name: "camera.photo.fetch", fields: { knownPhotos: { kind: "array", values: [] } } } },
+      { deviceId: "relay-1", request: { name: "camera.photo.fetch", fields: { knownPhotos: { kind: "array", values: [] } }, timeoutMs: 60 * 60 * 1000 } },
     ]);
   });
 });

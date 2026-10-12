@@ -40,7 +40,7 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
 ## 判定规则
 
 - 所有操作都先要求手机 Relay 在线和 `sdkAvailability === "READY"`。MSDK 原始状态缺失时，兼容输入 `sdkRegistered === true` 才可使用；其它缺失、未知或非就绪状态一律拒绝。
-- `pairing` 是连接新飞机或更换遥控器时的低频维护操作，不是日常图传、航线或直接飞行的前置条件。它额外要求遥控器明确连接和飞控明确断开；飞控已连接时为 `PAIRING_NOT_NEEDED`，未知时为 `FLIGHT_CONTROLLER_CONNECTION_UNKNOWN`。
+- `pairing` 是连接新飞机或更换遥控器时的低频维护操作，不是日常图传、航线或直接飞行的前置条件。它额外要求遥控器明确连接，飞控原始 Key 为 `DISCONNECTED` 或 `UNKNOWN` 时都允许开始，与手机端一致：没有飞机时该 Key 经常保持未知。未知不会被改写为断开；最终调用由手机端 MSDK 裁决。飞控已连接时为 `PAIRING_NOT_NEEDED`；原始字段和旧兼容布尔事实均缺失时为 `FLIGHT_CONTROLLER_CONNECTION_UNKNOWN`。
 - `live-stream` 除 Relay 与 MSDK 可达外，还必须要求 `AirLinkKey.KeyConnection` 和 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 都为 `CONNECTED`。这不是对 DJI 飞行安全规则的重复预测，而是生产 RTMP 图传源是否存在的必要事实：真机已证实，源已断开时 DJI `startStream` 仍可能成功且 `LiveStreamStatus.isStreaming=true`，但电脑端没有有效画面。两个 Key 的 `DISCONNECTED` 和 `UNKNOWN` 都必须阻止新的开始请求，并保留精确的来源原因；飞控、遥控器、产品、电量、航线与对频仍不得参与图传启动门禁。允许提交后，DJI `startStream` 回调、`LiveStreamStatus.isStreaming`、RTMP 有效视频和桌面播放器仍分别确认后续阶段。
 - `transmission-settings` 与 `camera-settings` 只要求 Relay 与 MSDK 可达。它们各自通过 AirLink 或 Camera Key 读写；设置是否支持、是否可写和 DJI 错误必须由手机端 MSDK 回调如实返回。
 - 保留的 `direct-flight` 与 `waypoint-mission` 也只判断 Relay 与 MSDK 可达。生产直接飞行实际由 `flight-control` 重检，航线实际由 `mission-dispatcher` 的任务阶段机与 `PreflightCheck` 重检；两者均不得以显示遥测或能力快照替 DJI 最终裁决。

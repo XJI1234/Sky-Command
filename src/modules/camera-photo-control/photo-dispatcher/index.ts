@@ -94,7 +94,7 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly kn
   };
   const hasMatchingDelivery = (session: PhotoDispatchSession): boolean => {
     const { delivered, received } = session;
-    return delivered !== undefined && received.get(delivered.fileName) === delivered.sha256;
+    return delivered !== undefined && received.size >= delivered.count && received.get(delivered.fileName) === delivered.sha256;
   };
   const publish = (session: PhotoDispatchSession, snapshot: PhotoDispatchSnapshot): void => {
     session.snapshot = snapshot;
@@ -127,8 +127,8 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly kn
     if (dependencies.knownPhotos === undefined) return freeze([]);
     try {
       const entries = dependencies.knownPhotos(deviceId);
-      if (!Array.isArray(entries) || entries.length > 256) return freeze([]);
-      return freeze(entries.flatMap((entry) => validManifest(entry) ? [freeze({ fileName: entry.fileName, sha256: entry.sha256 })] : []));
+      if (!Array.isArray(entries)) return freeze([]);
+      return freeze(entries.slice(0, 256).flatMap((entry) => validManifest(entry) ? [freeze({ fileName: entry.fileName, sha256: entry.sha256 })] : []));
     } catch { return freeze([]); }
   };
   const dispatch = async (deviceId: string, name: "camera.photo.capture" | "camera.photo.fetch"): Promise<PhotoDispatchResult> => {
@@ -209,12 +209,10 @@ function create(dependencies: Readonly<{ readonly relay: PhotoRelay; readonly kn
       if (session === undefined) return null;
       const waiting = session.snapshot?.phase === "fetching" || session.storedWaiter !== undefined;
       if (!waiting) return session.snapshot ?? null;
-      const expected = session.delivered?.fileName;
-      if (expected !== undefined && expected !== fileName) return session.snapshot ?? null;
       session.received.set(fileName, sha256);
       if (!hasMatchingDelivery(session)) return session.snapshot ?? null;
       const count = session.delivered?.count ?? 1;
-      const result = finish(deviceId, session, true, "SUCCEEDED", fileName, { count });
+      const result = finish(deviceId, session, true, "SUCCEEDED", session.delivered!.fileName, { count });
       if (session.storedWaiter !== undefined) release(session, result);
       return session.snapshot ?? freeze({ deviceId, phase: "stored" as const, fileName, code: "SUCCEEDED" as const });
     },

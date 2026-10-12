@@ -1,4 +1,4 @@
-import type { DeviceSettingsPanelInstance } from "../../modules/device-console/index.js";
+import type { DeviceSettingsPanelInstance, PairingControllerInstance } from "../../modules/device-console/index.js";
 import type { FlightControlInstance } from "../../modules/flight-control/index.js";
 import type { LiveStreamControlInstance } from "../../modules/live-stream-control/index.js";
 import type { MediaPipelineInstance } from "../../modules/media-pipeline/index.js";
@@ -43,6 +43,7 @@ export interface HardwareReadinessPort {
 
 export interface OperationWorkflowDependencies {
   readonly relayOperations: RelayOperationsPort;
+  readonly pairingControl?: PairingControllerInstance;
   readonly routeLibrary: RouteLibraryPort;
   readonly missionControl: MissionControlPort;
   readonly liveStreamControl: LiveStreamControlPort;

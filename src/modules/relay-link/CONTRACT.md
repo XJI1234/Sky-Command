@@ -51,6 +51,8 @@ instance.subscribe(listener) -> unsubscribe
 
 ## 边界、兼容和验证
 
+`onPhoto(deviceId, file)` 可返回 `boolean | Promise<boolean>`。媒体接收模块只在实际保存确认后发送 `media-result`；Promise 等待不得阻塞遥测、命令或连接关闭。断线、媒体替换后的迟到保存结果不得确认旧传输。
+
 `stop` 幂等，先关闭服务连接以走正常取消/移除路径，再发布最终停止快照；绑定失败后可重新启动且不虚构设备或待处理项。根模块只可导入七个子接口与语言标准库，不得导入 WebSocket、Electron、Node 网络/文件系统、Android、DJI、航线库或 UI；它不解析、序列化、记录或存储原始帧。
 
 协议与 `MSDK-relay/relay-gateway/protocol-core` 线兼容，版本为 `"1"`。不可信网络字节不得穿过公共接口抛异常；帧解析前先限长，严格 UTF-8，拒绝重复键、尾随 JSON、控制字符、路径穿越、不安全 Base64、过度嵌套和资源耗尽；错误不回显载荷或密钥，所有外部对象/字节均复制或冻结。

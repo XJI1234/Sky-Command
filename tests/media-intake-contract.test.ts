@@ -7,6 +7,43 @@ const hex = (bytes: Uint8Array): string => Array.from(bytes, (value) => value.to
 const digest = (bytes: Uint8Array): string => hex(sha256(bytes));
 
 describe("media-intake", () => {
+  it("异步保存期间不回复成功，拒绝时只回复失败", async () => {
+    for (const stored of ["accepted", "rejected"] as const) {
+      let resolve: (value: typeof stored) => void = () => undefined;
+      const results: RelayFrame[] = [];
+      const bytes = new Uint8Array([1, 2, 3]);
+      const intake = MediaIntake.create({ sink: {
+        begin: () => "accepted", append: () => "accepted", abort: () => undefined,
+        complete: () => new Promise<typeof stored>((done) => { resolve = done; }),
+      }, results: { send: (_id, frame) => { results.push(frame); } } });
+      intake.accept("conn", { type: "media-begin", id: "photo", fileName: "DJI_1.jpg", size: bytes.length, sha256: digest(bytes) });
+      intake.accept("conn", { type: "media-chunk", id: "photo", data: bytes });
+      intake.accept("conn", { type: "media-complete", id: "photo" });
+      expect(results).toEqual([]);
+      resolve(stored); await Promise.resolve();
+      expect(results).toEqual([{ type: "media-result", id: "photo", ok: stored === "accepted", detail: stored === "accepted" ? "Photo stored" : "TRANSFER_FAILED" }]);
+    }
+  });
+
+  it("保存中断线不发送迟到成功，超出声明大小立即拒绝", async () => {
+    let resolve: (value: "accepted") => void = () => undefined;
+    const results: RelayFrame[] = [];
+    const bytes = new Uint8Array([1, 2, 3]);
+    const intake = MediaIntake.create({ sink: {
+      begin: () => "accepted", append: () => "accepted", abort: () => undefined,
+      complete: () => new Promise<"accepted">((done) => { resolve = done; }),
+    }, results: { send: (_id, frame) => { results.push(frame); } } });
+    intake.accept("conn", { type: "media-begin", id: "photo", fileName: "DJI_1.jpg", size: bytes.length, sha256: digest(bytes) });
+    intake.accept("conn", { type: "media-chunk", id: "photo", data: bytes });
+    intake.accept("conn", { type: "media-complete", id: "photo" });
+    intake.cancelConnection("conn", "disconnected");
+    resolve("accepted"); await Promise.resolve();
+    expect(results).toEqual([]);
+    intake.accept("conn2", { type: "media-begin", id: "overflow", fileName: "DJI_2.jpg", size: 1, sha256: digest(bytes) });
+    intake.accept("conn2", { type: "media-chunk", id: "overflow", data: bytes });
+    expect(results).toEqual([{ type: "media-result", id: "overflow", ok: false, detail: "TRANSFER_FAILED" }]);
+  });
+
   it("收齐分块后校验摘要并回复成功结果", () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
     const completed: MediaFile[] = [];

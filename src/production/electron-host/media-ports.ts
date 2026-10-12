@@ -16,12 +16,17 @@ const NodeRtmpServer = require("node-media-server/src/node_rtmp_server.js") as n
 const NodeFlvSession = require("node-media-server/src/node_flv_session.js") as FlvSessionCtor;
 type NmsPublisher = {
   readonly videoCodec?: number;
+  readonly avcSequenceHeader?: Buffer;
   readonly videoCodecName?: string;
   readonly flvGopCacheQueue?: { readonly size: number };
 };
-type RtmpVideoHost = { parserPacket?: { payload?: Buffer; header?: { length?: number } } };
+type RtmpVideoHost = { parserPacket?: { clock?: number; payload?: Buffer; header?: { length?: number } } };
+type RtmpPacketHost = { parserPacket: { clock: number } };
 const NodeRtmpSession = require("node-media-server/src/node_rtmp_session.js") as {
-  prototype: { rtmpVideoHandler: (this: RtmpVideoHost) => void };
+  prototype: {
+    rtmpVideoHandler: (this: RtmpVideoHost) => void;
+    rtmpPacketAlloc: (this: RtmpPacketHost) => void;
+  };
 };
 const mediaContext = require("node-media-server/src/node_core_ctx.js") as {
   readonly nodeEvent: NodeEvent;
@@ -29,8 +34,18 @@ const mediaContext = require("node-media-server/src/node_core_ctx.js") as {
   readonly sessions: { get: (id: string) => NmsPublisher | undefined };
 };
 const originalRtmpVideoHandler = NodeRtmpSession.prototype.rtmpVideoHandler;
+const originalRtmpPacketAlloc = NodeRtmpSession.prototype.rtmpPacketAlloc;
+NodeRtmpSession.prototype.rtmpPacketAlloc = function allocateRtmpPacket(this: RtmpPacketHost) {
+  // RTMP clocks use unsigned 32-bit arithmetic. DJI can encode a small backwards
+  // delta as 0xfffffffN; NMS otherwise exceeds uint32 and discards every later frame.
+  // Allocation runs once per new message, before NMS's overflow check, including
+  // messages split across TCP reads and continuation chunks.
+  this.parserPacket.clock = this.parserPacket.clock >>> 0;
+  return originalRtmpPacketAlloc.call(this);
+};
 let rtmpVideoLog: ((detail: string) => void) | null = null;
 let rtmpVideoLogged = 0;
+const videoTimelines = new WeakMap<RtmpVideoHost, { raw: number; elapsed: number; output: number }>();
 NodeRtmpSession.prototype.rtmpVideoHandler = function patchedRtmpVideoHandler(this: RtmpVideoHost) {
   const raw = this.parserPacket?.payload;
   const length = this.parserPacket?.header?.length;
@@ -53,7 +68,23 @@ NodeRtmpSession.prototype.rtmpVideoHandler = function patchedRtmpVideoHandler(th
       raw[4] = 0x31;
     }
   }
-  return originalRtmpVideoHandler.call(this);
+  const packet = this.parserPacket;
+  const rawClock = packet?.clock;
+  if (packet === undefined || rawClock === undefined) return originalRtmpVideoHandler.call(this);
+  let timeline = videoTimelines.get(this);
+  if (timeline === undefined) {
+    timeline = { raw: rawClock, elapsed: 0, output: 0 };
+    videoTimelines.set(this, timeline);
+  } else {
+    // Interpret modular deltas as signed. A tiny backwards timestamp at startup
+    // must not become a 49-day jump in FLV/MSE. Preserve the parser's raw clock.
+    timeline.elapsed += (rawClock - timeline.raw) | 0;
+    timeline.raw = rawClock;
+    timeline.output = Math.max(timeline.output, timeline.elapsed);
+  }
+  packet.clock = timeline.output >>> 0;
+  try { return originalRtmpVideoHandler.call(this); }
+  finally { packet.clock = rawClock; }
 };
 // Bounds one local browser's queued video without changing the RTMP publisher's frame flow.
 const MAX_FLV_PENDING_BYTES = 16_777_216;
@@ -417,6 +448,15 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           res.end();
           return;
         }
+        const publisherId = mediaContext.publishers.get(streamPath);
+        const publisher = publisherId === undefined ? undefined : mediaContext.sessions.get(publisherId);
+        // Publishing starts before the decoder configuration arrives. A player must join with that configuration.
+        if (publisher === undefined || !publisher.videoCodec ||
+          ((publisher.videoCodec === 7 || publisher.videoCodec === 12) && !publisher.avcSequenceHeader?.length)) {
+          res.writeHead(503, { "Access-Control-Allow-Origin": "*", "Retry-After": "1", "Cache-Control": "no-store" });
+          res.end();
+          return;
+        }
         // 直连 NMS 发布会话播放器槽位，禁止再 RTMP 回环拉流（回环+丢帧曾把有效码率打到几十 kbps）。
         const previous = sessions.get(deviceId);
         if (previous !== undefined) {
@@ -429,8 +469,6 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           "Cache-Control": "no-cache, no-store",
           Connection: "close",
         });
-        const publisherId = mediaContext.publishers.get(streamPath);
-        const publisher = publisherId === undefined ? undefined : mediaContext.sessions.get(publisherId);
         try {
           log?.({
             kind: "http-flv-publisher-error",

@@ -41,6 +41,19 @@ const delivered = (fileName = "DJI_0001.jpg", sha256 = "a".repeat(64), count = 1
 });
 
 describe("photo-dispatcher", () => {
+  it("两张批次必须等两张落盘，最后一张先到也不能提前报成功", async () => {
+    const dispatcher = PhotoDispatcher.create({ relay: {
+      latestTelemetry: () => ready(),
+      sendCommand: async () => delivered("DJI_0002.jpg", "b".repeat(64), 2),
+    } });
+    const fetching = dispatcher.fetch("phone-1");
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    dispatcher.recordStored("phone-1", "DJI_0002.jpg", "b".repeat(64));
+    expect(dispatcher.get("phone-1").phase).toBe("fetching");
+    dispatcher.recordStored("phone-1", "DJI_0001.jpg", "a".repeat(64));
+    await expect(fetching).resolves.toMatchObject({ ok: true, count: 2 });
+  });
+
   it("把当前电脑清单带给 fetch，并在最终命令结果前等待收件箱确认", async () => {
     const sent: unknown[] = [];
     let releaseFetch: (() => void) | undefined;
@@ -157,6 +170,29 @@ describe("photo-dispatcher", () => {
     fire?.();
 
     await expect(fetching).resolves.toMatchObject({ ok: false, code: "TRANSFER_FAILED", fileName: "DJI_0001.jpg" });
+  });
+
+  it("清单超过 256 张时仍发送前 256 张，避免整卡重传", async () => {
+    const sent: unknown[] = [];
+    const entries = Array.from({ length: 300 }, (_, index) => ({
+      fileName: `DJI_${String(index).padStart(4, "0")}.jpg`,
+      sha256: index.toString(16).padStart(64, "0"),
+    }));
+    const dispatcher = PhotoDispatcher.create({
+      knownPhotos: () => entries,
+      relay: {
+        latestTelemetry: () => ready(),
+        sendCommand: async (_deviceId, request) => {
+          sent.push(request);
+          return none();
+        },
+      },
+    });
+    await expect(dispatcher.fetch("phone-1")).resolves.toMatchObject({ ok: false, code: "NOTHING_TO_FETCH" });
+    const known = (sent[0] as { fields: { knownPhotos: { fileName: string }[] } }).fields.knownPhotos;
+    expect(known).toHaveLength(256);
+    expect(known[0]?.fileName).toBe("DJI_0000.jpg");
+    expect(known[255]?.fileName).toBe("DJI_0255.jpg");
   });
 
   it("主相机未连接时本地拒绝，且不同设备互不阻塞", async () => {

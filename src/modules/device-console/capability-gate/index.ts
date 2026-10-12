@@ -79,7 +79,7 @@ function evaluate(value: unknown): CapabilityDecisionResult<CapabilityDecision> 
   if (operation === "pairing") {
     if (!remoteConnected) return decision(operation, false, "REMOTE_CONTROLLER_OFFLINE");
     if (flight === "CONNECTED" || (flight === undefined && flightControllerConnected !== null && flightControllerConnected.value === true)) return decision(operation, false, "PAIRING_NOT_NEEDED");
-    if (flight !== "DISCONNECTED" && !(flight === undefined && flightControllerConnected !== null && flightControllerConnected.value === false)) return decision(operation, false, "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN");
+    if (flight !== "DISCONNECTED" && flight !== "UNKNOWN" && !(flight === undefined && flightControllerConnected !== null && flightControllerConnected.value === false)) return decision(operation, false, "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN");
     return decision(operation, true, null);
   }
   return failure("operation", "invalid-value");

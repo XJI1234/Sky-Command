@@ -241,6 +241,31 @@ function create(dependencies: OperationWorkflowDependencies) {
     publish();
     return result;
   };
+  const pairing = async (deviceId: string, action: "start" | "stop"): Promise<WorkflowResult> => {
+    if (disposed) return failure("DISPOSED");
+    if (!validId(deviceId)) return failure("INVALID_INPUT");
+    if (!online(deviceId)) return failure("DEVICE_OFFLINE");
+    if (dependencies.pairingControl === undefined) return failure("DEPENDENCY_FAILURE");
+    if (action === "start") {
+      const payload = read(controlTelemetryRaw(deviceId), "payload");
+      const decision = CapabilityGate.evaluate({
+        operation: "pairing",
+        relayConnected: true,
+        sdkAvailability: read(payload, "sdkAvailability"),
+        remoteController: read(payload, "remoteController"),
+        flightController: read(payload, "flightController"),
+      });
+      if (!decision.ok || !decision.value.enabled) return failure("CAPABILITY_BLOCKED", decision.ok ? { reason: decision.value.reason } : undefined);
+    }
+    const sessionId = sessionMap().get(deviceId);
+    const outcome = await dependencies.pairingControl[action](deviceId);
+    if (!online(deviceId) || sessionMap().get(deviceId) !== sessionId) return failure("DEVICE_OFFLINE");
+    if (outcome.ok) return success(outcome);
+    if (outcome.reason === "busy") return failure("OPERATION_IN_PROGRESS");
+    if (outcome.reason === "timeout") return failure("RESULT_UNCONFIRMED");
+    if (outcome.reason === "rejected") return failure("RELAY_REJECTED");
+    return failure("DEPENDENCY_FAILURE");
+  };
   const stopFailedOnlineStreams = async (): Promise<void> => {
     const listed = read(media(), "streams");
     const streams: unknown[] = Array.isArray(listed) ? listed : [];
@@ -325,6 +350,8 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!validId(deviceId) || !online(deviceId)) return failure("DEVICE_OFFLINE");
       return await refreshControl(deviceId) === null ? failure("STATUS_REFRESH_FAILED") : success();
     }),
+    startPairing: (deviceId: string) => published(() => pairing(deviceId, "start")),
+    stopPairing: (deviceId: string) => published(() => pairing(deviceId, "stop")),
     measurePhoneLink: async (deviceId: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
       if (!validId(deviceId) || !online(deviceId)) return failure("DEVICE_OFFLINE");
@@ -351,36 +378,11 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!online(deviceId)) return failure("DEVICE_OFFLINE");
       const control = dependencies.photoControl;
       if (control === undefined) return failure("DEPENDENCY_FAILURE");
-      const seen = new Set<string>();
-      let count = 0;
-      let consecutiveFailures = 0;
-      let lastName: string | undefined;
-      for (;;) {
-        let result: unknown;
-        try { result = await control.fetch(deviceId); } catch { return failure("DEPENDENCY_FAILURE"); }
+      try {
+        const result = await control.fetch(deviceId);
         const code = read(result, "code");
-        if (code === "NOTHING_TO_FETCH") {
-          return count === 0 ? failure("NOTHING_TO_FETCH", result) : success({ code: "SUCCEEDED", count, fileName: lastName ?? null });
-        }
-        if (read(result, "ok") !== true) {
-          consecutiveFailures += 1;
-          if (count === 0 || consecutiveFailures >= 4) {
-            return count === 0 ? failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result) : success({ code: "SUCCEEDED", count, fileName: lastName ?? null });
-          }
-          publish();
-          continue;
-        }
-        consecutiveFailures = 0;
-        const name = read(result, "fileName");
-        if (typeof name !== "string" || seen.has(name)) {
-          return success(count === 0 ? result : { code: "SUCCEEDED", count, fileName: lastName ?? null });
-        }
-        seen.add(name);
-        lastName = name;
-        count += 1;
-        if (count >= 200) return success({ code: "SUCCEEDED", count, fileName: lastName });
-        publish();
-      }
+        return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
+      } catch { return failure("DEPENDENCY_FAILURE"); }
     }),
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");

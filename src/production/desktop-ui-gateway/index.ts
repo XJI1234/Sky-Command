@@ -126,6 +126,8 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
         const deviceId = one(input, "deviceId");
         return deviceId === null ? failure("INVALID_INPUT") : call("measurePhoneLink", [deviceId]);
       }
+      const pairing: Readonly<Record<string, string>> = freeze({ "pairing.start": "startPairing", "pairing.stop": "stopPairing" });
+      if (typeof method === "string" && pairing[method] !== undefined) { const deviceId = one(input, "deviceId"); return deviceId === null ? failure("INVALID_INPUT") : call(pairing[method]!, [deviceId]); }
       if (method === "route.import") {
         const source = exact(input, ["fileName", "bytes"]);
         const fileName = source === null ? null : read(source, "fileName");

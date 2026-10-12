@@ -11,7 +11,7 @@ export type { LinkProbeReport, ListenAddress, RelayConnection, RelayTransport };
 export type { MissionPayload } from "./mission-sender/index.js";
 export type TimerScheduler = ServerTimerScheduler & CommandTimerScheduler & MissionTimerScheduler;
 
-export interface CommandRequest { readonly name: string; readonly fields: JsonObject["fields"]; }
+export interface CommandRequest { readonly name: string; readonly fields: JsonObject["fields"]; readonly timeoutMs?: number; }
 export interface RelayDiagnosticSink {
   persist(input: Readonly<{ readonly deviceId: string; readonly runId: string; readonly events: readonly DiagnosticEventFrame[] }>): Promise<boolean>;
 }
@@ -55,7 +55,7 @@ export interface RelayLinkOptions {
   readonly createConnectionId: () => string;
   readonly createSessionId: (deviceId: string) => string;
   readonly createCommandId: () => string;
-  readonly onPhoto?: (deviceId: string, file: MediaFile) => boolean;
+  readonly onPhoto?: (deviceId: string, file: MediaFile) => boolean | Promise<boolean>;
 }
 
 export interface RelayLinkInstance {
@@ -99,7 +99,10 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
       complete: (connectionId, file) => {
         const device = deviceForConnection(connectionId);
         if (device === null || options.onPhoto === undefined) return "rejected";
-        try { return options.onPhoto(device.deviceId, file) === true ? "accepted" : "rejected"; } catch { return "rejected"; }
+        try {
+          const stored = options.onPhoto(device.deviceId, file);
+          return typeof stored === "boolean" ? (stored ? "accepted" : "rejected") : stored.then((ok) => ok ? "accepted" as const : "rejected" as const, () => "rejected" as const);
+        } catch { return "rejected"; }
       },
       abort: () => undefined,
     },
@@ -269,7 +272,7 @@ function create(options: RelayLinkOptions): RelayLinkInstance {
     let frame: RelayFrame;
     try { frame = { type: "command", id: commandId, command: { name: request?.name, fields: request?.fields } }; } catch { return commandFailure(deviceId, commandId, "Command is invalid"); }
     const encoded = RelayFrameCodec.encode(frame); if (!encoded.ok) return commandFailure(deviceId, commandId, "Command is invalid");
-    const begun = tracker.begin({ connectionId: device.connectionId, commandId }); if (!begun.ok) return commandFailure(deviceId, commandId, "Command is already pending");
+    const begun = tracker.begin({ connectionId: device.connectionId, commandId, ...(typeof request?.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}) }); if (!begun.ok) return commandFailure(deviceId, commandId, "Command is already pending");
     const result = new Promise<CommandOutcome>((resolve) => { commandWaiters.set(key(device.connectionId, commandId), { deviceId, resolve }); });
     void server.send(device.connectionId, encoded.value).then((sent) => {
       if (!sent.ok) tracker.cancelConnection(device.connectionId, "Command could not be sent");

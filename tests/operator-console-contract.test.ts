@@ -70,13 +70,14 @@ describe("操作台投影", () => {
     expect(source).toContain("scheduleVideoPlay(video)");
   });
 
-  it("图传播放器必须把 mpegts 的 MEDIA_INFO 和 ERROR 细节显示出来，不能吞掉解码失败", () => {
+  it("图传播放器必须显示播放提示并保留 ERROR 诊断细节，不能吞掉解码失败", () => {
     const source = renderer();
     const attach = source.slice(source.indexOf("const attachVideo"), source.indexOf("const accepted"));
     expect(attach).toContain("mpegts.Events.MEDIA_INFO");
     expect(attach).toContain("mpegts.Events.ERROR");
     expect(attach).toMatch(/Events\.ERROR,\s*\((type|errorType|_type)/);
-    expect(attach).toContain("show(");
+    expect(attach).toContain("showPlaybackHealth(");
+    expect(attach).toContain('console.warn("图传播放连接异常", errorType, errorDetail)');
   });
 
   it("起飞请求保留确认意图并复用已读取快照，刷新失败时仍能展示确认框", () => {
@@ -326,7 +327,9 @@ describe("操作台投影", () => {
   it("设备页将对频限定为新增设备的维护操作", () => {
     const source = renderer();
     expect(source).toContain("对频仅用于新增飞机或更换遥控器");
-    expect(source).toContain("只有新增飞机或更换遥控器时，才在手机上开始对频");
+    expect(source).toContain("只有新增飞机或更换遥控器时，才在这里开始对频");
+    expect(page()).toContain('id="pairing-start"');
+    expect(page()).toContain('id="pairing-stop"');
     expect(source).not.toContain("遥控器连上后，请在手机上开始对频，再等飞机连上");
   });
 
@@ -908,20 +911,35 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("stream-start", hlsView)).toEqual({ ok: true });
   });
 
-  it("对频由手机端完成，桌面只说明事实，不假装已经发出命令", () => {
+  it("设备页按手机状态开放开始和停止对频", () => {
     const view = OperatorConsole.project({
-      snapshot: snapshot([device()]),
+      snapshot: snapshot([device({ connection: { ...device().connection, msdk: "ready", flightController: "disconnected", pairingState: "IDLE" } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "devices",
     });
-    expect(OperatorConsole.evaluate("pairing-start", view)).toEqual({
-      ok: false,
-      reason: "请到手机上开始或停止对频。",
+    expect(OperatorConsole.evaluate("pairing-start", view)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("pairing-stop", view)).toEqual({ ok: false, reason: "当前没有可停止的对频" });
+    const active = OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, msdk: "ready", pairingState: "PAIRING" } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "devices",
     });
-    expect(OperatorConsole.evaluate("pairing-stop", view)).toEqual({
-      ok: false,
-      reason: "请到手机上开始或停止对频。",
+    expect(OperatorConsole.evaluate("pairing-stop", active)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("pairing-start", active)).toEqual({ ok: false, reason: "飞控已连接，无需对频" });
+  });
+
+  it("没飞机时飞控未知仍可开始对频，停止后可再次开始", () => {
+    const viewFor = (connection: Record<string, unknown>) => OperatorConsole.project({
+      snapshot: snapshot([device({ connection: { ...device().connection, msdk: "ready", remoteController: "connected", flightController: "unknown", pairingState: "IDLE", ...connection } })]),
+      selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+      workspace: "devices",
     });
+    expect(OperatorConsole.evaluate("pairing-start", viewFor({}))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("pairing-start", viewFor({ pairingState: "STOPPING" }))).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("pairing-start", viewFor({ pairingState: "PAIRING" }))).toEqual({ ok: false, reason: "对频操作正在进行" });
+    expect(OperatorConsole.evaluate("pairing-start", viewFor({ msdk: "starting" }))).toEqual({ ok: false, reason: "手机端 DJI 尚未就绪" });
+    expect(OperatorConsole.evaluate("pairing-start", viewFor({ remoteController: "unknown" }))).toEqual({ ok: false, reason: "遥控器尚未连接" });
+    expect(OperatorConsole.evaluate("pairing-start", viewFor({ flightController: "connected" }))).toEqual({ ok: false, reason: "飞控已连接，无需对频" });
   });
 
   it("起飞按钮只因命令不可达而禁用，本地遥测不替 DJI 提前拒绝", () => {
@@ -1076,7 +1094,7 @@ describe("航线操作台渲染契约", () => {
     expect(pageSource).toMatch(/\.flight-panel-content\s*\{[^}]*overflow:\s*hidden;/);
   });
 
-  it("任务手机选择在图传页与图传手机分行，航线页不再重复选机也不滚动", () => {
+  it("任务手机选择在图传页与图传手机分行，操作区可滚动查看完整反馈", () => {
     const pageSource = page();
     const flight = pageSource.slice(pageSource.indexOf('id="workspace-flight"'));
     const stream = flight.slice(flight.indexOf('id="flight-panel-stream"'), flight.indexOf('id="flight-panel-mission"'));
@@ -1092,7 +1110,7 @@ describe("航线操作台渲染契约", () => {
     expect(mission).not.toContain('id="mission-select"');
     expect(mission).not.toContain("<select");
     expect(pageSource).toMatch(/\.flight-panel-view\s*\{[^}]*overflow:\s*hidden;/);
-    expect(pageSource).not.toMatch(/\.flight-panel-actions\s*\{[^}]*overflow-y:\s*auto;/);
+    expect(pageSource).toMatch(/\.flight-panel-actions\s*\{[^}]*overflow-y:\s*auto;/);
   });
 
   it("拍照和回传照片单独成行，紧跟在图传启停下面", () => {

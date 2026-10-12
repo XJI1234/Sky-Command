@@ -160,6 +160,7 @@
       color: var(--ink);
       overflow: hidden;
     }
+    #playback-health { flex: 0 0 auto; margin: 8px 0 0; overflow-wrap: anywhere; }
     .flight-video-stage {
       position: relative;
       flex: 1 1 auto;
@@ -393,7 +394,7 @@
        overflow: hidden;
        text-overflow: ellipsis;
      }
-     .flight-panel-actions { min-height: 0; margin-top: 12px; overflow: hidden; display: grid; align-content: start; }
+     .flight-panel-actions { min-width: 0; min-height: 0; margin-top: 12px; overflow-x: hidden; overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; padding-bottom: 8px; }
      .photo-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 2px; }
      .flight-controls button[data-action] { min-width: 8.5em; }
      .flight-controls button[data-action="mission-start"],
@@ -437,15 +438,16 @@
     .direct-flight-actions button[data-action="flight-takeoff"]:hover:not(:disabled) { background: var(--accent-hover); }
     .operation-feedback {
       min-height: 2.7em;
-      max-height: 2.7em;
+      min-width: 0;
       margin: 6px 0 0;
       color: var(--ink-muted);
       font-size: 12px;
       line-height: 1.35;
-      overflow: hidden;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     .mission-secondary-actions, .stream-controls, .direct-flight-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
-    .operation-action { min-width: 112px; flex: 1 1 112px; }
+    .operation-action { min-width: min(100%, 112px); flex: 1 1 140px; }
     .operation-action button { width: 100%; }
     .mission-secondary-actions button { min-width: 78px; }
     .mission-secondary-actions button[data-action="mission-stop"],
@@ -476,15 +478,18 @@
     .operation-status {
       margin: 0;
       padding: 0 16px;
-      height: 40px;
+      min-height: 40px;
+      max-height: 120px;
       border-top: 1px solid var(--line);
       background: var(--surface);
       color: var(--ink-muted);
       font-size: 13px;
-      line-height: 40px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      line-height: 1.5;
+      padding-top: 8px;
+      padding-bottom: 8px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     #workspace-monitor {
       grid-template-columns: 280px minmax(0, 1fr);
@@ -812,8 +817,13 @@
         <div class="section-actions">
           <button id="device-refresh" type="button">刷新状态</button>
           <button id="device-link-measure" type="button">测量手机连接</button>
+          <button id="pairing-start" type="button">开始对频</button>
+          <button id="pairing-stop" type="button">停止对频</button>
         </div>
       </div>
+      <p id="pairing-availability" class="muted" role="status" aria-live="polite"></p>
+      <p class="operation-feedback" data-operation-feedback="pairing-start" aria-live="polite"></p>
+      <p class="operation-feedback" data-operation-feedback="pairing-stop" aria-live="polite"></p>
       <div id="device-detail" class="muted">从左侧选择已连接的手机。</div>
       <p id="device-guide" class="guide"></p>
     </section>
@@ -879,6 +889,7 @@
         <p id="flight-fc-repeat" role="status" hidden></p>
         <p id="stream-label" class="notice"></p>
       </div>
+      <p id="playback-health" class="notice" role="status" hidden></p>
      </section>
      <section class="flight-controls" aria-label="飞行操作">
        <div class="flight-panel-tabs-shell">

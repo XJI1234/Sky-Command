@@ -17,7 +17,7 @@ export type MediaSinkResult = "accepted" | "rejected";
 export interface MediaSink {
   begin(connectionId: string, transfer: Readonly<MediaTransfer>): MediaSinkResult;
   append(connectionId: string, bytes: Uint8Array): MediaSinkResult;
-  complete(connectionId: string, file: MediaFile): MediaSinkResult;
+  complete(connectionId: string, file: MediaFile): MediaSinkResult | Promise<MediaSinkResult>;
   abort(connectionId: string): void;
 }
 
@@ -39,6 +39,9 @@ export interface MediaIntakeInstance {
 
 interface ActiveMediaTransfer extends MediaTransfer {
   readonly chunks: Uint8Array[];
+  readonly checksum: ReturnType<typeof sha256.create>;
+  receivedBytes: number;
+  completing: boolean;
 }
 
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
@@ -73,7 +76,7 @@ function create(options: MediaIntakeOptions): MediaIntakeInstance {
           options.results.send(connectionId, result(frame.id, false, "TRANSFER_FAILED"));
           return;
         }
-        active.set(connectionId, { ...transfer, chunks: [] });
+        active.set(connectionId, { ...transfer, chunks: [], checksum: sha256.create(), receivedBytes: 0, completing: false });
         return;
       }
       const current = active.get(connectionId);
@@ -83,11 +86,14 @@ function create(options: MediaIntakeOptions): MediaIntakeInstance {
           return;
         }
         const data = frame.data instanceof Uint8Array ? frame.data : new Uint8Array();
-        if (data.byteLength < 1 || data.byteLength > ProtocolLimits.maxMissionChunkBytes || options.sink.append(connectionId, data) !== "accepted") {
+        if (current.completing || data.byteLength < 1 || data.byteLength > ProtocolLimits.maxMissionChunkBytes || current.receivedBytes + data.byteLength > current.size || options.sink.append(connectionId, data) !== "accepted") {
           fail(connectionId, frame.id, "TRANSFER_FAILED");
           return;
         }
-        current.chunks.push(data.slice());
+        const owned = data.slice();
+        current.chunks.push(owned);
+        current.checksum.update(owned);
+        current.receivedBytes += owned.byteLength;
         return;
       }
       if (frame.type !== "media-complete") return;
@@ -95,18 +101,26 @@ function create(options: MediaIntakeOptions): MediaIntakeInstance {
         options.results.send(connectionId, result(frame.id, false, "TRANSFER_NOT_ACTIVE"));
         return;
       }
+      if (current.completing) return;
+      if (current.receivedBytes !== current.size || hex(current.checksum.digest()) !== current.sha256) {
+        fail(connectionId, frame.id, current.receivedBytes !== current.size ? "TRANSFER_SIZE_MISMATCH" : "TRANSFER_CHECKSUM_MISMATCH");
+        return;
+      }
+      current.completing = true;
       const bytes = concat(current.chunks);
-      if (bytes.byteLength !== current.size || hex(sha256(bytes)) !== current.sha256) {
-        fail(connectionId, frame.id, bytes.byteLength !== current.size ? "TRANSFER_SIZE_MISMATCH" : "TRANSFER_CHECKSUM_MISMATCH");
-        return;
-      }
+      current.chunks.length = 0;
       const file: MediaFile = freeze({ transferId: current.transferId, fileName: current.fileName, size: current.size, sha256: current.sha256, bytes });
-      active.delete(connectionId);
-      if (options.sink.complete(connectionId, file) !== "accepted") {
-        options.results.send(connectionId, result(frame.id, false, "TRANSFER_FAILED"));
-        return;
-      }
-      options.results.send(connectionId, result(frame.id, true, "Photo stored"));
+      const finish = (stored: MediaSinkResult): void => {
+        if (active.get(connectionId) !== current) return;
+        active.delete(connectionId);
+        if (stored !== "accepted") runCatching(() => options.sink.abort(connectionId));
+        runCatching(() => options.results.send(connectionId, result(frame.id, stored === "accepted", stored === "accepted" ? "Photo stored" : "TRANSFER_FAILED")));
+      };
+      try {
+        const stored = options.sink.complete(connectionId, file);
+        if (typeof stored === "string") finish(stored);
+        else void stored.then(finish, () => finish("rejected"));
+      } catch { finish("rejected"); }
     },
     cancelConnection: (connectionId) => {
       const current = active.get(connectionId);

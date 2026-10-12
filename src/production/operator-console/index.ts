@@ -598,7 +598,17 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   const current = record(view) as OperatorView | null;
   if (name === null || current === null) return reject("操作无效");
   if (name === "pairing-start" || name === "pairing-stop") {
-    return reject("请到手机上开始或停止对频。");
+    if (current.workspace !== "devices") return reject("请到设备页操作对频");
+    const device = deviceById(current, current.missionDeviceId);
+    if (device === undefined) return reject("请先选择已连接的手机");
+    const connection = read(device, "connection");
+    if (read(connection, "msdk") !== "ready") return reject("手机端 DJI 尚未就绪");
+    const pairingState = read(connection, "pairingState");
+    if (name === "pairing-stop") return pairingState === "PAIRING" || pairingState === "PAIRED" || pairingState === "STOPPING" ? accept() : reject("当前没有可停止的对频");
+    if (read(connection, "remoteController") !== "connected") return reject("遥控器尚未连接");
+    if (read(connection, "flightController") === "connected") return reject("飞控已连接，无需对频");
+    if (pairingState === "PAIRING") return reject("对频操作正在进行");
+    return accept();
   }
   if (name === "import-route" || name === "select-route" || name === "remove-route") {
     return current.workspace === "routes" ? accept() : reject("请到航线页导入或管理航线");

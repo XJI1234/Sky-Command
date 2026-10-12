@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { OperationWorkflow } from "../src/production/operation-workflow/index.js";
 import { OperatorConsole } from "../src/production/operator-console/index.js";
 import { RouteLibrary } from "../src/modules/route-library/index.js";
+import { PairingController } from "../src/modules/device-console/pairing-controller/index.js";
 
 const readyHardware = { lanAddressAvailable: true, legacyMediaAvailable: true };
 
@@ -27,6 +28,56 @@ const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkf
 } as never);
 
 describe("飞行作业工作流模块契约", () => {
+  it("保留整批实际回传张数，批次结束后不再发起一次相机下载", async () => {
+    let fetches = 0;
+    const workflow = workflowWith({ photoControl: {
+      capture: async () => ({ ok: true, code: "CAPTURED" }),
+      fetch: async () => { fetches += 1; return { ok: true, code: "SUCCEEDED", count: 2, fileName: "DJI_0002.jpg" }; },
+      recordDisconnected: () => null, subscribe: () => () => undefined,
+    } });
+    await expect(workflow.fetchPhoto("relay-a")).resolves.toEqual({ ok: true, value: { ok: true, code: "SUCCEEDED", count: 2, fileName: "DJI_0002.jpg" } });
+    expect(fetches).toBe(1);
+  });
+
+  it("整批失败和无缺失照片不自动重试，也不显示成功", async () => {
+    for (const code of ["TRANSFER_FAILED", "NOTHING_TO_FETCH"]) {
+      let fetches = 0;
+      const workflow = workflowWith({ photoControl: {
+        capture: async () => ({ ok: true }),
+        fetch: async () => { fetches += 1; return { ok: false, code }; },
+        recordDisconnected: () => null, subscribe: () => () => undefined,
+      } });
+      await expect(workflow.fetchPhoto("relay-a")).resolves.toEqual({ ok: false, code, value: { ok: false, code } });
+      expect(fetches).toBe(1);
+    }
+  });
+
+  it("对频开始读取当前控制事实，停止不复用开始门禁", async () => {
+    const sent: string[] = [];
+    let flightController = "DISCONNECTED";
+    const pairingControl = PairingController.create({ relay: {
+      sendCommand: async (_deviceId, request) => { sent.push(request.name); return { status: "accepted", detail: "succeeded" }; },
+    } });
+    const workflow = workflowWith({
+      pairingControl,
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
+        telemetry: () => ({ payload: {}, capabilities: {} }),
+        controlTelemetry: () => ({ payload: { sdkAvailability: "READY", remoteController: "CONNECTED", flightController }, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        subscribe: () => () => undefined,
+      },
+    });
+    await expect(workflow.startPairing("relay-a")).resolves.toEqual({ ok: true, value: { ok: true, action: "start" } });
+    flightController = "UNKNOWN";
+    await expect(workflow.startPairing("relay-a")).resolves.toEqual({ ok: true, value: { ok: true, action: "start" } });
+    flightController = "CONNECTED";
+    await expect(workflow.startPairing("relay-a")).resolves.toEqual({ ok: false, code: "CAPABILITY_BLOCKED", value: { reason: "PAIRING_NOT_NEEDED" } });
+    await expect(workflow.stopPairing("relay-a")).resolves.toEqual({ ok: true, value: { ok: true, action: "stop" } });
+    await expect(workflow.stopPairing("offline")).resolves.toEqual({ ok: false, code: "DEVICE_OFFLINE" });
+    expect(sent).toEqual(["pairing.start", "pairing.start", "pairing.stop"]);
+  });
+
   it("在不改变控制状态或门禁的前提下转交手机在线链路自检", async () => {
     let calls = 0;
     const workflow = workflowWith({

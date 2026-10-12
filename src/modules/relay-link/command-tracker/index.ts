@@ -3,7 +3,7 @@ export interface TimerScheduler {
   clearTimeout(handle: unknown): void;
 }
 
-export interface CommandBegin { readonly connectionId: string; readonly commandId: string; }
+export interface CommandBegin { readonly connectionId: string; readonly commandId: string; readonly timeoutMs?: number; }
 export interface CommandResolve { readonly connectionId: string; readonly commandId: string; readonly ok: boolean; readonly detail: string; readonly result?: JsonObject; }
 export interface PendingCommand extends CommandBegin {}
 export type CommandStatus = "succeeded" | "rejected" | "timed-out" | "disconnected";
@@ -72,11 +72,13 @@ function create(options: CommandTrackerOptions): CommandTrackerInstance {
     if (!checked.ok) return checked;
     const identity = checked.value;
     if (pending.has(key(identity.connectionId, identity.commandId))) return rejected("DUPLICATE_COMMAND", "Command is already pending");
-    const value = Object.freeze({ ...identity });
+    const value = Object.freeze({ connectionId: identity.connectionId, commandId: identity.commandId });
+    const requested = input.timeoutMs;
+    const timeoutMs = typeof requested === "number" && Number.isFinite(requested) && requested >= 1_000 && requested <= 3_600_000 ? requested : options.timeoutMs;
     const timer = options.scheduler.setTimeout(() => {
       const entry = pending.get(key(value.connectionId, value.commandId));
       if (entry?.value === value) finish(value, "timed-out", "Command timed out");
-    }, options.timeoutMs);
+    }, timeoutMs);
     pending.set(key(value.connectionId, value.commandId), { value, timer });
     rebuild();
     return accepted(value);

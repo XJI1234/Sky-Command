@@ -10,6 +10,8 @@ export interface CameraPhotoControlDependencies {
   readonly relay: PhotoRelay;
   readonly now: () => number;
   readonly fs?: PhotoInboxFs;
+  /** Photos already saved for this phone. Used so a restarted desktop does not ask for them again. */
+  readonly storedPhotos?: (deviceId: string) => readonly Pick<StoredPhoto, "fileName" | "size" | "sha256">[] | Promise<readonly Pick<StoredPhoto, "fileName" | "size" | "sha256">[]>;
 }
 
 export interface CameraPhotoControlInstance {
@@ -28,9 +30,19 @@ const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value)
 function create(dependencies: CameraPhotoControlDependencies): CameraPhotoControlInstance {
   const inbox = PhotoInbox.create({ now: dependencies.now, ...(dependencies.fs === undefined ? {} : { fs: dependencies.fs }) });
   const dispatcher = PhotoDispatcher.create({ relay: dependencies.relay, knownPhotos: (deviceId): readonly PhotoManifestEntry[] => inbox.list(deviceId).map(({ fileName, sha256 }) => ({ fileName, sha256 })) });
+  const rememberStored = async (deviceId: string): Promise<void> => {
+    if (dependencies.storedPhotos === undefined) return;
+    let stored: readonly Pick<StoredPhoto, "fileName" | "size" | "sha256">[];
+    try { stored = await dependencies.storedPhotos(deviceId); } catch { return; }
+    if (!Array.isArray(stored)) return;
+    for (const photo of stored) inbox.remember(deviceId, photo);
+  };
   return freeze({
     capture: (deviceId) => dispatcher.capture(deviceId),
-    fetch: (deviceId) => dispatcher.fetch(deviceId),
+    fetch: async (deviceId) => {
+      await rememberStored(deviceId);
+      return dispatcher.fetch(deviceId);
+    },
     get: (deviceId) => dispatcher.get(deviceId),
     list: (deviceId) => inbox.list(deviceId),
     recordDisconnected: (deviceId) => dispatcher.recordDisconnected(deviceId),

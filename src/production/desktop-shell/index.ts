@@ -21,6 +21,8 @@ const gatewayMethods = freeze({
   "network-hint": "network.hint",
   "device-refresh": "device.refresh",
   "device-link-measure": "device.link.measure",
+  "pairing-start": "pairing.start",
+  "pairing-stop": "pairing.stop",
   "route-import": "route.import",
   "route-preview": "route.preview",
   "route-select": "route.select",

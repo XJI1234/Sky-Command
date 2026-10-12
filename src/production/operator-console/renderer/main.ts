@@ -38,6 +38,8 @@ import {
 } from "../flight-now-status/index.js";
 import { operationFeedback, type OperationFeedback } from "./operation-feedback.js";
 import { createBackgroundRefresh, createRenderScheduler } from "./render-scheduler.js";
+import { createActionRequests } from "./action-requests.js";
+import { createPlaybackProgress } from "./playback-progress.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, routeMapNotice, setRouteMapVisible, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight" | "monitor";
@@ -497,6 +499,7 @@ type OperationFeedbackRecord = Readonly<{
   readonly feedback: OperationFeedback;
 }>;
 const feedbackByAction = new Map<string, OperationFeedbackRecord>();
+const actionRequests = createActionRequests();
 // `operationFeedback` owns the wording, including the literal "DJI MSDK 回调" for
 // an actual structured callback. The renderer only chooses the correct operation lane.
 
@@ -507,6 +510,12 @@ const el = (id: string): HTMLElement => {
 };
 
 const show = (message: string): void => { el("status").textContent = message; };
+
+const showPlaybackHealth = (message: string): void => {
+  const hint = el("playback-health");
+  hint.textContent = message;
+  hint.hidden = message.length === 0;
+};
 
 const feedbackForDevice = (action: string, deviceId: string | null, connectionEpoch: number | null, feedback: OperationFeedback): void => {
   feedbackByAction.set(action, Object.freeze({ deviceId, connectionEpoch, feedback }));
@@ -600,6 +609,8 @@ const operatorNotice = (value: unknown): string => {
 let flvPlayer: ReturnType<typeof mpegts.createPlayer> | null = null;
 let detachingFlightVideo = false;
 let flightPlaybackEpoch = 0;
+let desiredFlightPlayback = "off";
+let flightPlaybackRequest: { readonly identity: string; readonly epoch: number } | null = null;
 let monitorPlaybackEpoch = 0;
 let attachedUrl: string | null = null;
 let flvFatalStreak = 0;
@@ -609,6 +620,7 @@ let attachedAtMs = 0;
 let lastPaintAtMs = 0;
 let lastSeenCurrentTime = 0;
 let firstPlaybackFrameReported = false;
+const flightPlaybackProgress = createPlaybackProgress();
 let selectedPlaybackDeviceId: string | null = null;
 let pendingFlightConfirmation: FlightConfirmationIntent | null = null;
 let armedCommand: ArmedCommand | null = null;
@@ -619,6 +631,7 @@ let playbackWatchTimer: number | null = null;
 let lastLiveEdgeSeekAtMs = 0;
 const phoneLinkProbes = new Map<string, PhoneLinkProbeCacheEntry>();
 let phoneLinkProbeInFlightDeviceId: string | null = null;
+let pairingCommandInFlightDeviceId: string | null = null;
 
 const NO_FRAME_MS = 25_000;
 const STALL_MS = 12_000;
@@ -636,7 +649,8 @@ const clearFlvRecoverTimer = (): void => {
 };
 
 const isPainting = (video: HTMLVideoElement): boolean =>
-  video.videoWidth > 0 && !video.paused && Number.isFinite(video.currentTime) && video.currentTime > 0;
+  video.videoWidth > 0 && !video.paused && Number.isFinite(video.currentTime) && video.currentTime > 0 &&
+  (typeof video.getVideoPlaybackQuality !== "function" || video.getVideoPlaybackQuality().totalVideoFrames > 1);
 
 const clearVideoPlayRetry = (): void => {
   if (videoPlayRetryTimer === null) return;
@@ -710,12 +724,14 @@ const detachVideo = (): void => {
   attachedAtMs = 0;
   lastPaintAtMs = 0;
   lastSeenCurrentTime = 0;
+  flightPlaybackProgress.reset();
   firstPlaybackFrameReported = false;
   lastLiveEdgeSeekAtMs = 0;
   selectedPlaybackDeviceId = null;
   video.removeAttribute("src");
   video.srcObject = null;
   video.load();
+  showPlaybackHealth("");
   } finally {
     detachingFlightVideo = false;
   }
@@ -747,6 +763,7 @@ const startPlaybackWatch = (video: HTMLVideoElement): void => {
   stopPlaybackWatch();
   playbackWatchTimer = window.setInterval(() => {
     watchPlaybackStall(video);
+    reportPlaybackHealth(video);
   }, PLAYBACK_WATCH_MS);
 };
 
@@ -785,11 +802,11 @@ const recoverStuckFlv = (video: HTMLVideoElement, url: string, reason: string): 
   if (flvRecoverTimer !== null) return;
   flvFatalStreak += 1;
   if (flvFatalStreak <= 3 && softReloadFlv(video)) {
-    show(`${reason}，正在自动恢复…`);
+    showPlaybackHealth(`${reason}，正在自动恢复…`);
     return;
   }
-  show(`${reason}，正在重新连接…`);
   detachVideo();
+  showPlaybackHealth(`${reason}，正在重新连接…`);
   scheduleFlvReattach(url);
 };
 
@@ -806,8 +823,11 @@ const notePaintProgress = (video: HTMLVideoElement): void => {
   if (!isPainting(video)) return;
   recordFirstPlaybackFrame(video);
   const current = video.currentTime;
-  if (lastPaintAtMs === 0 || Math.abs(current - lastSeenCurrentTime) >= 0.05) {
-    lastPaintAtMs = Date.now();
+  const now = Date.now();
+  const frames = typeof video.getVideoPlaybackQuality === "function" ? video.getVideoPlaybackQuality().totalVideoFrames : null;
+  const progressAt = flightPlaybackProgress.observe(now, current, frames);
+  if (progressAt !== lastPaintAtMs) {
+    lastPaintAtMs = progressAt;
     lastSeenCurrentTime = current;
     flvFatalStreak = 0;
   }
@@ -834,11 +854,15 @@ const reportPlaybackHealth = (video: HTMLVideoElement): void => {
   lastPlaybackHealthAt = now;
   notePaintProgress(video);
   if (isPainting(video)) {
-    show(video.videoWidth > 0 ? `图传正常播放中（${video.videoWidth}×${video.videoHeight}）` : "图传正常播放中");
+    if (lastPaintAtMs > 0 && now - lastPaintAtMs > STALL_MS) {
+      showPlaybackHealth("图传画面停住，正在自动恢复…");
+      return;
+    }
+    showPlaybackHealth(video.videoWidth > 0 ? `图传正常播放中（${video.videoWidth}×${video.videoHeight}）` : "图传正常播放中");
     return;
   }
   if (attachedUrl !== null && flvPlayer !== null) {
-    show("图传已启动，正在等待画面…若长时间无画面请点「停止图传」后重试");
+    showPlaybackHealth("图传已启动，正在等待画面…若长时间无画面请点「停止图传」后重试");
   }
 };
 
@@ -869,7 +893,7 @@ const attachVideo = (url: string): void => {
   try {
     if (!url.includes(".flv") || !mpegts.isSupported()) {
       detachVideo();
-      show("当前电脑无法播放图传画面，请重启 Sky Command 后再试");
+      showPlaybackHealth("当前电脑无法播放图传画面，请重启 Sky Command 后再试");
       return;
     }
     flvPlayer = mpegts.createPlayer(
@@ -883,21 +907,16 @@ const attachVideo = (url: string): void => {
       const record = info !== null && typeof info === "object" ? info as Record<string, unknown> : null;
       const width = typeof record?.width === "number" ? record.width : 0;
       const height = typeof record?.height === "number" ? record.height : 0;
-      if (width > 0) show(`图传正在出画（${width}×${height}）`);
+      if (width > 0) showPlaybackHealth(`已收到视频信息（${width}×${height}），正在等待画面连续播放`);
     });
     flvPlayer.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
       if (detachingFlightVideo || state.workspace === "monitor") return;
       flvFatalStreak += 1;
       const retryUrl = attachedUrl;
-      void errorType;
-      void errorDetail;
+      console.warn("图传播放连接异常", errorType, errorDetail);
       if (retryUrl === null) return;
-      if (flvFatalStreak <= 3 && softReloadFlv(video)) {
-        show("图传画面无法解码，正在自动恢复…");
-        return;
-      }
-      show("图传画面无法解码，正在重新连接…");
       detachVideo();
+      showPlaybackHealth("图传播放连接尚未就绪，正在自动重连…");
       scheduleFlvReattach(retryUrl);
     });
     flvPlayer.attachMediaElement(video);
@@ -905,8 +924,10 @@ const attachVideo = (url: string): void => {
     play();
     startPlaybackWatch(video);
   } catch {
+    flvFatalStreak += 1;
     detachVideo();
-    show("图传播放器初始化失败，正在自动重试…");
+    showPlaybackHealth("图传播放器初始化失败，正在自动重试…");
+    scheduleFlvReattach(url);
   }
 };
 
@@ -935,31 +956,47 @@ const playbackUrl = (value: unknown): string | null => {
 };
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, signal?: AbortSignal): Promise<void> {
-  const epoch = ++flightPlaybackEpoch;
-  if (state.workspace === "monitor" || !view.playbackReady || view.streamDeviceId === null) {
+  if (state.workspace === "monitor" || !view.playbackReady || view.streamDeviceId === null || actionRequests.pending(view.streamDeviceId, "stream-stop")) {
+    if (desiredFlightPlayback !== "off") flightPlaybackEpoch += 1;
+    desiredFlightPlayback = "off";
+    flightPlaybackRequest = null;
     lastPlaybackIdentity = "off";
     if (attachedUrl !== null) detachVideo();
     return;
   }
   const identity = `on:${view.streamDeviceId}`;
+  if (identity !== desiredFlightPlayback) {
+    desiredFlightPlayback = identity;
+    flightPlaybackEpoch += 1;
+    flightPlaybackRequest = null;
+  }
+  if (flightPlaybackRequest?.identity === identity || flvRecoverTimer !== null) return;
   if (identity === lastPlaybackIdentity && attachedUrl !== null && flvPlayer !== null) return;
-  const playbackResult = await safeRenderInvoke("video-playback", { deviceId: view.streamDeviceId }, signal);
-  if (playbackResult === null || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
-  const url = playbackUrl(playbackResult);
-  if (url === null) return;
-  attachVideo(url);
-  if (epoch !== flightPlaybackEpoch || state.workspace === "monitor") {
-    detachVideo();
-    return;
+  const request = { identity, epoch: flightPlaybackEpoch };
+  const epoch = request.epoch;
+  flightPlaybackRequest = request;
+  signal ??= AbortSignal.timeout(5_000);
+  try {
+    const playbackResult = await safeRenderInvoke("video-playback", { deviceId: view.streamDeviceId }, signal);
+    if (playbackResult === null || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
+    const url = playbackUrl(playbackResult);
+    if (url === null) return;
+    attachVideo(url);
+    if (epoch !== flightPlaybackEpoch || state.workspace === "monitor") {
+      detachVideo();
+      return;
+    }
+    if (flvPlayer === null || attachedUrl !== url) return;
+    if (selectedPlaybackDeviceId !== view.streamDeviceId) {
+      const selected = unwrap(await safeRenderInvoke("stream-select", { deviceId: view.streamDeviceId }, signal));
+      if (!accepted(selected) || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
+      selectedPlaybackDeviceId = view.streamDeviceId;
+    }
+    lastPlaybackIdentity = identity;
+    watchPlaybackStall(el("video") as HTMLVideoElement);
+  } finally {
+    if (flightPlaybackRequest === request) flightPlaybackRequest = null;
   }
-  if (flvPlayer === null || attachedUrl !== url) return;
-  if (selectedPlaybackDeviceId !== view.streamDeviceId) {
-    const selected = unwrap(await safeRenderInvoke("stream-select", { deviceId: view.streamDeviceId }, signal));
-    if (!accepted(selected) || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
-    selectedPlaybackDeviceId = view.streamDeviceId;
-  }
-  lastPlaybackIdentity = identity;
-  watchPlaybackStall(el("video") as HTMLVideoElement);
 }
 
 type MonitorPlayer = {
@@ -1121,6 +1158,8 @@ const attachMonitorPlayer = (slot: number, deviceId: string, url: string): void 
 async function ensureMonitorPlayback(view: ReturnType<typeof OperatorConsole.project>): Promise<void> {
   const epoch = ++monitorPlaybackEpoch;
   flightPlaybackEpoch += 1;
+  desiredFlightPlayback = "off";
+  flightPlaybackRequest = null;
   if (attachedUrl !== null) detachVideo();
   const devices = monitorDevices(view);
   await Promise.all([0, 1, 2, 3].map(async (slot) => {
@@ -1561,7 +1600,7 @@ async function run(
   const connectionEpoch = feedbackDeviceEpoch(view, deviceId);
   if (!decision.ok) { blocked(action, decision.reason ?? "无法执行", deviceId, connectionEpoch); return; }
   if (action === "photo-capture") show("正在拍照");
-  if (action === "photo-fetch") show("正在回传照片，界面应保持可操作");
+  if (action === "photo-fetch") show("正在补传电脑上没有的照片，界面应保持可操作");
   let result: unknown;
   try {
     result = await bridge().invoke(invokeName, input);
@@ -1577,7 +1616,7 @@ async function run(
   }
   const feedback = captureFeedback(feedbackAction, deviceId, connectionEpoch, result);
   show(feedback.message);
-  await render();
+  try { await render(); } catch { /* preserve the command result when only the repaint fails */ }
 }
 
 function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
@@ -1605,6 +1644,16 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const measuring = inspectedDeviceId !== null && phoneLinkProbeInFlightDeviceId === inspectedDeviceId;
   measure.disabled = inspectedDeviceId === null || measuring;
   measure.title = inspectedDeviceId === null ? "请先选择已连接的手机" : measuring ? "正在测量手机连接" : "仅测量电脑与手机的 WebSocket 往返时间";
+  const pairingAvailability: string[] = [];
+  for (const action of ["pairing-start", "pairing-stop"] as const) {
+    const button = el(action) as HTMLButtonElement;
+    const decision = OperatorConsole.evaluate(action, view);
+    button.disabled = pairingCommandInFlightDeviceId !== null || !decision.ok;
+    button.title = pairingCommandInFlightDeviceId !== null ? "正在处理对频命令" : decision.ok ? action === "pairing-start" ? "让遥控器开始对频" : "结束当前对频" : decision.reason ?? "当前不可操作";
+    pairingAvailability.push(`${button.textContent}：${pairingCommandInFlightDeviceId !== null ? "正在处理对频命令" : decision.ok ? "可操作" : decision.reason ?? "当前不可操作"}`);
+    renderOperationFeedback(action, inspectedDeviceId, feedbackDeviceEpoch(view, inspectedDeviceId));
+  }
+  el("pairing-availability").textContent = pairingAvailability.join("；");
   const connection = inspected === undefined ? {} : inspected.connection as Record<string, unknown> ?? {};
   const msdk = msdkFact(connection);
   const pairing = pairingFact(connection);
@@ -1631,12 +1680,12 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
       <div class="connection-status-list" aria-label="设备信息">${deviceInformationRows(connection)}</div>
       <h3 class="device-status-heading">运行状态</h3>
       <div class="connection-status-list" aria-label="运行状态">${runtimeStatusRows(view, inspected, view.streamDeviceId)}</div>
-      <p class="muted">对频仅用于新增飞机或更换遥控器。这里只显示手机回报的结果。</p>`;
+      <p class="muted">对频仅用于新增飞机或更换遥控器。已绑定的飞机开机后会自动连接，飞控已连接时无需重新对频；对频状态不用于判断当前飞机是否已连接。命令完成后，请以手机回报的状态为准。</p>`;
   if (html !== lastDeviceDetailHtml) {
     el("device-detail").innerHTML = html;
     lastDeviceDetailHtml = html;
   }
-  el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在手机上开始对频。电脑关掉后，需要在手机上重新连接。`;
+  el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在这里开始对频。电脑关掉后，需要在手机上重新连接。`;
 }
 
 let routeMenuOpen = false;
@@ -1700,6 +1749,25 @@ function renderRoutes(view: ReturnType<typeof OperatorConsole.project>): void {
     : `${executableLabel} · 要飞这条航线需要 Wayline 导出的 KMZ`;
   el("route-executable").textContent = executableLabel;
   el("route-executable").classList.toggle("is-blocked", selected.executable !== true);
+}
+
+function renderActionRequests(view: ReturnType<typeof OperatorConsole.project>): void {
+  document.querySelectorAll<HTMLButtonElement>("button[data-action]").forEach(button => {
+    const action = button.dataset.action ?? "";
+    const deviceId = action.startsWith("stream-") || action.startsWith("photo-") ? view.streamDeviceId : view.missionDeviceId;
+    const reason = actionRequests.reason(deviceId, action);
+    if (reason === null) return;
+    button.disabled = true;
+    button.title = reason;
+    if (!actionRequests.pending(deviceId, action)) return;
+    const note = document.querySelector(`[data-operation-feedback="${action}"]`);
+    if (note instanceof HTMLElement) {
+      note.hidden = false;
+      note.textContent = "正在处理，请稍候";
+      note.dataset.feedbackSource = "desktop";
+      note.dataset.feedbackOutcome = "pending";
+    }
+  });
 }
 
 function renderMissionButtons(view: ReturnType<typeof OperatorConsole.project>): void {
@@ -2270,6 +2338,7 @@ const paintOnce = (): void => {
   try { renderRoutes(view); } catch (error) { console.error("[sky-render]", error); }
   try { renderFlight(view); } catch (error) { console.error("[sky-render]", error); }
   try { renderMonitor(view); } catch (error) { console.error("[sky-render]", error); }
+  renderActionRequests(view);
   try { applyRouteMap(view); } catch (error) { console.error("[sky-render]", error); }
   if (state.workspace === "monitor") void ensureMonitorPlayback(view);
   else {
@@ -2313,6 +2382,26 @@ document.querySelectorAll<HTMLButtonElement>("[data-flight-panel]").forEach((but
     void render();
   });
 });
+
+for (const action of ["pairing-start", "pairing-stop"] as const) {
+  el(action).addEventListener("click", async () => {
+    const view = projectCached();
+    const deviceId = view.missionDeviceId;
+    if (deviceId === null || pairingCommandInFlightDeviceId !== null) return;
+    pairingCommandInFlightDeviceId = deviceId;
+    try {
+      show(action === "pairing-start" ? "正在请求开始对频" : "正在请求停止对频");
+      void render().catch(() => undefined);
+      await run(action, action, { deviceId }, view);
+    } catch {
+      show("对频操作结果尚未确认，请查看设备状态后再操作");
+    } finally {
+      pairingCommandInFlightDeviceId = null;
+      void snapshotRefresh.request();
+      try { await render(); } catch { /* a later snapshot can repaint the released buttons */ }
+    }
+  });
+}
 
 el("device-refresh").addEventListener("click", async () => {
   const view = await projectView();
@@ -2626,12 +2715,15 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-photo]").forEach((bu
       show(`${callSign(deviceId)}：${decision.reason ?? "当前状态不允许此操作"}`);
       return;
     }
+    const photoReservation = actionRequests.reserve(deviceId, "photo-fetch");
+    if (!photoReservation.ok) { show(photoReservation.reason); return; }
+    renderActionRequests(view);
     monitorPhotoBusy.add(deviceId);
     button.disabled = true;
-    monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在回传照片，界面应保持可操作" });
+    monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在补传电脑上没有的照片，界面应保持可操作" });
     monitorRailDeviceId = deviceId;
     monitorRailKind = "photo";
-    show(`${callSign(deviceId)}：正在回传照片，界面应保持可操作`);
+    show(`${callSign(deviceId)}：正在补传电脑上没有的照片，界面应保持可操作`);
     try { await render(); } catch { /* the transfer still runs */ }
     try {
       const result = await bridge().invoke("photo-fetch", { deviceId });
@@ -2643,6 +2735,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-photo]").forEach((bu
       monitorPhotoProgress.set(deviceId, { state: "failed", detail: "暂时无法完成，请稍后重试" });
       show(`${callSign(deviceId)}：暂时无法完成，请稍后重试`);
     } finally {
+      photoReservation.release();
       monitorPhotoBusy.delete(deviceId);
       try { await render(); } catch { /* the button state is redrawn on the next snapshot */ }
     }
@@ -2836,6 +2929,9 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-stream]").forEach((b
       try { await render(); } catch { /* the button stays clickable */ }
       return;
     }
+    const streamReservation = actionRequests.reserve(deviceId, mode === "start" ? "stream-start" : "stream-stop");
+    if (!streamReservation.ok) { show(streamReservation.reason); return; }
+    renderActionRequests(view);
     const clickReminder = mode === "start"
       ? FlightControllerVideoHint.evaluate({
         hasConnectedOnce: read(connectionOf(device), "flightControllerHasConnectedOnce"),
@@ -2885,6 +2981,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-stream]").forEach((b
       monitorStreamProgress.set(deviceId, { state: "failed", detail: "暂时无法完成，请稍后重试" });
       show(`${callSign(deviceId)}：暂时无法完成，请稍后重试`);
     } finally {
+      streamReservation.release();
       monitorStreamBusy.delete(deviceId);
       try { await render(); } catch { /* the button state is redrawn on the next snapshot */ }
     }
@@ -2903,82 +3000,95 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-stream]").forEach((b
       renderMissionStartConfirmationFallback();
       return;
     }
-    const armDecision = interpretArmClick(armedCommand, action, Date.now());
-    if (isArmableAction(action)) {
-      if (armDecision.kind === "ignore") return;
-      if (armDecision.kind === "confirm") {
-        const dispatch = flightConfirmDispatch(pendingFlightConfirmation, {
-          deviceId: view.missionDeviceId,
+    const requestDeviceId = action.startsWith("stream-") || action.startsWith("photo-") ? view.streamDeviceId : view.missionDeviceId;
+    const reservation = actionRequests.reserve(requestDeviceId, action);
+    if (!reservation.ok) { show(reservation.reason); return; }
+    renderActionRequests(view);
+    try {
+      const armDecision = interpretArmClick(armedCommand, action, Date.now());
+      if (isArmableAction(action)) {
+        if (armDecision.kind === "ignore") return;
+        if (armDecision.kind === "confirm") {
+          const dispatch = flightConfirmDispatch(pendingFlightConfirmation, {
+            deviceId: view.missionDeviceId,
+            uiAction: action,
+            nowMs: Date.now(),
+          });
+          if (dispatch.kind === "wait") return;
+          armedCommand = null;
+          clearArmTimer();
+          await run("flight-confirm", "flight-confirm", { deviceId: dispatch.confirmation.deviceId, confirmationId: dispatch.confirmation.confirmationId }, undefined, action);
+          return;
+        }
+        if (armDecision.kind !== "arm") return;
+        if (armedCommand !== null && armedCommand.action !== action) await cancelArmedBackend();
+        armedCommand = armDecision.next;
+        await run(action, "flight-request", { deviceId: view.missionDeviceId, action: action.replace("flight-", "") }, view);
+        if (!confirmationMatchesClick(pendingFlightConfirmation, { deviceId: view.missionDeviceId, uiAction: action, nowMs: Date.now() })) {
+          armedCommand = null;
+          clearArmTimer();
+        } else scheduleArmExpiry();
+        return;
+      }
+      if (armedCommand !== null) {
+        await cancelArmedBackend();
+        armedCommand = null;
+        clearArmTimer();
+      }
+      const streamAction = action.startsWith("stream-") || action.startsWith("photo-");
+      const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
+      if (action === "stream-select") {
+        await run(action, "stream-select", { deviceId }, view);
+        show("图传已选中，等待本页出画");
+        return;
+      }
+      if (action === "stream-stop") detachVideo();
+      const names: Record<string, string> = {
+        "mission-stage": "mission-stage",
+        "mission-upload": "mission-upload",
+        "mission-start": "mission-start",
+        "mission-pause": "mission-pause",
+        "mission-resume": "mission-resume",
+        "mission-stop": "mission-stop",
+        "stream-start": "stream-start",
+        "stream-stop": "stream-stop",
+        "photo-capture": "photo-capture",
+        "photo-fetch": "photo-fetch",
+        "flight-confirm-landing": "flight-request",
+        "flight-stop-takeoff": "flight-request",
+        "flight-stop-auto-landing": "flight-request",
+      };
+      const invokeName = names[action];
+      if (invokeName === undefined) return;
+      const input = invokeName === "flight-request"
+        ? { deviceId, action: action.replace("flight-", "") }
+        : { deviceId };
+      if (action === "mission-stage" && view.selectedRoute !== null && deviceId !== null) {
+        const assigned = unwrap(await bridge().invoke("assignment-assign", { deviceId, routeId: view.selectedRoute.routeId }));
+        if (!accepted(assigned)) {
+          blocked("assignment-assign", "航线未能赋给所选手机，未开始传输", deviceId, feedbackDeviceEpoch(view, deviceId));
+          return;
+        }
+      }
+      const previousConfirmationId = pendingFlightConfirmation?.confirmationId ?? null;
+      await run(action, invokeName, input, view);
+      if (isSameClickFlightConfirm(action)) {
+        const dispatch = sameClickConfirmDispatch(pendingFlightConfirmation, previousConfirmationId, {
+          deviceId,
           uiAction: action,
           nowMs: Date.now(),
         });
-        if (dispatch.kind === "wait") return;
-        armedCommand = null;
-        clearArmTimer();
-        await run("flight-confirm", "flight-confirm", { deviceId: dispatch.confirmation.deviceId, confirmationId: dispatch.confirmation.confirmationId }, undefined, action);
-        return;
+        if (dispatch.kind === "dispatch") {
+          await run("flight-confirm", "flight-confirm", { deviceId: dispatch.confirmation.deviceId, confirmationId: dispatch.confirmation.confirmationId }, undefined, action);
+        }
       }
-      if (armDecision.kind !== "arm") return;
-      if (armedCommand !== null && armedCommand.action !== action) await cancelArmedBackend();
-      armedCommand = armDecision.next;
-      await run(action, "flight-request", { deviceId: view.missionDeviceId, action: action.replace("flight-", "") }, view);
-      if (!confirmationMatchesClick(pendingFlightConfirmation, { deviceId: view.missionDeviceId, uiAction: action, nowMs: Date.now() })) {
-        armedCommand = null;
-        clearArmTimer();
-      } else scheduleArmExpiry();
-      return;
-    }
-    if (armedCommand !== null) {
-      await cancelArmedBackend();
-      armedCommand = null;
-      clearArmTimer();
-    }
-    const streamAction = action.startsWith("stream-") || action.startsWith("photo-");
-    const deviceId = streamAction ? view.streamDeviceId : view.missionDeviceId;
-    if (action === "stream-select") {
-      await run(action, "stream-select", { deviceId }, view);
-      show("图传已选中，等待本页出画");
-      return;
-    }
-    if (action === "stream-stop") detachVideo();
-    const names: Record<string, string> = {
-      "mission-stage": "mission-stage",
-      "mission-upload": "mission-upload",
-      "mission-start": "mission-start",
-      "mission-pause": "mission-pause",
-      "mission-resume": "mission-resume",
-      "mission-stop": "mission-stop",
-      "stream-start": "stream-start",
-      "stream-stop": "stream-stop",
-      "photo-capture": "photo-capture",
-      "photo-fetch": "photo-fetch",
-      "flight-confirm-landing": "flight-request",
-      "flight-stop-takeoff": "flight-request",
-      "flight-stop-auto-landing": "flight-request",
-    };
-    const invokeName = names[action];
-    if (invokeName === undefined) return;
-    const input = invokeName === "flight-request"
-      ? { deviceId, action: action.replace("flight-", "") }
-      : { deviceId };
-    if (action === "mission-stage" && view.selectedRoute !== null && deviceId !== null) {
-      const assigned = unwrap(await bridge().invoke("assignment-assign", { deviceId, routeId: view.selectedRoute.routeId }));
-      if (!accepted(assigned)) {
-        blocked("assignment-assign", "航线未能赋给所选手机，未开始传输", deviceId, feedbackDeviceEpoch(view, deviceId));
-        return;
-      }
-    }
-    const previousConfirmationId = pendingFlightConfirmation?.confirmationId ?? null;
-    await run(action, invokeName, input, view);
-    if (isSameClickFlightConfirm(action)) {
-      const dispatch = sameClickConfirmDispatch(pendingFlightConfirmation, previousConfirmationId, {
-        deviceId,
-        uiAction: action,
-        nowMs: Date.now(),
-      });
-      if (dispatch.kind === "dispatch") {
-        await run("flight-confirm", "flight-confirm", { deviceId: dispatch.confirmation.deviceId, confirmationId: dispatch.confirmation.confirmationId }, undefined, action);
-      }
+    } catch {
+      show("操作结果尚未确认，请查看设备状态后再操作");
+    } finally {
+      reservation.release();
+      // Background refresh may keep coalescing while the network is slow; it is not a command receipt.
+      void snapshotRefresh.request();
+      try { await render(); } catch { /* a later background refresh can repaint the released buttons */ }
     }
   });
 });

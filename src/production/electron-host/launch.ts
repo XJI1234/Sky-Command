@@ -164,6 +164,8 @@ async function launch(): Promise<void> {
           show: true,
           webPreferences: {
             preload: preloadPath,
+            // Live video and its recovery timers must keep running behind other windows.
+            backgroundThrottling: false,
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true,
