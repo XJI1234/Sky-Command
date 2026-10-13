@@ -1,6 +1,6 @@
 # 本次任务进度与待办
 
-更新日期：2026-10-13。当前阶段：正式电脑公告与手机纯 JVM 公告解析/候选核心已实现并通过自动化测试；Android 自动连接接线及全链路实机验收尚未完成。
+更新日期：2026-10-13。当前阶段：正式电脑公告、手机纯 JVM 公告解析/候选核心与 gateway/session 连接选择 API 已实现并通过自动化测试；Android 自动连接接线及全链路实机验收尚未完成。
 
 ## 已完成：开发环境基线
 
@@ -38,10 +38,11 @@
 - [ ] 补充 Wi-Fi 重连、跨 AP、电脑 IP 变化和多手机场景；当前单地点前台结果不能替代这些验证。
 - [x] 确定公告 v1、512 字节、UDP 39082、1 秒双广播、3 秒观察/8 秒过期与身份/候选规则，见 WIRE-PROTOCOL.md。
 - [x] 确认后台/锁屏与划掉任务卡片的行为、隐藏调试入口及连接耗时目标。
-- [x] 核对正式手机源码并确定无地址授权、前台运行容器唯一归属、网络代次、只切换 session 的设计方向；相关模块契约/API 待扩展，见 DESIGN.md 和手机 IMPLEMENTATION.md。
+- [x] 核对正式手机源码并确定无地址授权、前台运行容器唯一归属、网络代次、只切换 session 的设计方向；session API 已完成，权限与前台容器契约/接线待扩展，见 DESIGN.md 和手机 IMPLEMENTATION.md。
 - [x] 更新 electron-host 与 relay-discovery 契约并实现正式电脑周期公告、持久身份、网卡刷新、失败重试及退出清理。
 - [x] 实现手机纯 JVM 公告解析/候选核心；严格字段/来源校验、观察/过期、冲突与容量恢复、ACTIVE 保持和网络/选择令牌隔离通过 34 项测试。
-- [ ] 扩展 gateway/session、权限与前台运行契约，接入正式 Android 监听及自动连接。
+- [x] 扩展 gateway/session 契约/API：可选初始地址、暂停旧目标重试、串行替换、稳定选择身份、ACTIVE 前同步门禁与结束代次通知；自动化回归和 App Kotlin 编译通过。
+- [ ] 定义并验证发现到 session 的运行桥接、无地址权限与前台运行契约，接入正式 Android 监听及自动连接。
 - [ ] 调整手机界面并与对频迁移分支协调。
 - [ ] 验证手机先开、电脑先开、电脑重启、IP 变化、多手机、Wi-Fi 切换和锁屏。
 - [ ] 分仓库提交中文变更与验证结果；最终推送开发分支并整理 PR。
@@ -90,4 +91,12 @@
 - 调用电脑现有 encodeAnnouncement，输出与手机 relay-discovery/src/test/resources/announcement-v1.json 逐字比对一致，随后 JVM 使用该样例解析。初次 Gradle 缓存锁及 tsx 子进程被沙箱拒绝，按权限机制在沙箱外验证成功；没有下载/重装依赖。
 - build/ 下 JAR 与测试报告保持忽略；未构建/安装新 APK、没有正式校园 UDP 39082 收包或后台/多手机/15 秒验收，不把核心通过等同于自动连接完成。
 
-下次接续：先读 TASK.md、DESIGN.md、WIRE-PROTOCOL.md、NETWORK-RESULTS.md 和本文；下一步扩展 gateway/session 契约与 API，协调未选地址、暂停重试及串行替换 endpoint，再接入 Android 监听、无地址权限/前台运行容器。按 BROADCAST-TEST.md 补齐现场网络场景，不把核心测试或探针当成正式功能验收。
+## 2026-10-13 会话连接选择 API 推进记录
+
+- 对应手机源码提交：MSDK-Relay `494ffb4`（feat: 支持会话连接选择与无地址等待），位于 dev/local-startup-20261012；本仓库同步 TASK/DESIGN/PROGRESS 与共享协议。
+- 手机 gateway/session 完成可选初始 endpoint、稳定 ConnectionSelection 身份、selectConnection 暂停/替换及 connectionSnapshot。相同选择不重置指数退避；null 等待期间无 transport/定时器，stop 撤销运行意图；切换仅清理会话，保留命令注册与业务对象。
+- 合法 paired 在 ACTIVE 前执行同步本地门禁，拒绝/异常即清理、撤销选择且不交付业务帧；获准时提供实际 generation，结束事件携带 endedGeneration，覆盖同一选择重连后迟到旧通知。MobileRelayGraph 仅补新结束原因的诊断文字，未调整生命周期、飞行、航线或对频业务。
+- 新增 21 项连接选择测试和 4 项 gateway 测试；最终 8 模块报告共 167 项，零失败/错误/跳过：session 69、gateway 10、transport 14、command 13、mission 14、outbound 10、discovery 34、endpoint-settings 3。本轮重跑前 6 模块 130 项，后 2 模块 37 项 UP-TO-DATE；`:app:compileDebugKotlin` 和差异格式检查通过，离线使用既有依赖，报告/缓存保持忽略。
+- 正式 App 尚未接入发现选择映射、UDP 或无地址前台运行容器；未构建/安装 APK，未做正式校园 39082 收包、后台/锁屏、2 手机/2 无人机或 15 秒验收。本轮没有推送 GitHub。
+
+下次接续：先读 TASK.md、DESIGN.md、WIRE-PROTOCOL.md、NETWORK-RESULTS.md 和本文；下一步定义运行容器与发现到 session 的桥接契约，验证同步门禁/异步结束通知及锁顺序，再接入 Android 监听、无地址权限/前台运行容器。按 BROADCAST-TEST.md 补齐现场网络场景，不把 API 测试或探针当成正式功能验收。

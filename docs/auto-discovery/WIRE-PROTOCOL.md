@@ -44,8 +44,8 @@
 - ACTIVE 时固定当前电脑和 endpoint。重复公告、第二台电脑、新 instanceId 或公告过期都不打断健康会话；握手成功才算已连接。
 - 尚未 ACTIVE 的连接尝试遇到候选冲突/过期也必须暂停并清理代次；不能先连接成功再忽略已经观察到的冲突。收到合法 paired 与冲突事件的竞态按协调器串行事件顺序处理。
 - 丢失 ACTIVE 后先清理旧代次。若候选冲突或无存活候选，暂停旧 endpoint 的自动重试并等待；唯一候选通过观察窗口后才启用/更新 endpoint。相同 endpoint 的连接失败沿用现有 1/2/4/8/16/30 秒退避；重复公告不调用 start、不重置退避。
-- endpoint 更新、暂停重试必须在线性化的 connection-session 事件序列中执行，并保留旧代次隔离、命令/传输清理与单一连接约束。这是下一阶段需要补齐的 gateway/session 契约扩展，当前 API 不具备此能力；不能用关闭并重建 MobileRelayGraph 代替。
-- 手机核心输出稳定的选择令牌；重复包不换令牌，候选/endpoint 替换、冲突、过期或未 ACTIVE 时网络切换均使旧令牌失效。合法 paired 须使用对应连接开始时捕获的令牌激活；旧令牌激活失败须清理该会话，不能把旧 paired 标为成功。ACTIVE 的旧断线回调只可结束匹配令牌的活动连接。这些令牌是内存事件身份，不改变 WS 帧、不提供认证。
+- endpoint 更新、暂停重试必须在线性化的 connection-session 事件序列中执行，并保留旧代次隔离、命令/传输清理与单一连接约束。gateway/session 已实现 selectConnection(ConnectionSelection?)，同一选择幂等/null 暂停/新选择串行替换；运行容器映射尚未接线，不能用关闭并重建 MobileRelayGraph 代替。
+- 手机核心输出稳定的选择令牌；重复包不换令牌，候选/endpoint 替换、冲突、过期或未 ACTIVE 时网络切换均使旧令牌失效。合法 paired 须在同步 SessionPairingAdmission.admit(selection, generation) 中按连接选择映射到对应发现令牌激活；旧令牌激活失败须清理该会话，不能把旧 paired 标为成功或等异步状态通知后才拒绝业务。桥接记录获准代次，异步 endedGeneration 只可结束匹配代次及令牌的活动连接；同一选择自动重连可有多个代次，仅比较选择令牌不足以隔离旧结束通知。这些令牌是内存事件身份，不改变 WS 帧、不提供认证；session API 已实现，桥接待接线。
 - Wi-Fi 切换清空旧网络候选、关闭旧监听、使旧回调失效；在新 Wi-Fi 网络重新绑定监听并进入观察。健康会话不因单纯重复网络通知重建；实际网络丢失后由 transport 结束会话。
 
 ## 实现验证与实机验收
