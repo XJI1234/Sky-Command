@@ -1,6 +1,6 @@
 # 自动发现与连接：第一阶段最小方案设计
 
-更新日期：2026-10-13。方案级别：最小方案（MVP）。状态：电脑公告器已实现并接入正式宿主，通过自动化测试；手机正式实现及现场场景仍待实施/验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
+更新日期：2026-10-13。方案级别：最小方案（MVP）。状态：电脑公告器已接入正式宿主，手机纯 JVM 解析/候选核心已完成，均通过自动化测试；Android 监听/会话/服务接线及现场场景仍待实施/验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
 
 ## 已确定的业务行为
 
@@ -26,6 +26,8 @@
 5. 划掉任务卡片不停止服务（清单保持 stopWithTask=false），空 intent 不重建缺失业务图或伪造 RUNNING；进程杀死后再次打开按正常流程恢复。隐藏手动模式显式进入/退出，手动模式暂停自动选择；旧保存地址不覆盖自动发现。
 
 源码已核对 MainActivity、RelayRuntimeHolder、MobileRelayGraph、RelayBootstrapModule 和 RelayForegroundService；以上是接线方向，不表示服务对象归属或 endpoint 热更新 API 已实现。实施检查表见手机仓库 docs/auto-discovery/IMPLEMENTATION.md。
+
+2026-10-13 手机核心已实现为独立纯 JVM `:relay-discovery`（契约位于手机仓库同名模块）。严格解析合法公告并按单调时间选择候选；输出稳定选择令牌，使用网络令牌隔离旧监听，ACTIVE 目标不因候选变化重选。容量限制 32 候选/每候选 8 地址，溢出时停止刷新并隔离 8 秒后从新包重新观察。未来运行容器每秒调用 snapshot，并将选择与 paired/断线事件串行接线；核心不拥有 socket、会话退避或 DJI，未被 app 依赖，不能宣称正式手机已自动连接。
 
 - 授权后的日常路径是打开 App 自动运行；切到后台或锁屏后由前台服务维持运行，保留 Android 要求的通知。
 - 用户已确认划掉任务卡片后仍应运行，电脑退出后仍继续等待；此要求必须在正式 Relay 中实机验收，独立前台探针不覆盖。
