@@ -1,5 +1,6 @@
 import { mkdirSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
@@ -11,6 +12,7 @@ import { createMediaPorts } from "./media-ports.js";
 import { IncidentJournal, mediaLogger, watchApplication, wrapGateway, wrapPhoneDiagnostics } from "./incident-journal.js";
 import { runtimeDataPaths } from "./runtime-paths.js";
 import { shutdownDesktopHost } from "./shutdown-sequence.js";
+import { createRelayDiscovery, loadOrCreateServerId } from "../relay-discovery/index.js";
 import { forgetRouteFile, importedRouteSha256, invocationFailed, loadRouteFiles, rememberRouteFile, routeSha256 } from "./route-files.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -19,6 +21,8 @@ const rendererFile = [join(projectRoot, "dist/renderer/index.html"), join(projec
 const rendererEntry = pathToFileURL(rendererFile).href;
 const preloadPath = [join(projectRoot, "electron/preload.cjs"), join(projectRoot, "src/production/electron-host/preload.cjs")].find((path) => existsSync(path)) ?? join(projectRoot, "electron/preload.cjs");
 const relayPort = 8_080;
+let stopDiscovery = (): void => undefined;
+app.on("before-quit", () => stopDiscovery());
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 const log = (path: string, message: string): void => {
@@ -141,6 +145,16 @@ async function launch(): Promise<void> {
     throw new Error(detail);
   }
   watchApplication(created.value, journal);
+  try {
+    const discovery = createRelayDiscovery(loadOrCreateServerId(app.getPath("userData")), randomUUID(), relayPort, {
+      diagnostic: (code) => journal.record({ link: "phone-pc", level: "WARN", event: code, detail: "Relay discovery is waiting or retrying" }),
+    });
+    stopDiscovery = discovery.stop;
+    discovery.start();
+  } catch {
+    stopDiscovery();
+    journal.record({ link: "phone-pc", level: "WARN", event: "DISCOVERY_START_FAILED", detail: "Relay discovery could not start; manual connection remains available" });
+  }
   const workflow = created.value.workflow();
   for (const saved of loadRouteFiles(routesRoot)) {
     try { await workflow.importRoute({ fileName: saved.fileName, bytes: saved.bytes }); } catch { /* a damaged copy stays on disk */ }
@@ -153,7 +167,7 @@ async function launch(): Promise<void> {
     applicationGateway: gateway,
     lifecycle: {
       acquire: () => true,
-      release: () => { void created.value.dispose(); },
+      release: () => { stopDiscovery(); void created.value.dispose(); },
     },
     window: {
       create: (csp: string) => {
@@ -227,6 +241,7 @@ async function launch(): Promise<void> {
   app.on("window-all-closed", () => {
     if (shutdownStarted) return;
     shutdownStarted = true;
+    stopDiscovery();
     void shutdownDesktopHost({
       disposeShell: shell.dispose,
       disposeApplication: created.value.dispose,
@@ -250,6 +265,7 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", focusPrimaryWindow);
   app.whenReady().then(() => launch()).catch((error: unknown) => {
+    stopDiscovery();
     const { logPath } = runtimeDataPaths(app.getPath("userData"));
     log(logPath, error instanceof Error ? error.stack ?? error.message : String(error));
     console.error(error);

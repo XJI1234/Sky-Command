@@ -31,6 +31,10 @@ npm run build
 
 ## Git 协作
 
+2026-10-13 起，重新构建后的正式宿主在服务就绪后每秒通过 WLAN 公告 UDP 39082，退出时自动停止；不需要另起发送脚本。39081 仍只供网络探针使用。稳定电脑身份自动保存在应用 userData 的 discovery-server-id，不填写硬件标识或密钥；无 WLAN 或公告失败时原手动连接仍可用。手机正式接线尚未完成，当前 Relay 仍使用手动地址流程。
+
+电脑公告与宿主回归检查运行 `npm test -- --config vitest.discovery.config.ts`，该配置不构建不相关的 Android harness。协议、验证范围和下一步见 docs/auto-discovery/PROGRESS.md。
+
 本次分支基于原始 main 提交 `d13bb23`。后续修改在开发分支中完成并提交记录。分享时推送开发分支，通过 Pull Request 由维护者决定是否合并；main 保留原始提交。本机路径、DJI Key、无线调试配对码、运行日志及依赖产物不放入提交。
 
 提交标题采用 `fix: 中文摘要`、`feat: 中文摘要`、`docs: 中文摘要` 等格式；正文以中文写清问题或目的、具体改动、验证结果与未验证范围。每个提交围绕一个明确目的；已推送的提交不擅自改写。

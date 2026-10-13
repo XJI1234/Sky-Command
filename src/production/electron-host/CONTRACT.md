@@ -1,5 +1,9 @@
 # Electron 宿主
 
+## 局域网自动发现公告
+
+DesktopApplication.start 成功后装配 relay-discovery，每秒从实际 WLAN IPv4 向定向广播和有限广播的 UDP 39082 发 v1 公告；网卡筛选独立于既有手动地址/图传选卡。身份写在 userData，禁止写入项目/ASAR。无 WLAN 或公告失败只诊断并等待，不阻断手动连接。关闭窗口、before-quit、外壳释放及启动异常时先幂等停止公告，再沿用既有业务退出顺序，不新增飞行指令。公告格式见 docs/auto-discovery/WIRE-PROTOCOL.md，资源所有权见 relay-discovery/CONTRACT.md。
+
 状态：窗口装配已接线；RTMP 19500 收流后由本机过滤 HTTP-FLV（18080）供飞行页 mpegts.js 播放。每次图传启动优先使用该手机 WebSocket 实际接入的桌面 IPv4；缺失时才取当前首选网卡，绝不复用启动时已失效的网卡地址。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。手机 DJI 操作超时为 30s，超时会回 `command-result`，操作台应在约 30s 看到失败；120s 只覆盖手机无应答或排队中的遗留 DJI 调用。图传收流等待 20s，推流开始后即可标记播放就绪。
 
 启动方式与 `MSDK-upgraded` 对齐：
