@@ -4,6 +4,8 @@
 
 ## 已完成：开发环境基线
 
+2026-10-14 新完成设计阶段：配套 Relay `efb6b38` 新增 RUNTIME-CONTRACT.md，明确唯一进程容器/applicationContext、Activity detach、无地址权限恢复、AUTO/MANUAL 独占及稳定门禁、schema 1 和停止收敛。已交叉核对入口及权限/服务平台源码；发现 Activity 强引用与服务非预期销毁缺少 failed，列为待修复。此阶段仅文档，未运行新测试或构建/安装 APK；已有 142 项报告不作为接线证据。下一步实现独立 Android Wi-Fi 接收适配器，随后容器/UI/实机验收。
+
 - [x] 三个仓库已克隆并保留各自原始 main。
 - [x] Sky Command 依赖安装、构建、独立启动已完成。
 - [x] 修复 RTMP 握手前断开导致主进程崩溃；实际重试检查通过。

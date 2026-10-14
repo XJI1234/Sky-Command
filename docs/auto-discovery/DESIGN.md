@@ -43,6 +43,8 @@
 
 ## 实施与验证边界
 
+2026-10-14 运行接线契约已收敛到配套 Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`（待实施）：AppRuntime 保持权限→服务→bootstrap 顺序，唯一进程容器使用 applicationContext，UI 按宿主 attach/detach；无地址使用稳定身份启动，USB 不阻塞发现。稳定门禁路由器与串行连接控制器独占 gateway，MANUAL 先关闭旧桥接/来源再选择手动地址，返回 AUTO 新建桥接并重新观察；地址/模式改变均保留整个业务 graph，schema 1 不变。停止先禁用来源/门禁，再等 STOPPING 收敛后释放 graph/端口。源码审计发现权限平台尚无 detach、服务非预期 onDestroy 尚未报告 failed，接线时修复；空 intent 不恢复缺失业务图。下一步独立实现 Android 网络接收适配器，再接容器与界面。
+
 | 边界 | 当前状态 / 建议 |
 | --- | --- |
 | 校园广播送达 | 当前位置两类广播均可达且明显丢包；单播和 WebSocket 握手通过，见 NETWORK-RESULTS.md；重连 Wi-Fi、跨 AP 等未测 |

@@ -52,6 +52,8 @@
 
 ## 文档入口
 
+2026-10-14：手机运行容器、无地址权限流程、AUTO/MANUAL 独占控制与停止收敛契约已确定，见配套 MSDK-Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`。此项为设计完成，正式 Android 接收/容器/UI 待实现，后台及 15 秒目标仍未验收。
+
 - [当前最小方案与待决策项](DESIGN.md)
 - [双端公告 v1 协议与候选规则](WIRE-PROTOCOL.md)
 - [已完成、待完成和验证证据](PROGRESS.md)
