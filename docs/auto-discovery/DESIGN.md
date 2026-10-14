@@ -1,6 +1,6 @@
 # 自动发现与连接：第一阶段最小方案设计
 
-更新日期：2026-10-14。方案级别：最小方案（MVP）。状态：电脑公告器已接入正式宿主，手机纯 JVM 解析/候选核心、gateway/session 连接选择 API 与独立桥接已完成，均通过自动化测试；独立 Android WLAN 接收适配器已实现并测试，正式 App 权限/前台运行容器接线及现场场景仍待实施/验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
+更新日期：2026-10-14。方案级别：最小方案（MVP）。状态：电脑公告器已接入正式宿主，手机纯 JVM 解析/候选核心、gateway/session 连接选择 API 与独立桥接已完成，均通过自动化测试；独立 Android WLAN 接收适配器已实现并测试，正式 App 权限/前台进程容器、自动连接及隐藏调试界面已接线并通过测试/编译/打包；现场场景仍待验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
 
 ## 已确定的业务行为
 
@@ -12,12 +12,12 @@
 2. 手机在 App 打开后启动发现监听。首次所需权限由系统询问，拒绝时显示状态；授权完成后自动继续。
 3. 收到符合协议的公告，结合 UDP 来源地址及公告中的服务端口/路径，生成现有格式 `ws://<电脑IPv4>:8080/relay`。路径与端口校验后才能交给现有连接模块。
 4. 复用 `hello / paired` 及既有会话机制；只有 WebSocket 握手成功才算连接完成，收到广播本身不是连接成功。
-5. 未连接时观察 3 秒，唯一候选才连接，多候选冲突等待，8 秒未收到的 endpoint 过期；已连接保持当前电脑。相同 endpoint 失败沿用现有退避，重复公告不重置退避；无候选/冲突时暂停旧地址重试。gateway/session API 与独立桥接已实现，正式 App 仍待接线。
+5. 未连接时观察 3 秒，唯一候选才连接，多候选冲突等待，8 秒未收到的 endpoint 过期；已连接保持当前电脑。相同 endpoint 失败沿用现有退避，重复公告不重置退避；无候选/冲突时暂停旧地址重试。gateway/session API 与桥接已接入正式 App，实机待验收。
 6. 电脑离线时低频等待。重新连通后同步状态，不重新执行旧命令或续传旧会话资源。
 
 候选状态为“等待权限 → 搜索电脑 → 连接中 → 已连接”；失败返回等待/重试。广播监听、定时器和网络变化回调需有明确所有者及统一清理，不能在每次 Activity 重建时重复创建。
 
-## 生命周期接线设计与约束（待实现）
+## 生命周期接线设计与约束（源码已接线，实机待验收）
 
 1. Activity 在可见时请求已有权限，不以 endpoint 为前提；授权后自动启动唯一前台运行容器。拒绝时显示状态，后续授权自动继续；USB 授权沿用现有协调器，不作为发现电脑的先决条件。
 2. 前台服务/进程级容器拥有 graph、发现协调器、socket、单调定时器及网络回调；Activity 只订阅状态并重绑权限适配器，不能由容器保留销毁的 Activity。界面退出只注销 UI 监听，真正服务销毁才统一清理。
@@ -25,7 +25,7 @@
 4. Wi-Fi 切换关闭旧监听、清空旧候选并失效旧网络回调；新网络重新绑定并观察。重复网络通知不重建健康会话；无电脑时被动监听与每秒候选检查，不主动扫描或忙重连。
 5. 划掉任务卡片不停止服务（清单保持 stopWithTask=false），空 intent 不重建缺失业务图或伪造 RUNNING；进程杀死后再次打开按正常流程恢复。隐藏手动模式显式进入/退出，手动模式暂停自动选择；旧保存地址不覆盖自动发现。
 
-源码已核对 MainActivity、RelayRuntimeHolder、MobileRelayGraph、RelayBootstrapModule 和 RelayForegroundService；以上是接线方向，前台服务对象归属尚未实现。gateway/session 已支持可选 endpoint 和串行选择替换，graph/App 尚未调用。实施检查表见手机仓库 docs/auto-discovery/IMPLEMENTATION.md。
+源码已核对 MainActivity、RelayProcessRuntime、MobileRelayGraph、RelayBootstrapModule 和 RelayForegroundService；以上已由进程容器、应用上下文 graph 和唯一连接控制器接线；Activity 只订阅并按身份解绑权限。源码验证与实机限制见 PROGRESS.md。实施检查表见手机仓库 docs/auto-discovery/IMPLEMENTATION.md。
 
 2026-10-13 手机核心已实现为独立纯 JVM `:relay-discovery`（契约位于手机仓库同名模块）。严格解析合法公告并按单调时间选择候选；输出稳定选择令牌，使用网络令牌隔离旧监听，ACTIVE 目标不因候选变化重选。容量限制 32 候选/每候选 8 地址，溢出时停止刷新并隔离 8 秒后从新包重新观察。独立桥接现已组合选择与 paired/断线事件；未来 Android 容器每秒调用桥接 tick 驱动核心 snapshot。核心不拥有 socket、会话退避或 DJI，未被 app 依赖，不能宣称正式手机已自动连接。
 
@@ -37,7 +37,7 @@
 - 用户已确认划掉任务卡片后仍应运行，电脑退出后仍继续等待；此要求必须在正式 Relay 中实机验收，独立前台探针不覆盖。
 - 第一版不做手机开机自启动；不承诺 Android 强制停止或系统杀进程后无条件恢复。
 - 手机退出界面不等于停止中继；电脑退出后手机进入等待，因此会有持续监听与耗电，需要低频等待和实际观察。
-- 目前运行对象主要由 Activity 和内存中的 RelayRuntimeHolder 保留；现有通知服务返回 START_STICKY 不代表系统重启进程后能恢复完整 DJI/发现对象图，需要单独验证和设计。
+- 目前运行对象由 RelayProcessRuntime/ProcessRelayOwner 唯一持有；通知服务返回 START_STICKY 不代表系统重启进程后能恢复完整 DJI/发现对象图，不承诺系统杀进程后自行恢复。
 - 地址改变时不能关闭并重建整套 MobileRelayGraph，因为它同时持有 SDK、图传和任务相关对象；仅更新 session 的 API 已完成，graph/运行容器接线待实施。
 - 正常关闭电脑现有代码会尝试停止活动航线。本次保留该既有行为，不将它改成新设计，也不添加新的飞行指令。
 
@@ -80,3 +80,9 @@
 2026-10-14 graph 生命周期收敛已完成：close 先永久撤销连接来源/门禁，再等待在途 start/stop/模式操作返回并请求 AppRuntime.stop；runtime 和 ForegroundServiceController 均为 STOPPED/FAILED 后才释放注册、Android 端口及执行器。两路状态通知驱动检查，不阻塞 UI 或服务回调；重复 close 幂等。组装过程中逐项登记已创建资源，失败逆序清理、保留原始错误与清理异常，成功才转移所有权；部分安装的状态注册也会解绑。新增停止 7 项（含真实 AppRuntime 延迟服务回调）、回滚 4 项，完整 App 98 项通过。全仓离线 test 与 assembleDebug、清单检查成功：JVM 718 项，Android Debug/Release 各 344 项报告零失败/错误/跳过（包括 App 98 项；部分既有模块 UP-TO-DATE）。新 Debug APK 已生成且保持忽略，未安装，未做现场权限/后台/15 秒验收。下一步进程容器与无地址 UI；已在本机远端引用 origin/xing-20261012 找到同事对频迁移 a607399，UI 前先核对该已有修改，避免重复实现。
 
 2026-10-14 已核对并接入同事 origin/xing-20261012 中的对频入口迁移提交 a607399（只取该提交，不合并后续拍照改动）：删除手机对频按钮及其 UI 回调/专用文案，保留设备状态、电脑命令注册与业务规则。无冲突，App Kotlin 编译和完整 App 98 项回归通过；尚未重新打包安装，对频实际电脑链路仍待设备验收。下一步自动连接进程容器与 UI。
+
+## 2026-10-14 正式 App 接线实现
+
+对应 Relay 源码提交 `c8b4c16`。用户已明确先完成源码及中文提交，实机调试后续进行；本轮不连接手机或安装 APK，现场验收不属于已完成项。
+
+2026-10-14 正式无地址接线阶段：RelayProcessRuntime/ProcessRelayOwner 在进程内唯一持有 graph 和权限适配器，Activity 在可见 onResume 自动尝试启动，onDestroy 只取消 UI 订阅并按身份 detach；旧 RelayRuntimeHolder/RelaySurfaceRetention 已删除。默认 AUTO，历史地址仅预填长按标题打开的隐藏调试区；切换 MANUAL/返回 AUTO 只换 session，保留 deviceId 和业务图，主界面无停止按钮。拒绝后不循环弹窗，可明确重试或进入系统设置；授权后返回前台继续，权限等待被宿主解绑中断时允许下一宿主恢复一次。服务丢失会禁止来源；模块启动中服务失败等待该轮返回后清理，不发布 RUNNING，再释放图及权限适配器，后者在主线程关闭。新增进程/启动策略 8 项，替换旧保留策略的 3 项测试；新增 runtime 3 项服务启动竞态测试。完整 App 103 项、runtime 10 项通过，全仓离线 test/Debug 打包/清单检查通过：JVM 721 项，Android Debug/Release 各 349 项报告零失败/错误/跳过，未改动模块部分沿用 UP-TO-DATE。新 APK 已生成且被忽略；ADB 当前无已连接设备，mDNS 可见多台校园调试设备，尚未确认本人的当前连接地址，未安装或自动连接陌生设备。首次权限弹窗、旋转/后台/锁屏/划卡、正式校园 39082/hello/paired、电脑退出/重启/IP 变化、Wi-Fi 重连/跨 AP、2 手机/2 无人机及 15 秒目标均待实机验收；离线 Lint 仍缺依赖，未声称通过。
