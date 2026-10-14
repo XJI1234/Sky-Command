@@ -1,6 +1,6 @@
 # 自动发现与连接：第一阶段最小方案设计
 
-更新日期：2026-10-13。方案级别：最小方案（MVP）。状态：电脑公告器已接入正式宿主，手机纯 JVM 解析/候选核心和 gateway/session 连接选择 API 已完成，均通过自动化测试；Android 监听/发现桥接/服务接线及现场场景仍待实施/验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
+更新日期：2026-10-14。方案级别：最小方案（MVP）。状态：电脑公告器已接入正式宿主，手机纯 JVM 解析/候选核心、gateway/session 连接选择 API 与独立桥接已完成，均通过自动化测试；Android 监听、权限/前台运行容器接线及现场场景仍待实施/验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
 
 ## 已确定的业务行为
 
@@ -12,7 +12,7 @@
 2. 手机在 App 打开后启动发现监听。首次所需权限由系统询问，拒绝时显示状态；授权完成后自动继续。
 3. 收到符合协议的公告，结合 UDP 来源地址及公告中的服务端口/路径，生成现有格式 `ws://<电脑IPv4>:8080/relay`。路径与端口校验后才能交给现有连接模块。
 4. 复用 `hello / paired` 及既有会话机制；只有 WebSocket 握手成功才算连接完成，收到广播本身不是连接成功。
-5. 未连接时观察 3 秒，唯一候选才连接，多候选冲突等待，8 秒未收到的 endpoint 过期；已连接保持当前电脑。相同 endpoint 失败沿用现有退避，重复公告不重置退避；无候选/冲突时暂停旧地址重试。gateway/session API 已实现，发现到会话的桥接仍待接线。
+5. 未连接时观察 3 秒，唯一候选才连接，多候选冲突等待，8 秒未收到的 endpoint 过期；已连接保持当前电脑。相同 endpoint 失败沿用现有退避，重复公告不重置退避；无候选/冲突时暂停旧地址重试。gateway/session API 与独立桥接已实现，正式 App 仍待接线。
 6. 电脑离线时低频等待。重新连通后同步状态，不重新执行旧命令或续传旧会话资源。
 
 候选状态为“等待权限 → 搜索电脑 → 连接中 → 已连接”；失败返回等待/重试。广播监听、定时器和网络变化回调需有明确所有者及统一清理，不能在每次 Activity 重建时重复创建。
@@ -27,9 +27,11 @@
 
 源码已核对 MainActivity、RelayRuntimeHolder、MobileRelayGraph、RelayBootstrapModule 和 RelayForegroundService；以上是接线方向，前台服务对象归属尚未实现。gateway/session 已支持可选 endpoint 和串行选择替换，graph/App 尚未调用。实施检查表见手机仓库 docs/auto-discovery/IMPLEMENTATION.md。
 
-2026-10-13 手机核心已实现为独立纯 JVM `:relay-discovery`（契约位于手机仓库同名模块）。严格解析合法公告并按单调时间选择候选；输出稳定选择令牌，使用网络令牌隔离旧监听，ACTIVE 目标不因候选变化重选。容量限制 32 候选/每候选 8 地址，溢出时停止刷新并隔离 8 秒后从新包重新观察。未来运行容器每秒调用 snapshot，并将选择与 paired/断线事件串行接线；核心不拥有 socket、会话退避或 DJI，未被 app 依赖，不能宣称正式手机已自动连接。
+2026-10-13 手机核心已实现为独立纯 JVM `:relay-discovery`（契约位于手机仓库同名模块）。严格解析合法公告并按单调时间选择候选；输出稳定选择令牌，使用网络令牌隔离旧监听，ACTIVE 目标不因候选变化重选。容量限制 32 候选/每候选 8 地址，溢出时停止刷新并隔离 8 秒后从新包重新观察。独立桥接现已组合选择与 paired/断线事件；未来 Android 容器每秒调用桥接 tick 驱动核心 snapshot。核心不拥有 socket、会话退避或 DJI，未被 app 依赖，不能宣称正式手机已自动连接。
 
-2026-10-13 会话扩展已实现：初始 endpoint 可为 null，start 只保留运行意图且无连接/定时器；selectConnection(null) 暂停旧目标，新的 ConnectionSelection 在会话优先事件序列中清理旧代次并替换目标，同一对象幂等且不重置退避。同 URL 的新对象代表新意图；运行容器须按发现令牌稳定映射对象，不能每个公告都创建。合法 paired 在 ACTIVE/业务交付前同步 admit(selection, generation)，拒绝/异常即清理并撤销旧选择；获准时桥接记录激活代次。异步结束事件提供 endedGeneration，只有匹配当前激活代次才通知发现 disconnected，避免同选择重连后旧通知误清除新 ACTIVE。门禁是本地选择检查，不提供认证，不能阻塞或反向调用 gateway 控制；桥接锁顺序和 Android 生命周期仍需设计/验证。接口见手机 connection-session/CONNECTION-SELECTION.md。
+2026-10-13 会话扩展已实现：初始 endpoint 可为 null，start 只保留运行意图且无连接/定时器；selectConnection(null) 暂停旧目标，新的 ConnectionSelection 在会话优先事件序列中清理旧代次并替换目标，同一对象幂等且不重置退避。同 URL 的新对象代表新意图；运行容器须按发现令牌稳定映射对象，不能每个公告都创建。合法 paired 在 ACTIVE/业务交付前同步 admit(selection, generation)，拒绝/异常即清理并撤销旧选择；获准时桥接记录激活代次。异步结束事件提供 endedGeneration，只有匹配当前激活代次才通知发现 disconnected，避免同选择重连后旧通知误清除新 ACTIVE。门禁是本地选择检查，不提供认证，不能阻塞或反向调用 gateway 控制；桥接锁顺序现已实现/测试，Android 生命周期仍待设计/接线。接口见手机 connection-session/CONNECTION-SELECTION.md。
+
+2026-10-14 独立 JVM `:app-runtime:discovery-session-bridge` 已实现：桥接持有核心、稳定映射选择并组合 gateway 公开接口；配置先注入 pairingAdmission，再 bind，权限与前台就绪后 start，网络适配器送入带令牌/子网的数据，每秒 tick。桥接的状态锁不跨 session 控制，独立控制锁串行 start/select/stop；门禁只检查本地核心，监听注销在控制锁外，避免互相等待。若旧断线通知延迟，tick 比较已获准代次与非阻塞 session 快照；新代次门禁也先释放旧 ACTIVE 并重新观察，不能借 ACTIVE 幂等绕过新冲突/过期。门禁获准到 session 提交 ACTIVE 的同代次窗口不误判断线。控制部分成功后抛错会使应用缓存失效，后续冲突仍能暂停。桥接关闭撤销门禁、暂停/停止 gateway 并注销监听，不关闭 SDK/graph；正式容器须停止 UDP/计时来源并接入真实服务销毁，Activity 销毁不能关闭桥接。22 项测试覆盖这些边界及 gateway 适配器；模块尚未被 App 依赖，Android 服务所有权及隐藏手动模式切换另行实施。
 
 - 授权后的日常路径是打开 App 自动运行；切到后台或锁屏后由前台服务维持运行，保留 Android 要求的通知。
 - 用户已确认划掉任务卡片后仍应运行，电脑退出后仍继续等待；此要求必须在正式 Relay 中实机验收，独立前台探针不覆盖。
@@ -48,7 +50,7 @@
 | UDP 端口与发送周期 | 已选 39082、每秒定向广播和有限广播；39081 仅用于探针 |
 | 首次权限与未发现电脑 | 接线方向已确定：无地址先授权/启动前台容器，gateway 等待候选；待实现 |
 | 后台运行 | 前台运行容器唯一拥有发现/graph，Activity 只绑定；待修改契约和实施，锁屏/省电限制待测 |
-| 重连与 IP 变化 | 发现负责候选选择，session 唯一负责连接/退避；选择替换/暂停 API 与握手门禁已完成，发现桥接和 Android 接线待实施 |
+| 重连与 IP 变化 | 发现负责候选选择，session 唯一负责连接/退避；选择替换/暂停 API 与独立桥接已完成，Android 监听/容器接线待实施 |
 | 非预期第二台电脑 | 保持当前连接；未连接多候选等待；候选键、8 秒过期、3 秒观察与容量保护见公告契约 |
 | 校园共享网接入 | 已确认：第一版沿用现有未认证 v1 做受控联调；deviceId/公告均不是认证，正式开放前再补可信接入 |
 | 广播在其他校园场景不可达 | 当前位置已收到包，不代表一定跨 AP/VLAN 送达；尚未选择不可达时的替代方案 |
