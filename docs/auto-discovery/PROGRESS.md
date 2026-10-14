@@ -122,3 +122,10 @@
 - 尚未修改正式 App 权限/服务/界面，没有构建/安装新版 APK，没有正式 39082 收包或后台/锁屏/两手机两无人机/15 秒验收，也未修改飞行/航线/对频或推送 GitHub。
 
 下次接续：先读 TASK.md、DESIGN.md、WIRE-PROTOCOL.md、NETWORK-RESULTS.md 和本文；无地址权限、前台运行容器与 settings 接线契约及独立 Android WLAN 接收适配器已完成；下一步实现 graph/applicationContext、权限 detach、稳定模式门禁与唯一连接控制，再接进程容器/服务失效/界面。按 BROADCAST-TEST.md 补齐现场网络场景，不把 JVM 桥接测试或探针当成正式功能验收。
+
+## 2026-10-14 graph 接线准备
+
+- 对应手机提交：MSDK-Relay `0e8eaf1`（refactor: 为自动连接准备应用级运行图入口），开发分支未推送。
+- 已完成 applicationContext 长期对象、可空初始 endpoint 与 gateway 同步握手门禁注入；MainActivity 仍使用既有手动启动，正式自动连接尚未完成。
+- `:app:compileDebugKotlin` 与定向 `:app:testDebugUnitTest` 通过；graph 契约 17 项、Bootstrap 14 项共 31 项，零失败/错误/跳过。首次回归的旧 Activity 调用断言已同步为应用上下文，重跑通过。
+- 未构建/安装 APK，未进行真实权限、WLAN/后台/两手机/15 秒验收。下一步 Android 来源包装与唯一控制接线，然后停止收敛、进程容器和 UI。
