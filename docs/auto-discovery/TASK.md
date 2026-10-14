@@ -1,6 +1,6 @@
 # 手机免手动连接任务说明
 
-更新日期：2026-10-14。状态：电脑周期公告、手机纯 JVM 公告解析/候选核心、gateway/session 连接选择 API 及发现到会话桥接均已通过自动化测试；正式 Android 监听、权限/前台运行容器接线与完整实机验收尚未完成。
+更新日期：2026-10-14。状态：电脑周期公告、手机纯 JVM 公告解析/候选核心、gateway/session 连接选择 API 及发现到会话桥接均已通过自动化测试；独立 Android WLAN 接收适配器已完成并测试，正式 App 权限/前台容器接线与完整实机验收尚未完成。
 
 ## 要解决的问题
 
@@ -52,7 +52,7 @@
 
 ## 文档入口
 
-2026-10-14：手机运行容器、无地址权限流程、AUTO/MANUAL 独占控制与停止收敛契约已确定，见配套 MSDK-Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`。此项为设计完成，正式 Android 接收/容器/UI 待实现，后台及 15 秒目标仍未验收。
+2026-10-14：手机运行容器、无地址权限流程、AUTO/MANUAL 独占控制与停止收敛契约已确定，见配套 MSDK-Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`。此项为设计完成，独立 Android 接收适配器已实现，正式容器/UI 接线待实现，后台及 15 秒目标仍未验收。
 
 - [当前最小方案与待决策项](DESIGN.md)
 - [双端公告 v1 协议与候选规则](WIRE-PROTOCOL.md)

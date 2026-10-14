@@ -1,6 +1,6 @@
 # 自动发现与连接：第一阶段最小方案设计
 
-更新日期：2026-10-14。方案级别：最小方案（MVP）。状态：电脑公告器已接入正式宿主，手机纯 JVM 解析/候选核心、gateway/session 连接选择 API 与独立桥接已完成，均通过自动化测试；Android 监听、权限/前台运行容器接线及现场场景仍待实施/验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
+更新日期：2026-10-14。方案级别：最小方案（MVP）。状态：电脑公告器已接入正式宿主，手机纯 JVM 解析/候选核心、gateway/session 连接选择 API 与独立桥接已完成，均通过自动化测试；独立 Android WLAN 接收适配器已实现并测试，正式 App 权限/前台运行容器接线及现场场景仍待实施/验证。公告参数以 [WIRE-PROTOCOL.md](WIRE-PROTOCOL.md) 为契约，实施进度以 PROGRESS.md 为准。
 
 ## 已确定的业务行为
 
@@ -43,7 +43,7 @@
 
 ## 实施与验证边界
 
-2026-10-14 运行接线契约已收敛到配套 Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`（待实施）：AppRuntime 保持权限→服务→bootstrap 顺序，唯一进程容器使用 applicationContext，UI 按宿主 attach/detach；无地址使用稳定身份启动，USB 不阻塞发现。稳定门禁路由器与串行连接控制器独占 gateway，MANUAL 先关闭旧桥接/来源再选择手动地址，返回 AUTO 新建桥接并重新观察；地址/模式改变均保留整个业务 graph，schema 1 不变。停止先禁用来源/门禁，再等 STOPPING 收敛后释放 graph/端口。源码审计发现权限平台尚无 detach、服务非预期 onDestroy 尚未报告 failed，接线时修复；空 intent 不恢复缺失业务图。下一步独立实现 Android 网络接收适配器，再接容器与界面。
+2026-10-14 运行接线契约已收敛到配套 Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`（待实施）：AppRuntime 保持权限→服务→bootstrap 顺序，唯一进程容器使用 applicationContext，UI 按宿主 attach/detach；无地址使用稳定身份启动，USB 不阻塞发现。稳定门禁路由器与串行连接控制器独占 gateway，MANUAL 先关闭旧桥接/来源再选择手动地址，返回 AUTO 新建桥接并重新观察；地址/模式改变均保留整个业务 graph，schema 1 不变。停止先禁用来源/门禁，再等 STOPPING 收敛后释放 graph/端口。源码审计发现权限平台尚无 detach、服务非预期 onDestroy 尚未报告 failed，接线时修复；空 intent 不恢复缺失业务图。独立 Android 网络接收适配器已完成；下一步接容器与界面。
 
 | 边界 | 当前状态 / 建议 |
 | --- | --- |
@@ -51,7 +51,7 @@
 | 发现协议 | 已固定 v1、消息标识、512 字节上限、serverId/instanceId 与字段校验，见 WIRE-PROTOCOL.md |
 | UDP 端口与发送周期 | 已选 39082、每秒定向广播和有限广播；39081 仅用于探针 |
 | 首次权限与未发现电脑 | 接线方向已确定：无地址先授权/启动前台容器，gateway 等待候选；待实现 |
-| 后台运行 | 前台运行容器唯一拥有发现/graph，Activity 只绑定；待修改契约和实施，锁屏/省电限制待测 |
+| 后台运行 | 前台运行容器唯一拥有发现/graph，Activity 只绑定；契约已确定、接线待实施，锁屏/省电限制待测 |
 | 重连与 IP 变化 | 发现负责候选选择，session 唯一负责连接/退避；选择替换/暂停 API 与独立桥接已完成，Android 监听/容器接线待实施 |
 | 非预期第二台电脑 | 保持当前连接；未连接多候选等待；候选键、8 秒过期、3 秒观察与容量保护见公告契约 |
 | 校园共享网接入 | 已确认：第一版沿用现有未认证 v1 做受控联调；deviceId/公告均不是认证，正式开放前再补可信接入 |
@@ -60,6 +60,10 @@
 | 调试入口 | 已确认保留隐藏手动地址入口，日常连接不能依赖；入口布局和手动模式与发现的协调由实现方案定义 |
 | 连接耗时 | 已确认 15 秒验收目标，授权且两端服务就绪开始计时；超时记为失败并继续等待，不保证所有校园场景必达 |
 | 对频迁移 | 核对同事的分支与接口，避免重复工作 |
+
+## 后续改进方案（不属于当前实现）
+
+2026-10-14 接收来源实现：手机新增独立 Android WLAN 适配器，只提供 NetworkCallback/LinkProperties、按 WLAN 绑定的 UDP socket、MulticastLock 和每秒 tick，不拥有发现策略、session 或 DJI。重复链路通知保留 socket，链路变化先关闭旧来源并推进网络令牌；513 字节缓冲拒绝超长包，按实际长度复制，最多 64 个待交付包，错误按 1/2/4/8 秒退避。20 项测试及 Android 编译通过；真实手机接收、后台和正式 App 接线尚未验证。模块契约位于配套 Relay `src/modules/relay-discovery/android-discovery-adapter/CONTRACT.md`。
 
 ## 后续改进方案（不属于当前实现）
 

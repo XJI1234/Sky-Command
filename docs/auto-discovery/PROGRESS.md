@@ -1,10 +1,10 @@
 # 本次任务进度与待办
 
-更新日期：2026-10-14。当前阶段：正式电脑公告、手机纯 JVM 公告解析/候选核心、gateway/session 连接选择 API 与发现到会话桥接已实现并通过自动化测试；Android 监听、权限/前台运行容器接线及全链路实机验收尚未完成。
+更新日期：2026-10-14。当前阶段：正式电脑公告、手机纯 JVM 公告解析/候选核心、gateway/session 连接选择 API 与发现到会话桥接已实现并通过自动化测试；独立 Android WLAN 接收适配器已完成；正式 App 权限/前台运行容器接线及全链路实机验收尚未完成。
 
 ## 已完成：开发环境基线
 
-2026-10-14 新完成设计阶段：配套 Relay `efb6b38` 新增 RUNTIME-CONTRACT.md，明确唯一进程容器/applicationContext、Activity detach、无地址权限恢复、AUTO/MANUAL 独占及稳定门禁、schema 1 和停止收敛。已交叉核对入口及权限/服务平台源码；发现 Activity 强引用与服务非预期销毁缺少 failed，列为待修复。此阶段仅文档，未运行新测试或构建/安装 APK；已有 142 项报告不作为接线证据。下一步实现独立 Android Wi-Fi 接收适配器，随后容器/UI/实机验收。
+2026-10-14 新完成设计阶段：配套 Relay `efb6b38` 新增 RUNTIME-CONTRACT.md，明确唯一进程容器/applicationContext、Activity detach、无地址权限恢复、AUTO/MANUAL 独占及稳定门禁、schema 1 和停止收敛。已交叉核对入口及权限/服务平台源码；发现 Activity 强引用与服务非预期销毁缺少 failed，列为待修复。此阶段仅文档，未运行新测试或构建/安装 APK；已有 142 项报告不作为接线证据。独立 Android Wi-Fi 接收适配器随后完成，接下来容器/UI/实机验收。
 
 - [x] 三个仓库已克隆并保留各自原始 main。
 - [x] Sky Command 依赖安装、构建、独立启动已完成。
@@ -40,17 +40,19 @@
 - [ ] 补充 Wi-Fi 重连、跨 AP、电脑 IP 变化和多手机场景；当前单地点前台结果不能替代这些验证。
 - [x] 确定公告 v1、512 字节、UDP 39082、1 秒双广播、3 秒观察/8 秒过期与身份/候选规则，见 WIRE-PROTOCOL.md。
 - [x] 确认后台/锁屏与划掉任务卡片的行为、隐藏调试入口及连接耗时目标。
-- [x] 核对正式手机源码并确定无地址授权、前台运行容器唯一归属、网络代次、只切换 session 的设计方向；session API 已完成，权限与前台容器契约/接线待扩展，见 DESIGN.md 和手机 IMPLEMENTATION.md。
+- [x] 核对正式手机源码并确定无地址授权、前台运行容器唯一归属、网络代次、只切换 session 的设计方向；session API 已完成，权限与前台容器契约已确定、接线待实施，见 DESIGN.md 和手机 IMPLEMENTATION.md。
 - [x] 更新 electron-host 与 relay-discovery 契约并实现正式电脑周期公告、持久身份、网卡刷新、失败重试及退出清理。
 - [x] 实现手机纯 JVM 公告解析/候选核心；严格字段/来源校验、观察/过期、冲突与容量恢复、ACTIVE 保持和网络/选择令牌隔离通过 34 项测试。
 - [x] 扩展 gateway/session 契约/API：可选初始地址、暂停旧目标重试、串行替换、稳定选择身份、ACTIVE 前同步门禁与结束代次通知；自动化回归和 App Kotlin 编译通过。
 - [x] 定义并实现独立 JVM 发现到 session 桥接：稳定选择映射、同步门禁、实际代次校正、延迟结束通知与锁顺序；22 项测试通过，正式 App 尚未依赖。
-- [ ] 扩展无地址权限与前台运行容器契约，接入正式 Android 监听及自动连接。
+- [x] 确定无地址权限与前台运行容器契约、模式独占及停止收敛，见手机 RUNTIME-CONTRACT.md（接线待实现）。
 - [ ] 调整手机界面并与对频迁移分支协调。
 - [ ] 验证手机先开、电脑先开、电脑重启、IP 变化、多手机、Wi-Fi 切换和锁屏。
 - [ ] 分仓库提交中文变更与验证结果；最终推送开发分支并整理 PR。
 
 ## 验证证据与当前限制
+
+2026-10-14 独立 Android 接收阶段（Relay `282136c`）：新增 WLAN 网络观察/UDP 39082 接收、IPv4 子网交付、网络换代、每秒 tick、64 包上限、错误退避与关闭/回滚。20 项新测试（15 项生命周期、5 项数据/真实本机 UDP/资源回滚）零失败/错误/跳过；Android Kotlin 编译通过。发现核心 34 项、桥接 22 项既有测试报告 UP-TO-DATE，共 76 项报告通过；没有重跑已有 56 项。离线 Lint 因未缓存 com.android.tools.lint:lint-gradle:31.7.0 未执行。正式 App 未依赖该模块，未构建/安装 APK，真实 WLAN 广播/跨 AP/后台/两手机及 15 秒验收仍未完成。模块契约和具体命令见手机 README。
 
 | 项目 | 当前结论 |
 | --- | --- |
@@ -111,4 +113,4 @@
 - 本轮修正了新代码返回类型/测试字段的编译错误，以及测试 transport 未实现幂等关闭的问题；最终测试通过。初次沙箱拒绝用户级 Gradle 缓存锁，按权限机制在沙箱外离线验证。报告/缓存/JAR 保持忽略，不提交日志或产物。
 - 尚未修改正式 App 权限/服务/界面，没有构建/安装新版 APK，没有正式 39082 收包或后台/锁屏/两手机两无人机/15 秒验收，也未修改飞行/航线/对频或推送 GitHub。
 
-下次接续：先读 TASK.md、DESIGN.md、WIRE-PROTOCOL.md、NETWORK-RESULTS.md 和本文；下一步定义无地址权限、前台运行容器与 settings 契约，明确 graph/桥接/监听/计时来源的唯一归属及手动模式控制权，再接正式 Android Wi-Fi 接收与生命周期。按 BROADCAST-TEST.md 补齐现场网络场景，不把 JVM 桥接测试或探针当成正式功能验收。
+下次接续：先读 TASK.md、DESIGN.md、WIRE-PROTOCOL.md、NETWORK-RESULTS.md 和本文；无地址权限、前台运行容器与 settings 接线契约及独立 Android WLAN 接收适配器已完成；下一步实现 graph/applicationContext、权限 detach、稳定模式门禁与唯一连接控制，再接进程容器/服务失效/界面。按 BROADCAST-TEST.md 补齐现场网络场景，不把 JVM 桥接测试或探针当成正式功能验收。
