@@ -43,6 +43,8 @@
 
 ## 实施与验证边界
 
+2026-10-14 模式控制已独立实现为 RelayConnectionControl（手机 discovery-session-bridge 子模块）：gateway 使用稳定门禁路由，模式切换先撤销旧门禁再清理来源/桥接/会话；AUTO 每轮新建桥接，MANUAL 先校验地址、同地址复用意向，返回 AUTO 从新包重新观察。来源按模式代次隔离，清理失败保留句柄并阻止第二来源；门禁不等待控制锁，状态通知在控制锁外。15 项新测试和原桥接 22 项重跑通过。此能力尚未接正式 graph/Android 来源/进程容器，设备对象和业务规则未改动。
+
 2026-10-14 生命周期准备已实现：权限平台使用 applicationContext 观察 USB 和检查权限，Activity 按身份 detach/onDestroy，运行权限用独立注册键与请求令牌隔离取消/重绑/重复结果。解绑使等待收敛 Failed，不保留宿主对象；纯 USB 等待不随界面解绑取消。服务销毁通过终态持有器区分 stopped 与 failed，启动失败不重复发布，无活动操作的空 intent 退出。新增 12 项测试和 App Kotlin 编译通过，完整进程容器/模式控制仍待接线；历史审计中的两个缺口已在此阶段修复，真实权限弹窗与后台场景待实机验证。
 
 2026-10-14 运行接线契约已收敛到配套 Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`（待实施）：AppRuntime 保持权限→服务→bootstrap 顺序，唯一进程容器使用 applicationContext，UI 按宿主 attach/detach；无地址使用稳定身份启动，USB 不阻塞发现。稳定门禁路由器与串行连接控制器独占 gateway，MANUAL 先关闭旧桥接/来源再选择手动地址，返回 AUTO 新建桥接并重新观察；地址/模式改变均保留整个业务 graph，schema 1 不变。停止先禁用来源/门禁，再等 STOPPING 收敛后释放 graph/端口。源码审计发现权限平台尚无 detach、服务非预期 onDestroy 尚未报告 failed，接线时修复；空 intent 不恢复缺失业务图。独立 Android 网络接收适配器已完成；下一步接容器与界面。

@@ -52,6 +52,8 @@
 
 ## 文档入口
 
+2026-10-14 独立 AUTO/MANUAL 连接控制器已实现并测试，保证 gateway 控制与握手门禁排他；尚未接入正式 App。下一步接 graph/applicationContext、Android 来源包装及进程容器。
+
 2026-10-14 生命周期准备已实现权限宿主解绑与服务异常销毁失败通知，并通过相关测试/编译；完整进程容器、模式切换和日常无地址启动仍待接线，现场验收尚未完成。
 
 2026-10-14：手机运行容器、无地址权限流程、AUTO/MANUAL 独占控制与停止收敛契约已确定，见配套 MSDK-Relay `docs/auto-discovery/RUNTIME-CONTRACT.md`。此项为设计完成，独立 Android 接收适配器已实现，正式容器/UI 接线待实现，后台及 15 秒目标仍未验收。
