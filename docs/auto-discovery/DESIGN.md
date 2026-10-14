@@ -61,8 +61,6 @@
 | 连接耗时 | 已确认 15 秒验收目标，授权且两端服务就绪开始计时；超时记为失败并继续等待，不保证所有校园场景必达 |
 | 对频迁移 | 核对同事的分支与接口，避免重复工作 |
 
-## 后续改进方案（不属于当前实现）
-
 2026-10-14 接收来源实现：手机新增独立 Android WLAN 适配器，只提供 NetworkCallback/LinkProperties、按 WLAN 绑定的 UDP socket、MulticastLock 和每秒 tick，不拥有发现策略、session 或 DJI。重复链路通知保留 socket，链路变化先关闭旧来源并推进网络令牌；513 字节缓冲拒绝超长包，按实际长度复制，最多 64 个待交付包，错误按 1/2/4/8 秒退避。20 项测试及 Android 编译通过；真实手机接收、后台和正式 App 接线尚未验证。模块契约位于配套 Relay `src/modules/relay-discovery/android-discovery-adapter/CONTRACT.md`。
 
 ## 后续改进方案（不属于当前实现）
