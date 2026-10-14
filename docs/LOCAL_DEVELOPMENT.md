@@ -16,6 +16,10 @@ npm run build
 
 在本仓库目录的普通 PowerShell 中执行 `npm run desktop`，或执行 `./open-sky-command.cmd`。无需 Codex，也无需重复安装依赖。修改源码后先运行 `npm run build`。
 
+2026-10-14 正式自动连接版本已通过 USB 安装到测试手机。在电脑与手机接入同一可互通 Wi-Fi/热点后，打开手机 Relay 并完成系统授权，再打开电脑程序；顺序可反过来，手机会等待电脑上线。日常不填写 WebSocket 地址，不需要 ADB。手机启动后由前台服务持续等待/监听并保留通知；仅连接 Wi-Fi 不会自行启动 App，强制停止/系统杀进程后应重新打开。本轮热点单手机自动连接、Wi-Fi 重连、短时后台和电脑退出重启已实测；校园网互通、锁屏/划卡/长期后台及多设备未验收，见 [实机记录](auto-discovery/DEVICE-RESULTS-20261014.md)。
+
+正常启动只运行一个电脑实例；源码更新后手动先构建，启动脚本不会因已有构建文件而自动重建。电脑正常退出仍执行既有活动航线处理。
+
 `node_modules/` 保存依赖，`electron/main.mjs`、`electron/preload.cjs`、`dist/` 保存构建输出，这些产物已被 Git 忽略。其他开发者拉取分支后需自行安装、构建。
 
 电脑端需要可用的局域网 IPv4；默认服务端口为 WebSocket 8080、RTMP 19500、HTTP-FLV 18080。Android 联调使用同级 MSDK-Relay 项目；MSDK 示例的 HTTP API 是独立链路。
@@ -31,7 +35,7 @@ npm run build
 
 ## Git 协作
 
-2026-10-13 起，重新构建后的正式宿主在服务就绪后每秒通过 WLAN 公告 UDP 39082，退出时自动停止；不需要另起发送脚本。39081 仍只供网络探针使用。稳定电脑身份自动保存在应用 userData 的 discovery-server-id，不填写硬件标识或密钥；无 WLAN 或公告失败时原手动连接仍可用。手机正式接线尚未完成，当前 Relay 仍使用手动地址流程。
+2026-10-13 起，重新构建后的正式宿主在服务就绪后每秒通过 WLAN 公告 UDP 39082，退出时自动停止；不需要另起发送脚本。39081 仍只供网络探针使用。稳定电脑身份自动保存在应用 userData 的 discovery-server-id，不填写硬件标识或密钥；无 WLAN 或公告失败时隐藏手动调试仍可用。2026-10-14 手机正式接线已完成，并在独立手机热点下验证单手机自动连接。
 
 电脑公告与宿主回归检查运行 `npm test -- --config vitest.discovery.config.ts`，该配置不构建不相关的 Android harness。协议、验证范围和下一步见 docs/auto-discovery/PROGRESS.md。
 
