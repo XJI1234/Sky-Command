@@ -74,3 +74,5 @@
 多电脑选择、完善的可信接入、自动恢复进程、电脑远程停用手机、跨网段发现等需要独立需求、契约和验收，不在本次草案中默认为已批准。
 
 2026-10-14 graph 接线准备：MobileRelayGraph.create 接受 Context 后统一取 applicationContext，空 endpoint 交给既有 gateway 等待能力，SessionPairingAdmission 由调用方注入。旧手动调用继续兼容；正式来源/唯一控制器及进程容器尚未接线。长期对象已脱离 Activity 上下文，停止仍需等待 runtime 与前台服务各自终态后释放端口/执行器，初始化失败回滚亦待实现。
+
+2026-10-14 正式 graph 接线：App 依赖接收适配器和连接桥接，gateway 创建初始 endpoint=null，稳定门禁来自 graph 内唯一 RelayConnectionControl；bootstrap 的 start/stopGateway 只调用该控制器。Android 来源 start 时才创建接收器，透传网络代次/子网/包/tick，仅 FAILED 停止控制，Wi-Fi 等待/重试保留来源内部恢复。graph 的模式接口只切换连接选择，不重建业务对象；原非空地址入口兼容 MANUAL。进程容器及停止/初始化收敛待实现，38 项 App 回归不能替代现场验收。

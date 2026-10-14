@@ -129,3 +129,11 @@
 - 已完成 applicationContext 长期对象、可空初始 endpoint 与 gateway 同步握手门禁注入；MainActivity 仍使用既有手动启动，正式自动连接尚未完成。
 - `:app:compileDebugKotlin` 与定向 `:app:testDebugUnitTest` 通过；graph 契约 17 项、Bootstrap 14 项共 31 项，零失败/错误/跳过。首次回归的旧 Activity 调用断言已同步为应用上下文，重跑通过。
 - 未构建/安装 APK，未进行真实权限、WLAN/后台/两手机/15 秒验收。下一步 Android 来源包装与唯一控制接线，然后停止收敛、进程容器和 UI。
+
+## 2026-10-14 正式 graph 与 Android 来源接线
+
+- 对应手机提交：MSDK-Relay `a578ba7`（feat: 接入运行图的唯一连接控制与发现来源），开发分支未推送。
+- App 已依赖来源与桥接，bootstrap 通过唯一控制器启动/停止连接，初始 gateway 地址为空；graph 模式接口保持业务对象，旧手动界面仍兼容 MANUAL。
+- 新增 Android 来源 7 项行为测试：延迟创建、幂等、数据身份透传、失败状态区分、旧事件丢弃、部分启动失败、清理重试及回调内关闭。
+- 定向 App 38 项重跑通过；桥接 37 项、Android 接收 20 项已有报告保持通过，共 95 项零失败/错误/跳过。App Kotlin 编译与合并清单检查通过；未构建/安装 APK，Android 14 实际授权、WLAN/后台/15 秒未验收。
+- 下一步 graph 停止終态释放与初始化回滚，再接进程容器和无地址自动启动/UI。

@@ -68,3 +68,5 @@
 - 本机独立启动：工作区父目录 `START-HERE.md`；通用启动步骤见本仓库 `docs/LOCAL_DEVELOPMENT.md`。
 
 2026-10-14 graph 接线准备已完成：手机长期 Android 对象使用 applicationContext，允许空初始 endpoint 并接受同步握手门禁；31 项 graph/Bootstrap 回归与 Kotlin 编译通过。当前主界面仍手动启动，下一步接 Android 来源及唯一连接控制器，再接停止收敛与进程容器。
+
+2026-10-14 graph 已接唯一连接控制器与 Android WLAN 来源，空地址 AUTO、非空地址 MANUAL，切换连接保留业务对象。38 项 App 回归与编译/清单检查通过；日常无地址启动仍待进程容器/UI，下一步先处理异步停止与初始化回滚。
