@@ -189,14 +189,17 @@ function create(raw: unknown): DesktopApplicationCreateResult {
     const relay = NodeRuntime.createRelay({
       ...options.relay,
       address: freeze({ host: options.relay.address.host, port: network.value.relayPort }),
-      onPhoto: async (deviceId, file) => {
+      onPhoto: async (deviceId, file, receipt) => {
         const control = photoHolder.control;
         if (control === null) return false;
+        const confirmStored = control.storedConfirmation(deviceId);
         let accepted: string;
         try { accepted = await control.inbox.accept(deviceId, file); } catch { return false; }
         if (accepted !== "accepted" && accepted !== "duplicate") return false;
         if (accepted === "duplicate" && !control.inbox.list(deviceId).some((stored) => stored.fileName === file.fileName && stored.sha256 === file.sha256)) return false;
-        try { control.recordStored(deviceId, file.fileName, file.sha256); } catch { /* the inbox already owns the file */ }
+        if (receipt.isCurrent()) {
+          try { confirmStored(file.fileName, file.sha256); } catch { /* the inbox already owns the file */ }
+        }
         return true;
       },
     });
@@ -267,6 +270,7 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       flightControl,
       deviceSettings,
       photoControl: freeze({
+        get: (deviceId: string) => photos.get(deviceId),
         capture: (deviceId: string) => photos.capture(deviceId),
         fetch: (deviceId: string) => photos.fetch(deviceId),
         recordDisconnected: (deviceId: string) => photos.recordDisconnected(deviceId),

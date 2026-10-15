@@ -106,6 +106,7 @@ function create(dependencies: OperationWorkflowDependencies) {
         mission: task(deviceId),
         stream: stream(deviceId),
         settings: settings(deviceId),
+        photo: dependencies.photoControl?.get?.(deviceId) ?? null,
         pendingFlightAction: pendingFlightAction(deviceId),
         landingIntent: landingIntents.get(deviceId),
       });

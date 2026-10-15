@@ -19,6 +19,7 @@ instance.get(deviceId) -> PhotoDispatchSnapshot
 instance.list(deviceId) -> readonly StoredPhoto[]
 instance.recordDisconnected(deviceId) -> PhotoDispatchSnapshot | null
 instance.recordStored(deviceId, fileName, sha256) -> PhotoDispatchSnapshot | null
+instance.storedConfirmation(deviceId) -> (fileName, sha256) => PhotoDispatchSnapshot | null
 instance.inbox -> PhotoInboxInstance
 instance.subscribe(listener) -> unsubscribe
 ```
@@ -55,4 +56,6 @@ camera.photo.fetch      fields: { knownPhotos: [{ fileName, sha256 }] }
 
 ## 验收
 
-测试覆盖空字段命令、无拍照身份时拒绝 fetch、同设备互斥、多设备并行、断线、迟到结果、收件箱去重、磁盘写入失败、文件名与摘要双事实匹配，以及不导入 WebSocket/DJI/Electron 的架构边界。
+测试覆盖 capture 空字段和 fetch 清单命令、无最近拍照身份的缺失照片回传、同设备互斥、多设备并行、断线、迟到结果、收件箱去重、磁盘写入失败、文件名与摘要双事实匹配，以及不导入 WebSocket/DJI/Electron 的架构边界。
+
+`get` 和订阅额外暴露可选、冻结的本次批次 `progress`，由 photo-dispatcher 唯一维护；准备清单时已经持有同设备锁。进度包含阶段、真实当前张序号、已落盘张数、文件名、当前阶段字节、时间与最多八条阶段记录。失败保留部分结果；人工重试创建新批次，不自动回传。生产装配在异步落盘后必须验证接收凭据仍属于当前请求/连接，才调用 recordStored；旧传输可以完成磁盘写入，但不得计入重连或重试的新批次。

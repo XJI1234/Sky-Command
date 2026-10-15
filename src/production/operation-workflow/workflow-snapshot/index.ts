@@ -175,7 +175,7 @@ const liveVideoCapability = (capabilities: unknown): "supported" | "unsupported"
   return "unknown";
 };
 
-function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly connectionEpoch: number; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
+function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly connectionEpoch: number; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly photo?: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
   const streams = read(input.media, "streams");
   const mediaStreams = Array.isArray(streams) ? streams : [];
   const player = mediaPlayer(input.media);
@@ -199,6 +199,7 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
       stream: device.stream,
       video: freeze({ phase: videoPhase, selected: input.selectedVideoDeviceId === device.deviceId, playerPhase: player.deviceId === device.deviceId ? player.phase : "idle" }),
       settings: device.settings,
+      photo: device.photo ?? null,
       pendingFlightAction: device.pendingFlightAction,
       landing: freeze({ phase: landingPhase(device.landingIntent, connectionValue) }),
     });

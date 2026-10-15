@@ -21,6 +21,7 @@ export interface CameraPhotoControlInstance {
   readonly list: (deviceId: string) => readonly StoredPhoto[];
   readonly recordDisconnected: (deviceId: string) => PhotoDispatchSnapshot | null;
   readonly recordStored: (deviceId: string, fileName: string, sha256: string) => PhotoDispatchSnapshot | null;
+  readonly storedConfirmation: (deviceId: string) => (fileName: string, sha256: string) => PhotoDispatchSnapshot | null;
   readonly inbox: PhotoInboxInstance;
   readonly subscribe: (listener: (snapshot: PhotoDispatchSnapshot) => void) => () => void;
 }
@@ -29,7 +30,7 @@ const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value)
 
 function create(dependencies: CameraPhotoControlDependencies): CameraPhotoControlInstance {
   const inbox = PhotoInbox.create({ now: dependencies.now, ...(dependencies.fs === undefined ? {} : { fs: dependencies.fs }) });
-  const dispatcher = PhotoDispatcher.create({ relay: dependencies.relay, knownPhotos: (deviceId): readonly PhotoManifestEntry[] => inbox.list(deviceId).map(({ fileName, sha256 }) => ({ fileName, sha256 })) });
+  const dispatcher = PhotoDispatcher.create({ relay: dependencies.relay, now: dependencies.now, knownPhotos: (deviceId): readonly PhotoManifestEntry[] => inbox.list(deviceId).map(({ fileName, sha256 }) => ({ fileName, sha256 })) });
   const rememberStored = async (deviceId: string): Promise<void> => {
     if (dependencies.storedPhotos === undefined) return;
     let stored: readonly Pick<StoredPhoto, "fileName" | "size" | "sha256">[];
@@ -39,14 +40,12 @@ function create(dependencies: CameraPhotoControlDependencies): CameraPhotoContro
   };
   return freeze({
     capture: (deviceId) => dispatcher.capture(deviceId),
-    fetch: async (deviceId) => {
-      await rememberStored(deviceId);
-      return dispatcher.fetch(deviceId);
-    },
+    fetch: (deviceId) => dispatcher.fetch(deviceId, () => rememberStored(deviceId)),
     get: (deviceId) => dispatcher.get(deviceId),
     list: (deviceId) => inbox.list(deviceId),
     recordDisconnected: (deviceId) => dispatcher.recordDisconnected(deviceId),
     recordStored: (deviceId, fileName, sha256) => dispatcher.recordStored(deviceId, fileName, sha256),
+    storedConfirmation: (deviceId) => dispatcher.storedConfirmation(deviceId),
     inbox,
     subscribe: (listener) => dispatcher.subscribe(listener)
   });

@@ -1,6 +1,7 @@
 import type { MissionRelayGateway, RelayMissionPayload } from "../../modules/mission-control/mission-dispatcher/index.js";
 import type { PairingRelayPort } from "../../modules/device-console/pairing-controller/index.js";
 import type { FlightRelay } from "../../modules/flight-control/flight-command-dispatcher/index.js";
+import type { PhotoProgressUpdate } from "../../modules/camera-photo-control/photo-dispatcher/index.js";
 
 type JsonValue = Readonly<{ readonly kind: "null" }>
   | Readonly<{ readonly kind: "string"; readonly value: string }>
@@ -172,7 +173,7 @@ export interface RelaySettingsGateway {
 }
 export interface PhotoRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> | Readonly<{ readonly knownPhotos: readonly Readonly<{ readonly fileName: string; readonly sha256: string }>[] }> }>) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> | Readonly<{ readonly knownPhotos: readonly Readonly<{ readonly fileName: string; readonly sha256: string }>[] }> }>, onProgress?: (progress: PhotoProgressUpdate) => void) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
 }
 export interface RelayOperationsAdapterInstance {
   readonly telemetry: (deviceId: string) => DesktopRelayTelemetry | null;
@@ -197,7 +198,7 @@ interface RelaySource {
   readonly latestTelemetry?: (deviceId: string) => unknown;
   readonly ingressAddress?: (deviceId: string) => unknown;
   readonly sendMission?: (deviceId: string, payload: RelayMissionPayload) => Promise<unknown>;
-  readonly sendCommand?: (deviceId: string, request: Readonly<{ readonly name: string; readonly fields: Readonly<Record<string, JsonValue>>; readonly timeoutMs?: number }>) => Promise<unknown>;
+  readonly sendCommand?: (deviceId: string, request: Readonly<{ readonly name: string; readonly fields: Readonly<Record<string, JsonValue>>; readonly timeoutMs?: number; readonly onPhotoProgress?: (progress: PhotoProgressUpdate) => void }>) => Promise<unknown>;
   readonly measurePhoneLink?: (deviceId: string) => Promise<unknown>;
   readonly subscribe?: (listener: (snapshot: unknown) => void) => () => void;
 }
@@ -615,10 +616,10 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   if (typeof relay.subscribe === "function") {
     try { unsubscribeRelay = relay.subscribe((value) => { rawSnapshot = value; discardStaleObservations(); publish(); }); } catch { /* an unavailable relay leaves the adapter offline */ }
   }
-  const send = async (deviceId: string, name: string, fields: Record<string, JsonValue>, timeoutMs?: number): Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>> => {
+  const send = async (deviceId: string, name: string, fields: Record<string, JsonValue>, timeoutMs?: number, onPhotoProgress?: (progress: PhotoProgressUpdate) => void): Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>> => {
     if (disposed || !validId(deviceId) || typeof relay.sendCommand !== "function") return commandFailure();
     try {
-      const outcome = await relay.sendCommand(deviceId, freeze({ name, fields: object(fields), ...(timeoutMs === undefined ? {} : { timeoutMs }) }));
+      const outcome = await relay.sendCommand(deviceId, freeze({ name, fields: object(fields), ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(onPhotoProgress === undefined ? {} : { onPhotoProgress }) }));
       const result = read(outcome, "result");
       return result !== undefined && record(result) !== null && read(result, "kind") === "object"
         ? freeze({ status: status(outcome), result: result as JsonValue })
@@ -692,12 +693,12 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   });
   const photoGateway: PhotoRelayGateway = freeze({
     latestTelemetry: telemetry,
-    sendCommand: async (deviceId, request) => {
+    sendCommand: async (deviceId, request, onProgress) => {
       if (request.name === "camera.photo.capture" && Object.keys(request.fields).length === 0) return send(deviceId, request.name, {});
       if (request.name !== "camera.photo.fetch" || Object.keys(request.fields).length !== 1 || !Array.isArray(request.fields.knownPhotos) || request.fields.knownPhotos.length > 256) return commandFailure();
       const entries = request.fields.knownPhotos;
       if (entries.some((entry) => entry === null || typeof entry.fileName !== "string" || typeof entry.sha256 !== "string" || !validPhotoName(entry.fileName) || !/^[0-9a-f]{64}$/u.test(entry.sha256))) return commandFailure();
-      return send(deviceId, request.name, { knownPhotos: array(entries.map((entry) => freeze({ kind: "object" as const, fields: object({ fileName: text(entry.fileName), sha256: text(entry.sha256) }) }))) }, 60 * 60 * 1000);
+      return send(deviceId, request.name, { knownPhotos: array(entries.map((entry) => freeze({ kind: "object" as const, fields: object({ fileName: text(entry.fileName), sha256: text(entry.sha256) }) }))) }, 60 * 60 * 1000, onProgress);
     }
   });
   const settingsGateway: RelaySettingsGateway = freeze({

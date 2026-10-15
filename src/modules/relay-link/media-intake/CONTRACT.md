@@ -13,6 +13,8 @@ instance.accept(connectionId, frame) -> void
 instance.cancelConnection(connectionId, reason) -> void
 ```
 
+options 可带 `onProgress(connectionId, progress)`：进度含 transferId、fileName、真实累计 transferredBytes、声明 totalBytes 与 receiving/verifying/saving/saved。接收开始及每块报告 receiving；核对摘要前报告 verifying；调用异步持久化前报告 saving；只有当前传输保存确认后报告 saved。旧连接或被替换传输的异步完成不得报告 saved；观察者异常不得影响媒体操作。此观察端口不改变 media-result 成功的含义。
+
 它不写最终照片目录（那是 `photo-inbox`）、不发送拍照命令、不建 Socket、不调用 DJI。写入端是唯一出站效果：匹配终态时发送一次 `media-result`。每一个 `MediaSink.begin/append/complete/abort` 调用都必须带入站 `connectionId`；sink 不得依赖调用方维护的“当前连接”全局变量。这样多个已配对手机的传输可以交错，且完成文件只能落到发起该连接对应的设备。
 
 `MediaTransfer` 是尚未聚合字节的传输身份（`transferId`、安全基名、大小、SHA-256）；`MediaFile` 在其基础上增加完整字节。`begin` 只接收前者，`complete` 才接收后者。

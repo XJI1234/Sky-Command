@@ -72,6 +72,17 @@ export interface MediaBeginFrame { readonly type: "media-begin"; readonly id: st
 export interface MediaChunkInput { readonly type: "media-chunk"; readonly id: string; readonly data: Uint8Array; }
 export interface MediaCompleteFrame { readonly type: "media-complete"; readonly id: string; }
 export interface MediaResultFrame { readonly type: "media-result"; readonly id: string; readonly ok: boolean; readonly detail: string; }
+export interface PhotoProgressFrame {
+  readonly type: "photo-progress";
+  readonly id: string;
+  readonly sequence: number;
+  readonly phase: "listing" | "downloading" | "sending";
+  readonly photoIndex: number;
+  readonly completedCount: number;
+  readonly fileName: string | null;
+  readonly transferredBytes: number;
+  readonly totalBytes: number | null;
+}
 
 export class MissionChunkFrame implements MissionChunkInput {
   readonly type = "mission-chunk" as const;
@@ -87,7 +98,7 @@ export class MissionChunkFrame implements MissionChunkInput {
   get data(): Uint8Array { return this.#data.slice(); }
 }
 
-export type RelayFrame = HelloFrame | PairedFrame | TelemetryFrame | CommandFrame | CommandResultFrame | MissionBeginFrame | MissionChunkInput | MissionCompleteFrame | MissionResultFrame | MissionPhaseFrame | DiagnosticReportFrame | DiagnosticAcknowledgementFrame | MediaBeginFrame | MediaChunkInput | MediaCompleteFrame | MediaResultFrame;
+export type RelayFrame = HelloFrame | PairedFrame | TelemetryFrame | CommandFrame | CommandResultFrame | MissionBeginFrame | MissionChunkInput | MissionCompleteFrame | MissionResultFrame | MissionPhaseFrame | DiagnosticReportFrame | DiagnosticAcknowledgementFrame | MediaBeginFrame | MediaChunkInput | MediaCompleteFrame | MediaResultFrame | PhotoProgressFrame;
 export interface ProtocolError { readonly code: ProtocolErrorCode; readonly message: string; }
 export interface Accepted<T> { readonly ok: true; readonly value: T; }
 export interface Rejected { readonly ok: false; readonly error: ProtocolError; }
@@ -343,6 +354,20 @@ function normalizeFrame(input: unknown): ProtocolResult<RelayFrame> {
       const id = validateId(field("id"), "INVALID_MESSAGE_ID", "Mission ID"); if (!id.ok) return id;
       return accepted(Object.freeze({ type, id: id.value }));
     }
+    case "photo-progress": {
+      const id = validateId(field("id"), "INVALID_MESSAGE_ID", "Photo command ID"); if (!id.ok) return id;
+      const sequence = field("sequence"), phase = field("phase"), photoIndex = field("photoIndex"), completedCount = field("completedCount");
+      const fileName = field("fileName"), transferredBytes = field("transferredBytes"), totalBytes = field("totalBytes");
+      if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 1
+        || (phase !== "listing" && phase !== "downloading" && phase !== "sending")
+        || typeof photoIndex !== "number" || !Number.isSafeInteger(photoIndex) || photoIndex < 0
+        || typeof completedCount !== "number" || !Number.isSafeInteger(completedCount) || completedCount < 0
+        || typeof transferredBytes !== "number" || !Number.isSafeInteger(transferredBytes) || transferredBytes < 0 || transferredBytes > ProtocolLimits.maxMissionBytes
+        || (totalBytes !== null && (typeof totalBytes !== "number" || !Number.isSafeInteger(totalBytes) || totalBytes < 1 || totalBytes > ProtocolLimits.maxMissionBytes || transferredBytes > totalBytes))) return rejected("INVALID_FIELD", "Photo progress fields are invalid");
+      if (fileName !== null && !validMediaFileName(fileName)) return rejected("INVALID_FILE_NAME", "Photo progress file name is invalid");
+      if (phase === "listing" ? photoIndex !== 0 || fileName !== null || transferredBytes !== 0 || totalBytes !== null : photoIndex !== completedCount + 1 || fileName === null) return rejected("INVALID_FIELD", "Photo progress stage is inconsistent");
+      return accepted(Object.freeze({ type, id: id.value, sequence, phase, photoIndex, completedCount, fileName, transferredBytes, totalBytes }));
+    }
     case "media-begin": {
       const id = validateId(field("id"), "INVALID_MESSAGE_ID", "Media ID"); if (!id.ok) return id;
       const fileName = field("fileName");
@@ -426,6 +451,7 @@ function base64Encode(bytes: Uint8Array): string {
 }
 function encodeText(frame: RelayFrame): string {
   switch (frame.type) {
+    case "photo-progress": return JSON.stringify(frame);
     case "hello": return `{\"type\":\"hello\",\"deviceId\":${JSON.stringify(frame.deviceId)},\"protocolVersion\":${JSON.stringify(frame.protocolVersion)}}`;
     case "paired": return `{\"type\":\"paired\",\"sessionId\":${JSON.stringify(frame.sessionId)}${frame.protocolVersion === null ? "" : `,\"protocolVersion\":${JSON.stringify(frame.protocolVersion)}`}}`;
     case "telemetry": return `{\"type\":\"telemetry\",\"payload\":${jsonText(frame.payload)},\"capabilities\":${jsonText(frame.capabilities)}}`;
@@ -556,7 +582,7 @@ function decodeKnown(root: JsonObject): DecodeResult {
   const type = root.fields.type;
   if (type === undefined || type.kind !== "string") return decodeRejected("INVALID_FIELD", "Field type must be text");
   if (!type.value.trim().length || codePoints(type.value) > ProtocolLimits.maxMessageTypeCodePoints || hasControl(type.value)) return decodeRejected("INVALID_MESSAGE_TYPE", "Message type is invalid");
-  if (!new Set(["hello", "paired", "telemetry", "command", "command-result", "mission-begin", "mission-chunk", "mission-complete", "mission-result", "mission-phase", "diagnostic-report", "diagnostic-ack", "media-begin", "media-chunk", "media-complete", "media-result"]).has(type.value)) return Object.freeze({ kind: "ignored" as const, type: type.value });
+  if (!new Set(["hello", "paired", "telemetry", "command", "command-result", "mission-begin", "mission-chunk", "mission-complete", "mission-result", "mission-phase", "diagnostic-report", "diagnostic-ack", "media-begin", "media-chunk", "media-complete", "media-result", "photo-progress"]).has(type.value)) return Object.freeze({ kind: "ignored" as const, type: type.value });
   const text = (name: string): string | undefined => {
     const value = root.fields[name]; return value?.kind === "string" ? value.value : undefined;
   };
@@ -589,6 +615,10 @@ function decodeKnown(root: JsonObject): DecodeResult {
   }
   if ((type.value === "mission-begin" || type.value === "media-begin") && integer("size") === undefined) return decodeRejected("INVALID_FIELD", "Field size must be an integer");
   if (type.value === "mission-phase" && (integer("missionRevision") === undefined || integer("deviceGeneration") === undefined || integer("sequence") === undefined)) return decodeRejected("INVALID_FIELD", "Mission phase fields must be integers");
+  if (type.value === "photo-progress") {
+    const result = validate(nativeJsonValue(root) as RelayFrame);
+    return result.ok ? decoded(result.value) : Object.freeze({ kind: "rejected" as const, error: result.error });
+  }
   if (type.value === "diagnostic-report") {
     const result = validate({ type: "diagnostic-report", runId: text("runId") as string, events: nativeJsonValue(root.fields.events as JsonValue) } as RelayFrame);
     return result.ok ? decoded(result.value) : Object.freeze({ kind: "rejected" as const, error: result.error });

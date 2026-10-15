@@ -29,6 +29,7 @@ export type DeviceSettingsPort = Pick<DeviceSettingsPanelInstance, "snapshot" | 
 
 /** Owns still-photo capture and original-photo fetch for the selected online phone. */
 export interface PhotoControlPort {
+  readonly get?: (deviceId: string) => unknown;
   readonly capture: (deviceId: string) => Promise<unknown>;
   readonly fetch: (deviceId: string) => Promise<unknown>;
   readonly recordDisconnected: (deviceId: string) => unknown;

@@ -40,6 +40,7 @@ import { operationFeedback, type OperationFeedback } from "./operation-feedback.
 import { createBackgroundRefresh, createRenderScheduler } from "./render-scheduler.js";
 import { createActionRequests } from "./action-requests.js";
 import { createPlaybackProgress } from "./playback-progress.js";
+import { createPhotoProgressCache, photoProgressView, renderPhotoProgress } from "./photo-progress.js";
 import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, routeMapNotice, setRouteMapVisible, showRoutePreview, type RouteMapPreview } from "./route-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight" | "monitor";
@@ -71,6 +72,8 @@ let lastRelayHint = "";
 let lastRoutePreview: { readonly routeId: string; readonly preview: RouteMapPreview } | null = null;
 let lastDeviceDetailHtml: string | null = null;
 let lastPlaybackIdentity = "off";
+const photoProgressCache = createPhotoProgressCache();
+let photoProgressDeviceId: string | null = null;
 
 const bridge = (): RendererBridge => {
   const api = (window as unknown as { skyCommand?: RendererBridge }).skyCommand;
@@ -530,7 +533,7 @@ const feedbackDeviceEpoch = (view: ReturnType<typeof OperatorConsole.project>, d
 
 const captureFeedback = (action: string, deviceId: string | null, connectionEpoch: number | null, value: unknown): OperationFeedback => {
   const feedback = operationFeedback(action, value);
-  feedbackForDevice(action, deviceId, connectionEpoch, feedback);
+  feedbackForDevice(action === "pairing-start" || action === "pairing-stop" ? "pairing" : action, deviceId, connectionEpoch, feedback);
   return feedback;
 };
 
@@ -631,7 +634,7 @@ let playbackWatchTimer: number | null = null;
 let lastLiveEdgeSeekAtMs = 0;
 const phoneLinkProbes = new Map<string, PhoneLinkProbeCacheEntry>();
 let phoneLinkProbeInFlightDeviceId: string | null = null;
-let pairingCommandInFlightDeviceId: string | null = null;
+let pairingCommandInFlight: { readonly deviceId: string; readonly action: "pairing-start" | "pairing-stop" } | null = null;
 
 const NO_FRAME_MS = 25_000;
 const STALL_MS = 12_000;
@@ -1212,6 +1215,12 @@ const msdkFact = (connection: unknown): { readonly label: string; readonly ok: b
   }
 };
 
+const pairingControl = (view: ReturnType<typeof OperatorConsole.project>): { readonly action: "pairing-start" | "pairing-stop"; readonly stopping: boolean } => {
+  const device = view.devices.find((item) => read(item, "deviceId") === view.missionDeviceId);
+  const pairingState = read(read(device, "connection"), "pairingState");
+  return { action: pairingState === "PAIRING" || pairingState === "STOPPING" ? "pairing-stop" : "pairing-start", stopping: pairingState === "STOPPING" };
+};
+
 const pairingFact = (connection: unknown): { readonly label: string; readonly ok: boolean } => {
   switch (read(connection, "pairingState")) {
     case "PAIRED": return { label: "已对频", ok: true };
@@ -1574,12 +1583,21 @@ async function projectView(signal?: AbortSignal): Promise<ReturnType<typeof Oper
   return view;
 }
 
-const projectCached = (): ReturnType<typeof OperatorConsole.project> => OperatorConsole.project({
-  snapshot: lastSnapshot,
-  selection: { missionDeviceId: state.missionDeviceId, streamDeviceId: state.streamDeviceId },
-  workspace: state.workspace === "monitor" ? "flight" : state.workspace,
-  relayHint: lastRelayHint.length > 0 ? lastRelayHint : bridge().relayHint,
-});
+const projectCached = (): ReturnType<typeof OperatorConsole.project> => {
+  const retainedPhotoTarget = photoProgressCache.get(photoProgressDeviceId) === undefined ? null : photoProgressDeviceId;
+  const view = OperatorConsole.project({
+    snapshot: lastSnapshot,
+    selection: { missionDeviceId: state.missionDeviceId, streamDeviceId: state.streamDeviceId ?? retainedPhotoTarget },
+    workspace: state.workspace === "monitor" ? "flight" : state.workspace,
+    relayHint: lastRelayHint.length > 0 ? lastRelayHint : bridge().relayHint,
+  });
+  photoProgressCache.observe(view.devices, Date.now());
+  if (view.streamDeviceId !== null) photoProgressDeviceId = view.streamDeviceId;
+  return view;
+};
+
+const photoDisplayDeviceId = (view: ReturnType<typeof OperatorConsole.project>): string | null =>
+  view.streamDeviceId ?? (photoProgressCache.get(photoProgressDeviceId) === undefined ? null : photoProgressDeviceId);
 
 const blocked = (action: string, reason: string, deviceId: string | null = null, connectionEpoch: number | null = null): void => {
   const feedback = captureFeedback(action, deviceId, connectionEpoch, { ok: false, code: "DESKTOP_BLOCKED", reason });
@@ -1600,7 +1618,7 @@ async function run(
   const connectionEpoch = feedbackDeviceEpoch(view, deviceId);
   if (!decision.ok) { blocked(action, decision.reason ?? "无法执行", deviceId, connectionEpoch); return; }
   if (action === "photo-capture") show("正在拍照");
-  if (action === "photo-fetch") show("正在补传电脑上没有的照片，界面应保持可操作");
+  if (action === "photo-fetch") show("正在请求回传电脑上没有的照片");
   let result: unknown;
   try {
     result = await bridge().invoke(invokeName, input);
@@ -1644,16 +1662,23 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
   const measuring = inspectedDeviceId !== null && phoneLinkProbeInFlightDeviceId === inspectedDeviceId;
   measure.disabled = inspectedDeviceId === null || measuring;
   measure.title = inspectedDeviceId === null ? "请先选择已连接的手机" : measuring ? "正在测量手机连接" : "仅测量电脑与手机的 WebSocket 往返时间";
-  const pairingAvailability: string[] = [];
+  const pairingOperation = pairingControl(view);
+  const pendingPairing = pairingCommandInFlight;
+  const pendingForSelection = pendingPairing !== null && pendingPairing.deviceId === inspectedDeviceId;
+  const visiblePairingAction = pendingForSelection ? pendingPairing.action : pairingOperation.action;
   for (const action of ["pairing-start", "pairing-stop"] as const) {
     const button = el(action) as HTMLButtonElement;
     const decision = OperatorConsole.evaluate(action, view);
-    button.disabled = pairingCommandInFlightDeviceId !== null || !decision.ok;
-    button.title = pairingCommandInFlightDeviceId !== null ? "正在处理对频命令" : decision.ok ? action === "pairing-start" ? "让遥控器开始对频" : "结束当前对频" : decision.reason ?? "当前不可操作";
-    pairingAvailability.push(`${button.textContent}：${pairingCommandInFlightDeviceId !== null ? "正在处理对频命令" : decision.ok ? "可操作" : decision.reason ?? "当前不可操作"}`);
-    renderOperationFeedback(action, inspectedDeviceId, feedbackDeviceEpoch(view, inspectedDeviceId));
+    button.hidden = action !== visiblePairingAction;
+    const waiting = pendingForSelection || (pairingOperation.stopping && action === "pairing-stop");
+    button.textContent = waiting ? action === "pairing-start" ? "正在开始…" : "正在停止…" : action === "pairing-start" ? "开始对频" : "停止对频";
+    button.disabled = pendingPairing !== null || pairingOperation.stopping || !decision.ok;
+    button.setAttribute("aria-busy", String(waiting));
+    const reason = pendingPairing !== null ? pendingForSelection ? "正在处理对频命令" : "正在处理其他设备的对频命令" : pairingOperation.stopping ? "正在等待手机确认停止对频" : decision.ok ? null : decision.reason ?? "当前不可操作";
+    button.title = reason ?? (action === "pairing-start" ? "让遥控器开始对频" : "结束当前对频");
+    if (!button.hidden) el("pairing-availability").textContent = `${button.textContent}：${reason ?? "可操作"}`;
   }
-  el("pairing-availability").textContent = pairingAvailability.join("；");
+  renderOperationFeedback("pairing", inspectedDeviceId, feedbackDeviceEpoch(view, inspectedDeviceId));
   const connection = inspected === undefined ? {} : inspected.connection as Record<string, unknown> ?? {};
   const msdk = msdkFact(connection);
   const pairing = pairingFact(connection);
@@ -1760,6 +1785,10 @@ function renderActionRequests(view: ReturnType<typeof OperatorConsole.project>):
     button.disabled = true;
     button.title = reason;
     if (!actionRequests.pending(deviceId, action)) return;
+    if (action === "photo-fetch") {
+      renderFlightPhotoProgress(view);
+      return;
+    }
     const note = document.querySelector(`[data-operation-feedback="${action}"]`);
     if (note instanceof HTMLElement) {
       note.hidden = false;
@@ -1835,13 +1864,20 @@ function renderStreamButtons(view: ReturnType<typeof OperatorConsole.project>): 
     button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
     renderOperationFeedback(action, view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
   }
+  renderFlightPhotoProgress(view);
+}
+
+function renderFlightPhotoProgress(view: ReturnType<typeof OperatorConsole.project>): void {
+  const progress = photoProgressView(photoProgressCache.get(photoDisplayDeviceId(view)), Date.now());
+  const pending = actionRequests.pending(view.streamDeviceId, "photo-fetch");
+  renderPhotoProgress(el("flight-photo-progress"), progress, pending ? "正在请求照片回传，等待进度" : view.streamDeviceId === null ? "请先选择图传手机" : "尚未开始回传照片");
 }
 
 function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
   // Cancel any renderer-local FLV retry after the phone has queued recovery stop.
   if (view.streamSourceUnavailable) detachVideo();
   const devices = view.devices as readonly Record<string, unknown>[];
-  const fill = (id: string, selected: string | null, onChange: (value: string) => void): void => {
+  const fill = (id: string, selected: string | null, onChange: (value: string) => void, offlineIds: readonly string[] = []): void => {
     const select = el(id) as HTMLSelectElement;
     select.replaceChildren(...[
       Object.assign(document.createElement("option"), { value: "", textContent: "未选择" }),
@@ -1850,12 +1886,21 @@ function renderFlight(view: ReturnType<typeof OperatorConsole.project>): void {
         textContent: callSign(String(device.deviceId)),
         selected: device.deviceId === selected,
       })),
+      ...offlineIds.map(deviceId => Object.assign(document.createElement("option"), {
+        value: deviceId,
+        textContent: `${callSign(deviceId)}（离线 · 最近回传）`,
+        selected: deviceId === selected,
+      })),
     ]);
     select.onchange = () => { onChange(select.value || ""); void render(); };
   };
   fill("mission-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
   fill("direct-flight-select", view.missionDeviceId, (value) => { state.missionDeviceId = value.length > 0 ? value : null; });
-  fill("stream-select", view.streamDeviceId, (value) => { state.streamDeviceId = value.length > 0 ? value : null; });
+  const offlinePhotoIds = photoProgressCache.deviceIds().filter(deviceId => !devices.some(device => device.deviceId === deviceId));
+  fill("stream-select", photoDisplayDeviceId(view), (value) => {
+    state.streamDeviceId = value.length > 0 ? value : null;
+    photoProgressDeviceId = state.streamDeviceId;
+  }, offlinePhotoIds);
   renderFlightControllerVideoHint(view);
   renderFlightPanelStatus(view);
   renderFlightPanelVisibility();
@@ -1979,12 +2024,15 @@ const paintMonitorPhotoButton = (slot: HTMLElement, view: ReturnType<typeof Oper
   if (deviceId === null) {
     button.disabled = true;
     button.title = "空位";
+    button.textContent = "回传照片";
     return;
   }
   const decision = OperatorConsole.evaluate("photo-fetch", { ...view, workspace: "flight", streamDeviceId: deviceId });
-  const busy = monitorPhotoBusy.has(deviceId);
+  const progress = photoProgressView(photoProgressCache.get(deviceId), Date.now());
+  const busy = monitorPhotoBusy.has(deviceId) || actionRequests.reason(deviceId, "photo-fetch") !== null;
   button.disabled = busy || !decision.ok;
-  button.title = decision.ok ? "回传照片" : decision.reason ?? "当前状态不允许此操作";
+  button.textContent = progress?.active === true ? "回传中" : "回传照片";
+  button.title = progress?.active === true ? `${progress.heading} · ${progress.count}` : decision.ok ? "回传照片" : decision.reason ?? "当前状态不允许此操作";
 };
 
 const paintMonitorHoldButton = (slot: HTMLElement, deviceId: string | null): void => {
@@ -2060,14 +2108,33 @@ function renderMonitorRail(view: ReturnType<typeof OperatorConsole.project>): vo
   if (!(rail instanceof HTMLElement)) return;
   const deviceId = monitorRailDeviceId;
   const plan = deviceId === null ? undefined : monitorRoutePlans.get(deviceId);
-  rail.replaceChildren();
   if (deviceId !== null && monitorRailKind === "photo") {
-    const photo = monitorPhotoProgress.get(deviceId);
-    if (photo !== undefined) {
-      paintMonitorActionRail(rail, deviceId, "回传照片", photo);
+    const progress = photoProgressView(photoProgressCache.get(deviceId), Date.now());
+    const request = monitorPhotoProgress.get(deviceId);
+    if (progress !== null || request !== undefined) {
+      let host = rail.querySelector<HTMLElement>("[data-monitor-photo-progress]");
+      if (rail.dataset.photoDevice !== deviceId || host === null) {
+        const head = document.createElement("div");
+        head.className = "monitor-rail-head";
+        const heading = document.createElement("strong");
+        heading.textContent = callSign(deviceId);
+        const subtitle = document.createElement("span");
+        subtitle.textContent = "回传照片";
+        head.append(heading, subtitle);
+        const body = document.createElement("div");
+        body.className = "monitor-rail-body";
+        host = document.createElement("div");
+        host.dataset.monitorPhotoProgress = "";
+        body.append(host);
+        rail.replaceChildren(head, body);
+        rail.dataset.photoDevice = deviceId;
+      }
+      renderPhotoProgress(host, progress, request?.detail ?? "正在请求照片回传，等待进度");
       return;
     }
   }
+  delete rail.dataset.photoDevice;
+  rail.replaceChildren();
   if (deviceId !== null && monitorRailKind === "hold") {
     const hold = monitorHoldProgress.get(deviceId);
     if (hold !== undefined) {
@@ -2354,6 +2421,15 @@ const snapshotRefresh = createBackgroundRefresh(fetchOnce, {
   intervalMs: 1_000,
   onFetched: () => { void paintScheduler.request(); },
 });
+const photoClockTimer = window.setInterval(() => {
+  const deviceId = state.workspace === "monitor" && monitorRailKind === "photo" ? monitorRailDeviceId
+    : state.workspace === "flight" && state.flightPanel === "stream" ? photoProgressDeviceId : null;
+  if (deviceId === null) return;
+  projectCached();
+  const progress = photoProgressView(photoProgressCache.get(deviceId), Date.now());
+  if (progress?.active === true) void paintScheduler.request();
+}, 1_000);
+window.addEventListener("beforeunload", () => { window.clearInterval(photoClockTimer); });
 const render = async (): Promise<void> => {
   try {
     await paintScheduler.request();
@@ -2368,6 +2444,14 @@ const render = async (): Promise<void> => {
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
     const workspace = (button as HTMLButtonElement).dataset.workspace;
+    if (workspace === "monitor" && state.workspace === "flight" && state.flightPanel === "stream") {
+      const view = projectCached();
+      const deviceId = photoDisplayDeviceId(view);
+      if (deviceId !== null && photoProgressView(photoProgressCache.get(deviceId), Date.now()) !== null) {
+        monitorRailDeviceId = deviceId;
+        monitorRailKind = "photo";
+      }
+    }
     if (workspace === "devices" || workspace === "routes" || workspace === "flight" || workspace === "monitor") state.workspace = workspace;
     void render();
   });
@@ -2383,12 +2467,14 @@ document.querySelectorAll<HTMLButtonElement>("[data-flight-panel]").forEach((but
   });
 });
 
-for (const action of ["pairing-start", "pairing-stop"] as const) {
-  el(action).addEventListener("click", async () => {
+for (const buttonId of ["pairing-start", "pairing-stop"] as const) {
+  el(buttonId).addEventListener("click", async () => {
     const view = projectCached();
     const deviceId = view.missionDeviceId;
-    if (deviceId === null || pairingCommandInFlightDeviceId !== null) return;
-    pairingCommandInFlightDeviceId = deviceId;
+    const pairing = pairingControl(view);
+    if (deviceId === null || pairingCommandInFlight !== null || pairing.stopping) return;
+    const action = pairing.action;
+    pairingCommandInFlight = { deviceId, action };
     try {
       show(action === "pairing-start" ? "正在请求开始对频" : "正在请求停止对频");
       void render().catch(() => undefined);
@@ -2396,7 +2482,7 @@ for (const action of ["pairing-start", "pairing-stop"] as const) {
     } catch {
       show("对频操作结果尚未确认，请查看设备状态后再操作");
     } finally {
-      pairingCommandInFlightDeviceId = null;
+      pairingCommandInFlight = null;
       void snapshotRefresh.request();
       try { await render(); } catch { /* a later snapshot can repaint the released buttons */ }
     }
@@ -2645,7 +2731,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-route]").forEach((bu
     const picking = monitorRailKind === "route" && monitorRailDeviceId === deviceId && plan.rail === "pick";
     if (!picking) {
       plan.resumeStatus = monitorRailKind === "route" && plan.rail === "status";
-      plan.resumePhoto = monitorRailKind === "photo" && monitorPhotoProgress.has(deviceId);
+      plan.resumePhoto = monitorRailKind === "photo" && (monitorPhotoProgress.has(deviceId) || photoProgressView(read(device, "photo"), Date.now()) !== null);
       plan.resumeHold = monitorRailKind === "hold" && monitorHoldProgress.has(deviceId);
       plan.resumeDirect = monitorRailKind === "direct" && monitorDirectProgress.has(deviceId);
       plan.resumeStream = monitorRailKind === "stream" && monitorStreamProgress.has(deviceId);
@@ -2664,7 +2750,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-route]").forEach((bu
       if (plan.resumeStatus) {
         plan.rail = "status";
         monitorRailKind = "route";
-      } else if (plan.resumePhoto && monitorPhotoProgress.has(deviceId)) {
+      } else if (plan.resumePhoto && (monitorPhotoProgress.has(deviceId) || photoProgressView(read(device, "photo"), Date.now()) !== null)) {
         monitorRailKind = "photo";
       } else if (plan.resumeHold && monitorHoldProgress.has(deviceId)) {
         monitorRailKind = "hold";
@@ -2720,10 +2806,10 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-photo]").forEach((bu
     renderActionRequests(view);
     monitorPhotoBusy.add(deviceId);
     button.disabled = true;
-    monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在补传电脑上没有的照片，界面应保持可操作" });
+    monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在请求照片回传，等待进度" });
     monitorRailDeviceId = deviceId;
     monitorRailKind = "photo";
-    show(`${callSign(deviceId)}：正在补传电脑上没有的照片，界面应保持可操作`);
+    show(`${callSign(deviceId)}：正在请求回传电脑上没有的照片`);
     try { await render(); } catch { /* the transfer still runs */ }
     try {
       const result = await bridge().invoke("photo-fetch", { deviceId });

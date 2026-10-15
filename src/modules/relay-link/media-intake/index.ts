@@ -30,6 +30,15 @@ export type MediaIntakeStatus = "succeeded" | "rejected" | "disconnected" | "tra
 export interface MediaIntakeOptions {
   readonly sink: MediaSink;
   readonly results: MediaResultSink;
+  readonly onProgress?: (connectionId: string, progress: MediaReceiveProgress) => void;
+}
+
+export interface MediaReceiveProgress {
+  readonly transferId: string;
+  readonly stage: "receiving" | "verifying" | "saving" | "saved";
+  readonly fileName: string;
+  readonly transferredBytes: number;
+  readonly totalBytes: number;
 }
 
 export interface MediaIntakeInstance {
@@ -51,6 +60,9 @@ const result = (id: string, ok: boolean, detail: string): Extract<RelayFrame, { 
 
 function create(options: MediaIntakeOptions): MediaIntakeInstance {
   const active = new Map<string, ActiveMediaTransfer>();
+  const progress = (connectionId: string, current: ActiveMediaTransfer, stage: MediaReceiveProgress["stage"]): void => {
+    try { options.onProgress?.(connectionId, freeze({ transferId: current.transferId, stage, fileName: current.fileName, transferredBytes: current.receivedBytes, totalBytes: current.size })); } catch { /* progress observers cannot fail delivery */ }
+  };
   const fail = (connectionId: string, id: string, detail: string): void => {
     active.delete(connectionId);
     runCatching(() => options.sink.abort(connectionId));
@@ -77,6 +89,7 @@ function create(options: MediaIntakeOptions): MediaIntakeInstance {
           return;
         }
         active.set(connectionId, { ...transfer, chunks: [], checksum: sha256.create(), receivedBytes: 0, completing: false });
+        progress(connectionId, active.get(connectionId)!, "receiving");
         return;
       }
       const current = active.get(connectionId);
@@ -94,6 +107,7 @@ function create(options: MediaIntakeOptions): MediaIntakeInstance {
         current.chunks.push(owned);
         current.checksum.update(owned);
         current.receivedBytes += owned.byteLength;
+        progress(connectionId, current, "receiving");
         return;
       }
       if (frame.type !== "media-complete") return;
@@ -102,16 +116,19 @@ function create(options: MediaIntakeOptions): MediaIntakeInstance {
         return;
       }
       if (current.completing) return;
+      progress(connectionId, current, "verifying");
       if (current.receivedBytes !== current.size || hex(current.checksum.digest()) !== current.sha256) {
         fail(connectionId, frame.id, current.receivedBytes !== current.size ? "TRANSFER_SIZE_MISMATCH" : "TRANSFER_CHECKSUM_MISMATCH");
         return;
       }
       current.completing = true;
+      progress(connectionId, current, "saving");
       const bytes = concat(current.chunks);
       current.chunks.length = 0;
       const file: MediaFile = freeze({ transferId: current.transferId, fileName: current.fileName, size: current.size, sha256: current.sha256, bytes });
       const finish = (stored: MediaSinkResult): void => {
         if (active.get(connectionId) !== current) return;
+        if (stored === "accepted") progress(connectionId, current, "saved");
         active.delete(connectionId);
         if (stored !== "accepted") runCatching(() => options.sink.abort(connectionId));
         runCatching(() => options.results.send(connectionId, result(frame.id, stored === "accepted", stored === "accepted" ? "Photo stored" : "TRANSFER_FAILED")));

@@ -182,3 +182,6 @@ instance.dispose() -> void
 12. `telemetry.read` 以空字段下发，成功不得推导为飞机已连接。
 13. `telemetry.read` 只读取当前订阅快照，不得重建 MSDK Key 观察；它的有效完整结果可在同会话且尚无更高订阅序号时更新当前事实，断连、会话替换、畸形和迟到结果均不得复活旧事实。
 14. 带 `telemetrySequence` 的较新完整遥测在同一会话内不得被较小或相等序号、或不带该序号的旧兼容帧覆盖。
+## 照片进度端口
+
+`photoGateway.sendCommand(deviceId, request, onProgress?)` 将本地观察回调随单次 fetch 请求转交 RelayLink，不加入 wire fields，不解析或推导照片阶段。fetch 保持一小时等待期限及 knownPhotos 清单；照片进度与最终结果、遥测、图传相互独立。旧手机只依赖桌面接收/保存进度。
