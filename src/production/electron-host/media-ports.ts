@@ -20,8 +20,9 @@ type NmsPublisher = {
   readonly flvGopCacheQueue?: { readonly size: number };
 };
 type RtmpVideoHost = { parserPacket?: { payload?: Buffer; header?: { length?: number } } };
+type RtmpSessionHost = { connectCmdObj?: Record<string, unknown> };
 const NodeRtmpSession = require("node-media-server/src/node_rtmp_session.js") as {
-  prototype: { rtmpVideoHandler: (this: RtmpVideoHost) => void };
+  prototype: { rtmpVideoHandler: (this: RtmpVideoHost) => void; stop: (this: RtmpSessionHost) => void };
 };
 const mediaContext = require("node-media-server/src/node_core_ctx.js") as {
   readonly nodeEvent: NodeEvent;
@@ -29,6 +30,13 @@ const mediaContext = require("node-media-server/src/node_core_ctx.js") as {
   readonly sessions: { get: (id: string) => NmsPublisher | undefined };
 };
 const originalRtmpVideoHandler = NodeRtmpSession.prototype.rtmpVideoHandler;
+const originalRtmpStop = NodeRtmpSession.prototype.stop;
+// NMS 2.6.6 assumes every TCP client sent an RTMP connect command before closing.
+// Keep its cleanup intact for probes and clients that disconnect during handshake.
+NodeRtmpSession.prototype.stop = function patchedRtmpStop(this: RtmpSessionHost) {
+  this.connectCmdObj ??= {};
+  return originalRtmpStop.call(this);
+};
 let rtmpVideoLog: ((detail: string) => void) | null = null;
 let rtmpVideoLogged = 0;
 NodeRtmpSession.prototype.rtmpVideoHandler = function patchedRtmpVideoHandler(this: RtmpVideoHost) {
