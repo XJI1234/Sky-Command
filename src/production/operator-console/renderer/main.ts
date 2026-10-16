@@ -2960,7 +2960,6 @@ const bindMonitorDirect = (selector: "[data-monitor-home]" | "[data-monitor-land
       monitorRailDeviceId = deviceId;
       monitorRailKind = "direct";
       show(`${callSign(deviceId)}：${detail}`);
-      try { await render(); } catch { /* the command still runs */ }
       try {
         const result = await confirmMonitorFlight(deviceId, control.mode);
         const feedback = captureFeedback(`flight-${control.mode}`, deviceId, feedbackDeviceEpoch(view, deviceId), result);

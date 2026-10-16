@@ -43,7 +43,11 @@ export interface NodeWebSocketRelayOptions {
 
 const productionFactory: WebSocketServerFactory = Object.freeze({
   openState: WebSocket.OPEN,
-  create: (address: ListenAddress) => new WebSocketServer({ host: address.host, port: address.port, path: "/relay" })
+  // Let the relay drain each frame before ws emits the next one from a TCP batch.
+  create: (address: ListenAddress) => {
+    const options = { host: address.host, port: address.port, path: "/relay", allowSynchronousEvents: false };
+    return new WebSocketServer(options);
+  }
 });
 
 const stableReason = (reason: string): string => reason === "server-closed" || reason === "transport-error" || reason === "keepalive-timeout" ? reason : "peer-closed";
