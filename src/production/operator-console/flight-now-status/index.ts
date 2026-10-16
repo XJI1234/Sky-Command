@@ -146,7 +146,7 @@ export function hudText(value: unknown): string {
 }
 
 const TAKEOFF_MODES = new Set(["AUTO_TAKEOFF"]);
-const LAND_MODES = new Set(["AUTO_LANDING", "FORCE_LANDING"]);
+const LAND_MODES = new Set(["AUTO_LANDING", "FORCE_LANDING", "CONFIRM_LANDING"]);
 const HOME_MODES = new Set(["GO_HOME", "AUTO_RETURN"]);
 const PHONE_MISSION = new Set(["STARTING", "EXECUTING", "PAUSED"]);
 const DJI_MISSION = new Set(["PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "RETURN_TO_START_POINT"]);
@@ -188,7 +188,7 @@ export function monitorAircraftStatus(input: Readonly<{
   if (flying === "grounded" && input.motorsOn === false) {
     return { label: "地面", detail: "" };
   }
-  if (input.landingConfirmationNeeded === true || mode === "CONFIRM_LANDING") {
+  if (input.landingConfirmationNeeded === true) {
     return { label: "继续降落", detail: protection };
   }
   if (mode !== null && LAND_MODES.has(mode)) {
@@ -280,7 +280,7 @@ export function monitorDirectFlight(input: Readonly<{
   const mode = input.flightMode;
   const flying = input.flying === "flying" || input.flying === "grounded" ? input.flying : null;
   const onGround = flying === "grounded" && input.motorsOn === false;
-  const confirmLanding = !onGround && (input.landingConfirmationNeeded === true || mode === "CONFIRM_LANDING");
+  const confirmLanding = !onGround && input.landingConfirmationNeeded === true;
   const returningHome = !onGround && !confirmLanding && ((mode !== null && HOME_MODES.has(mode)) || (flying === "flying" && input.lowBatteryRthState === "COUNTING_DOWN"));
   return freeze({
     home: returningHome ? freeze({ label: "停止返航", mode: "stop-go-home" }) : freeze({ label: "返航", mode: "return-home" }),

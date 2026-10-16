@@ -973,7 +973,9 @@ const playbackUrl = (value: unknown): string | null => {
 };
 
 async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, signal?: AbortSignal): Promise<void> {
-  if (state.workspace === "monitor" || !view.playbackReady || view.streamDeviceId === null || actionRequests.pending(view.streamDeviceId, "stream-stop")) {
+  // Read mutable workspace state again after asynchronous playback requests.
+  const isMonitorWorkspace = (): boolean => state.workspace === "monitor";
+  if (isMonitorWorkspace() || !view.playbackReady || view.streamDeviceId === null || actionRequests.pending(view.streamDeviceId, "stream-stop")) {
     if (desiredFlightPlayback !== "off") flightPlaybackEpoch += 1;
     desiredFlightPlayback = "off";
     flightPlaybackRequest = null;
@@ -995,18 +997,18 @@ async function ensurePlayback(view: ReturnType<typeof OperatorConsole.project>, 
   signal ??= AbortSignal.timeout(5_000);
   try {
     const playbackResult = await safeRenderInvoke("video-playback", { deviceId: view.streamDeviceId }, signal);
-    if (playbackResult === null || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
+    if (playbackResult === null || epoch !== flightPlaybackEpoch || isMonitorWorkspace()) return;
     const url = playbackUrl(playbackResult);
     if (url === null) return;
     attachVideo(url);
-    if (epoch !== flightPlaybackEpoch || state.workspace === "monitor") {
+    if (epoch !== flightPlaybackEpoch || isMonitorWorkspace()) {
       detachVideo();
       return;
     }
     if (flvPlayer === null || attachedUrl !== url) return;
     if (selectedPlaybackDeviceId !== view.streamDeviceId) {
       const selected = unwrap(await safeRenderInvoke("stream-select", { deviceId: view.streamDeviceId }, signal));
-      if (!accepted(selected) || epoch !== flightPlaybackEpoch || state.workspace === "monitor") return;
+      if (!accepted(selected) || epoch !== flightPlaybackEpoch || isMonitorWorkspace()) return;
       selectedPlaybackDeviceId = view.streamDeviceId;
     }
     lastPlaybackIdentity = identity;
@@ -2090,7 +2092,7 @@ const paintMonitorDirectButtons = (slot: HTMLElement, device: Record<string, unk
   land.dataset.monitorLandMode = direct.land.mode;
 };
 
-function paintMonitorActionRail(rail: HTMLElement, deviceId: string, title: string, progress: { state: MonitorRouteStepState; detail: string | null }): void {
+function paintMonitorActionRail(rail: HTMLElement, deviceId: string, title: string, progress: { state: MonitorRouteStepState; detail: string | null }, doneLabel = "已完成"): void {
   const head = document.createElement("div");
   head.className = "monitor-rail-head";
   const heading = document.createElement("strong");
@@ -2105,7 +2107,7 @@ function paintMonitorActionRail(rail: HTMLElement, deviceId: string, title: stri
   const label = document.createElement("span");
   label.textContent = title;
   const value = document.createElement("small");
-  value.textContent = monitorRouteStepText[progress.state];
+  value.textContent = progress.state === "done" ? doneLabel : monitorRouteStepText[progress.state];
   row.append(label, value);
   body.append(row);
   if (progress.detail !== null) {
@@ -2159,7 +2161,7 @@ function renderMonitorRail(view: ReturnType<typeof OperatorConsole.project>): vo
   if (deviceId !== null && monitorRailKind === "direct") {
     const direct = monitorDirectProgress.get(deviceId);
     if (direct !== undefined) {
-      paintMonitorActionRail(rail, deviceId, direct.title, direct);
+      paintMonitorActionRail(rail, deviceId, direct.title, direct, "已受理");
       return;
     }
   }

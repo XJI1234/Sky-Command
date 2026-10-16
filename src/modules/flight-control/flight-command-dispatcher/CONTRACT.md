@@ -17,7 +17,7 @@ instance.dispatch(deviceId, action) -> Promise<FlightCommandResult>
 instance.isBusy(deviceId) -> boolean
 ```
 
-`check` 读取目标设备最新遥测，并调用 `PreflightCheck.evaluateFlightAction`。六个动作都只重读中继可达性和 `MSDK READY`；不调用通用能力门禁，也不以遥控器、飞控、飞行状态、飞行模式、电量、电机或降落确认事实拒绝。`dispatch` 必须再次调用同一动作对应的检查，再发送准确命令。MSDK 是所有直接飞行动作硬件条件的最终裁判。
+`check` 读取目标设备最新遥测，并调用 `PreflightCheck.evaluateFlightAction`。所有动作重读中继可达性和 `MSDK READY`；仅 `confirm-landing` 额外要求原始 `landingConfirmationNeeded === true`。不调用通用能力门禁，也不以遥控器、飞控、飞行状态、飞行模式、电量或电机事实拒绝。`dispatch` 必须再次调用同一动作对应的检查，再发送准确命令。MSDK 是所有直接飞行动作硬件条件的最终裁判。
 
 命令映射固定：
 

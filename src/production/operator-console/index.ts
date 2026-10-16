@@ -631,6 +631,9 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing" || name === "flight-stop-go-home") {
     const linkIssue = msdkInvocationIssue(device);
     if (linkIssue !== null) return reject(linkIssue);
+    if (name === "flight-confirm-landing" && read(read(device, "connection"), "landingConfirmationNeeded") !== true) {
+      return reject("飞控当前未请求确认降落，请查看当前飞行状态");
+    }
     return accept();
   }
   if (name === "mission-stage") {

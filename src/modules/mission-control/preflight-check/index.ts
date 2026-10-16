@@ -68,6 +68,7 @@ export type PreflightBlockerCode =
   | "INVALID_INPUT"
   | "RELAY_DISCONNECTED"
   | "SDK_NOT_READY"
+  | "LANDING_CONFIRMATION_NOT_REQUIRED"
   | "MISSION_NOT_UPLOADED";
 
 export interface PreflightBlocker {
@@ -81,6 +82,7 @@ const messages: Readonly<Record<PreflightBlockerCode, string>> = Object.freeze({
   INVALID_INPUT: "Device status could not be read.",
   RELAY_DISCONNECTED: "The relay phone is disconnected.",
   SDK_NOT_READY: "The DJI SDK is not ready.",
+  LANDING_CONFIRMATION_NOT_REQUIRED: "The aircraft has not requested landing confirmation.",
   MISSION_NOT_UPLOADED: "The mission has not been uploaded to the aircraft.",
 });
 
@@ -91,9 +93,10 @@ interface NormalizedInput {
   readonly sdkAvailability: unknown;
   readonly sdkRegistered: unknown;
   readonly missionPhase: unknown;
+  readonly landingConfirmationNeeded?: unknown;
 }
 
-function normalize(input: unknown): NormalizedInput | null {
+function normalize(input: unknown, action?: FlightActionPreflightAction): NormalizedInput | null {
   try {
     if (!isRecord(input) || !isRecord(input.payload)) return null;
     return Object.freeze({
@@ -101,6 +104,7 @@ function normalize(input: unknown): NormalizedInput | null {
       sdkAvailability: input.payload.sdkAvailability,
       sdkRegistered: input.payload.sdkRegistered,
       missionPhase: input.missionPhase,
+      ...(action === "confirm-landing" ? { landingConfirmationNeeded: input.payload.landingConfirmationNeeded } : {}),
     });
   } catch {
     return null;
@@ -151,13 +155,16 @@ function evaluateUpload(input: PreflightInput, _policy?: PreflightPolicy): Prefl
 }
 
 function evaluateFlightAction(input: FlightActionPreflightInput, _policy?: PreflightPolicy): PreflightResult {
-  const normalized = normalize(input);
   const action = flightActionOf(input);
+  const normalized = normalize(input, action ?? undefined);
   if (normalized === null || action === null) return result(["INVALID_INPUT"]);
 
   const codes: PreflightBlockerCode[] = [];
   if (!normalized.relayConnected) codes.push("RELAY_DISCONNECTED");
   if (!sdkReady(normalized)) codes.push("SDK_NOT_READY");
+  // A flight mode is not a pending DJI confirmation request. Rechecked by the
+  // dispatcher after the operator's confirmation token is consumed.
+  if (action === "confirm-landing" && normalized.landingConfirmationNeeded !== true) codes.push("LANDING_CONFIRMATION_NOT_REQUIRED");
   return result(codes);
 }
 

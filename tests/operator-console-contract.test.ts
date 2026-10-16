@@ -131,7 +131,7 @@ describe("操作台投影", () => {
     const view = OperatorConsole.project({
       snapshot: snapshot([device({
         control: { sdk: "ready", remoteController: "disconnected", flightController: "unknown" },
-        connection: { ...device().connection, flightState: "unknown", flightMode: "GPS_NORMAL", landingConfirmationNeeded: false },
+        connection: { ...device().connection, flightState: "unknown", flightMode: "GPS_NORMAL", landingConfirmationNeeded: action === "flight-confirm-landing" },
       })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
       workspace: "flight",
@@ -986,17 +986,18 @@ describe("操作台工作区", () => {
     expect(OperatorConsole.evaluate("flight-stop-auto-landing", flight("GPS_NORMAL"))).toEqual({ ok: true });
   });
 
-  it("确认继续降落不由页面上的降落确认事实推断拦截", () => {
+  it.each([false, null, undefined])("确认继续降落需要明确的 DJI 确认请求，不能用飞行模式覆盖 %s", (needed) => {
     const allowed = OperatorConsole.project({
       snapshot: snapshot([device({ connection: { ...device().connection, flightState: "flying", landingConfirmationNeeded: true } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" }, workspace: "flight",
     });
     const blocked = OperatorConsole.project({
-      snapshot: snapshot([device({ connection: { ...device().connection, flightState: "flying", landingConfirmationNeeded: false } })]),
+      snapshot: snapshot([device({ connection: { ...device().connection, flightState: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: needed } })]),
       selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" }, workspace: "flight",
     });
     expect(OperatorConsole.evaluate("flight-confirm-landing", allowed)).toEqual({ ok: true });
-    expect(OperatorConsole.evaluate("flight-confirm-landing", blocked)).toEqual({ ok: true });
+    expect(OperatorConsole.evaluate("flight-confirm-landing", blocked)).toEqual({ ok: false, reason: "飞控当前未请求确认降落，请查看当前飞行状态" });
+    expect(OperatorConsole.evaluate("flight-land", blocked)).toEqual({ ok: true });
   });
 });
 

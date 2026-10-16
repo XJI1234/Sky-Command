@@ -14,6 +14,7 @@ it('exposes persistent discovery identity and broadcaster lifecycle through Node
     const sent: Array<{ announcement: { serverId: string; relayPort: number }; port: number }> = [];
     let closed = 0, cancelled = 0;
     const discovery = createRelayDiscovery(serverId, '22222222-2222-4222-8222-222222222222', 8080, {
+      queries: () => () => undefined,
       interfaces: () => ({ 'Wi-Fi': [{ family: 'IPv4', address: '192.168.1.20', netmask: '255.255.255.0', internal: false }] }),
       socket: () => ({
         bind: (_address, ready) => ready(), enableBroadcast: () => undefined,

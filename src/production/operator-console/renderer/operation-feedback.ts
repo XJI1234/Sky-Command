@@ -53,6 +53,7 @@ const pairingLabel = (action: string): string => action === "pairing-stop" ? "�
 const localReason = (code: string | null): string => {
     if (code === "DEVICE_OFFLINE" || code === "RELAY_OFFLINE") return "手机中继离线";
     if (code === "SDK_NOT_READY") return "手机端 MSDK 尚未就绪";
+    if (code === "LANDING_CONFIRMATION_NOT_REQUIRED") return "飞控当前未请求确认降落，请查看当前飞行状态";
     if (code === "NOTHING_TO_FETCH") return "飞机上没有电脑缺少的照片";
     if (code === "AIRLINK_OFFLINE") return "AirLink 未连接";
   if (code === "AIRLINK_CONNECTION_UNKNOWN") return "AirLink 状态未知";
@@ -162,12 +163,20 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
   if (code === "CAPTURED") return msdkCallback("dji", "accepted", "成功", "onSuccess", ["说明：已拍下原图，电脑尚未收齐文件"]);
   if (code === "NOTHING_TO_FETCH") return { source: "relay", outcome: "completed", message: "飞机上没有电脑缺少的照片" };
   const reason = text(read(inner, "reason")) ?? text(read(value, "reason"));
+  if (code === "PREFLIGHT_BLOCKED") {
+    const blockers = read(inner, "blockers");
+    const reasons = Array.isArray(blockers) ? blockers.map((item) => localReason(text(read(item, "code")))) : [];
+    return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${reasons.length > 0 ? reasons.join("；") : localReason(code)}` };
+  }
   if (code !== null && code !== "SUCCEEDED") return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${localReason(reason ?? code)}` };
 
   if (record(inner)?.confirmation !== undefined) return { source: "desktop", outcome: "pending", message: `等待人工确认：${flightLabel(confirmedAction)} 尚未调用 DJI MSDK` };
   if (action === "mission-stage") return { source: "relay", outcome: "completed", message: "手机中继回调：航线文件已传输并校验（此步骤未调用 DJI MSDK）" };
   if (action.startsWith("pairing-") && read(inner, "ok") === true) return { source: "relay", outcome: "completed", message: `手机已完成${pairingLabel(action)}命令；请以对频状态为准` };
-  if (code === "SUCCEEDED" && action.startsWith("flight-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
+  if (code === "SUCCEEDED" && action.startsWith("flight-")) {
+    const landing = confirmedAction === "land" || confirmedAction === "confirm-landing" || action === "flight-land" || action === "flight-confirm-landing";
+    return msdkCallback("dji", "accepted", "成功", "onSuccess", landing ? ["说明：降落接口调用已受理；是否正在下降、是否落地请以飞控状态为准"] : []);
+  }
   if (code === "SUCCEEDED" && action.startsWith("mission-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action.startsWith("stream-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action === "photo-fetch") {

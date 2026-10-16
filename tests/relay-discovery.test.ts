@@ -43,7 +43,12 @@ function harness() {
   let configure: (socket: FakeSocket) => void = () => undefined;
   const sockets: FakeSocket[] = [];
   const diagnostics: DiscoveryDiagnostic[] = [];
+  let query: (bytes: Buffer, address: string, port: number) => void = () => undefined;
+  let queryClosed = 0;
+  let queryFailed: () => void = () => undefined;
+  let queryStarts = 0;
   const discovery = createRelayDiscovery(server, instance, 8080, {
+    queries: (receive, failed) => { queryStarts++; query = receive; queryFailed = failed; return () => { queryClosed++; }; },
     interfaces: () => interfaces,
     now: () => now,
     repeat: (callback, delay) => { expect(delay).toBe(1000); work = callback; schedules++; return () => { cancellations++; }; },
@@ -51,7 +56,9 @@ function harness() {
     diagnostic: (code) => { diagnostics.push(code); },
   });
   return {
-    discovery, sockets, diagnostics,
+    discovery, sockets, diagnostics, query: (bytes: Buffer, address: string, port = DISCOVERY_PORT) => query(bytes, address, port),
+    queryCloses: () => queryClosed,
+    queryFailure: () => queryFailed, queryStarts: () => queryStarts,
     tick: () => { now += 1000; work(); },
     network: (next: NetworkSnapshot) => { interfaces = next; },
     configure: (next: (socket: FakeSocket) => void) => { configure = next; },
@@ -89,6 +96,44 @@ describe("relay announcement contract", () => {
 });
 
 describe("relay discovery ownership", () => {
+  const request = Buffer.from("SKY_COMMAND_RELAY_DISCOVER_V1", "ascii");
+  it("replies to a local discovery request by unicast and retains all candidates", () => {
+    const h = harness(); h.discovery.start(); h.sockets[0]!.ready();
+    h.query(request, "10.20.168.99");
+    expect(h.sockets[0]!.sent.at(-1)).toMatchObject({ destination: "10.20.168.99", port: DISCOVERY_PORT });
+    expect(h.sockets[0]!.sent.at(-1)!.bytes).toEqual(encodeAnnouncement(server, instance, 8080));
+    h.query(request, "10.20.168.100");
+    expect(h.sockets[0]!.sent.at(-1)!.destination).toBe("10.20.168.100");
+    h.discovery.stop(); h.query(request, "10.20.168.101");
+    expect(h.queryCloses()).toBe(1);
+    expect(h.sockets[0]!.sent).toHaveLength(4);
+  });
+  it("bounds replies and ignores malformed, off-subnet, non-host and arbitrary-port requests", () => {
+    const h = harness(); h.discovery.start(); h.sockets[0]!.ready();
+    for (const source of ["127.0.0.1", "10.21.1.2", "10.20.128.0", "10.20.191.255", "255.255.255.255"]) h.query(request, source);
+    h.query(Buffer.concat([request, Buffer.from("x")]), "10.20.168.99");
+    h.query(request, "10.20.168.99", 1234);
+    expect(h.sockets[0]!.sent).toHaveLength(2);
+    for (let index = 0; index < 100; index++) h.query(request, `10.20.168.${index + 1}`);
+    expect(h.sockets[0]!.sent).toHaveLength(34);
+    h.query(request, "10.20.168.1");
+    expect(h.sockets[0]!.sent).toHaveLength(34);
+    h.tick(); h.query(request, "10.20.168.1");
+    expect(h.sockets[0]!.sent.at(-1)!.destination).toBe("10.20.168.1");
+  });
+  it("recovers the query listener independently and ignores its retired callbacks", () => {
+    const h = harness(); h.discovery.start(); h.sockets[0]!.ready();
+    const failed = h.queryFailure(); failed();
+    expect(h.queryCloses()).toBe(1);
+    expect(h.diagnostics).toEqual(["DISCOVERY_QUERY_FAILED"]);
+    h.tick(); failed();
+    expect(h.queryStarts()).toBe(2);
+    expect(h.sockets).toHaveLength(1);
+    h.query(request, "10.20.168.99");
+    expect(h.sockets[0]!.sent.at(-1)!.destination).toBe("10.20.168.99");
+    h.discovery.stop(); h.queryFailure()();
+    expect(h.queryCloses()).toBe(2);
+  });
   it("waits for bind readiness, then repeats both targets without additional sockets", () => {
     const h = harness(); h.discovery.start(); h.discovery.start();
     const socket = h.sockets[0]!;
@@ -164,6 +209,7 @@ describe("relay discovery ownership", () => {
     let closes = 0;
     const sockets: FakeSocket[] = [];
     const discovery = createRelayDiscovery(server, instance, 8080, {
+      queries: () => () => undefined,
       interfaces: () => { if (networkFails) throw new Error("interfaces"); return { WLAN: [card()] }; },
       socket: (failed) => {
         if (socketFails) throw new Error("create");

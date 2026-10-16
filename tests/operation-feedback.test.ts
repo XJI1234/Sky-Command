@@ -83,10 +83,10 @@ describe("操作回调展示", () => {
     ].join("\n"));
   });
 
-  it("将 DJI onSuccess 原样显示为逐行回执", () => {
-    const feedback = operationFeedback("flight-land", {
+  it.each(["land", "confirm-landing"])("%s 的 onSuccess 说明调用已受理，实际下降仍由遥测确认", (action) => {
+    const feedback = operationFeedback("flight-confirm", {
       ok: true,
-      value: { ok: true, action: "land", code: "SUCCEEDED" },
+      value: { ok: true, action, code: "SUCCEEDED" },
     });
 
     expect(feedback.source).toBe("dji");
@@ -94,7 +94,18 @@ describe("操作回调展示", () => {
     expect(feedback.message).toBe([
       "MSDK 回调：成功",
       "原始类型：onSuccess",
+      "说明：降落接口调用已受理；是否正在下降、是否落地请以飞控状态为准",
     ].join("\n"));
+  });
+
+  it("确认条件消失时说明没有调用 DJI，而不是显示调用成功", () => {
+    expect(operationFeedback("flight-confirm", {
+      ok: false, code: "PREFLIGHT_BLOCKED",
+      blockers: [{ code: "LANDING_CONFIRMATION_NOT_REQUIRED", message: "The aircraft has not requested landing confirmation." }],
+    })).toEqual({
+      source: "desktop", outcome: "not-called",
+      message: "未调用 DJI MSDK：飞控当前未请求确认降落，请查看当前飞行状态",
+    });
   });
 
   it("本地门禁拒绝时明确说明没有调用 DJI MSDK", () => {

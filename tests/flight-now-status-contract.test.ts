@@ -97,7 +97,9 @@ describe("飞行页现在状态文案", () => {
     expect(monitorAircraftStatus({ ...facts, flightController: "disconnected", flying: "grounded", motorsOn: false })).toEqual({ label: "飞控未连接", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flightController: "connected", flying: "grounded", motorsOn: null })).toEqual({ label: "未确认", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GO_HOME", landingConfirmationNeeded: true })).toEqual({ label: "继续降落", detail: "" });
-    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING" })).toEqual({ label: "继续降落", detail: "" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING" })).toEqual({ label: "降落", detail: "" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: false })).toEqual({ label: "降落", detail: "" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: true })).toEqual({ label: "继续降落", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "AUTO_LANDING", landingProtectionState: "NOT_SAFE_TO_LAND" })).toEqual({ label: "降落", detail: "当前不适合降落" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GO_HOME" })).toEqual({ label: "返航", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GPS_NORMAL", lowBatteryRthState: "COUNTING_DOWN" })).toEqual({ label: "返航", detail: "" });
@@ -186,7 +188,9 @@ describe("飞行页现在状态文案", () => {
     expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "GPS_NORMAL", lowBatteryRthState: "EXECUTED" })).toMatchObject({ home: { mode: "return-home" }, land: { mode: "land" } });
     expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "AUTO_LANDING" })).toMatchObject({ home: { mode: "return-home" }, land: { label: "降落", mode: "land" } });
     expect(monitorDirectFlight({ ...idle, flying: "flying", landingConfirmationNeeded: true })).toMatchObject({ home: { mode: "return-home" }, land: { label: "确认降落", mode: "confirm-landing" } });
-    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING" })).toMatchObject({ land: { mode: "confirm-landing" } });
+    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING" })).toMatchObject({ land: { label: "降落", mode: "land" } });
+    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: false })).toMatchObject({ land: { label: "降落", mode: "land" } });
+    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: true })).toMatchObject({ land: { label: "确认降落", mode: "confirm-landing" } });
     expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "GO_HOME", landingConfirmationNeeded: true })).toMatchObject({ home: { mode: "return-home" }, land: { mode: "confirm-landing" } });
     expect(monitorDirectFlight({ ...idle, flying: "grounded", motorsOn: false, flightMode: "GO_HOME", landingConfirmationNeeded: true })).toMatchObject({ home: { mode: "return-home" }, land: { mode: "land" } });
   });
