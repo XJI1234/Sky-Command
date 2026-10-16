@@ -2,6 +2,8 @@
 
 更新日期：2026-10-16。正式双端自动发现源码已完成，热点单手机自动连接及重连已有实机证据；校园网、锁屏/划卡/长期后台、多设备及实际飞行链路仍待验收。用户已授权分享到工作组 GitHub，使用现有开发分支分别推送并创建 Draft PR，由组长审查合并。发布结果及链接记录在 PROGRESS.md，不直接推送 main。
 
+已创建：[Sky-Command PR #1](https://github.com/XJI1234/Sky-Command/pull/1)、[MSDK-Relay PR #1](https://github.com/XJI1234/MSDK-Relay/pull/1)、[MSDK PR #1](https://github.com/XJI1234/MSDK/pull/1)。三个 PR 均为 Draft，开发分支已推送，main 保持原提交；本次没有发布安装包或执行合并。
+
 ## 哪些仓库交付
 
 | 仓库 | 本次交付内容 | 分享方式 |
