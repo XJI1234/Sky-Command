@@ -25,6 +25,6 @@
 
 本轮电脑端 `npm test -- --maxWorkers=4`：196 个测试文件通过、2049 项通过；另有 1 个验证报告检查依赖 `CROSS_RUNTIME_VERIFICATION_STARTED_AT`，默认运行跳过。`npm run test:types`、`npm run build` 通过；SDK 25 项测试、类型检查和构建通过，15 个公开入口均验证 ESM/CJS 加载。XJICloud 已实际安装新压缩包并运行网关，被动监听收到 6 条有效 UDP 公告，握手前断开 RTMP TCP 后网关仍运行。
 
-XJICloud Web2 168 项测试及 Vite 打包通过；完整 `pnpm build:web2` 仍被合并前既有的 5 处类型错误阻挡（外部 renderer/main.ts 三处、CloudLayout.vue 一处、vite.config.ts 一处）。地图降载 bundle 与合并前 checkpoint 无差异，原 32 航点航线已恢复。
+XJICloud Web2 168 项测试及 Vite 打包通过；完整 `pnpm build:web2` 仍被合并前既有的 5 处类型错误阻挡（外部 renderer/main.ts 三处、CloudLayout.vue 一处、vite.config.ts 一处）。嵌入 bundle 仅同步自动连接引导文案，地图降载代码与合并前 checkpoint 无差异，原 32 航点航线已恢复。
 
 本次合并不安装 APK、不下发飞行命令。手机权限、热点发现、后台生命周期、真实图传和飞行器操作仍需真机验收；历史分支中的实机记录不作为本次验收结果。

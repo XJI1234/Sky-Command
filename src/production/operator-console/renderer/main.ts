@@ -1724,7 +1724,7 @@ function renderDevices(view: ReturnType<typeof OperatorConsole.project>): void {
     el("device-detail").innerHTML = html;
     lastDeviceDetailHtml = html;
   }
-  el("device-guide").textContent = `电脑和手机连同一 Wi-Fi。在手机上填写 ${view.relayHint}，点保存并启动。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在这里开始对频。电脑关掉后，需要在手机上重新连接。`;
+  el("device-guide").textContent = `电脑和手机连接同一 Wi-Fi，打开手机中继并授予所需权限，手机会自动发现并连接电脑。需要手动连接时，长按手机页面标题打开调试入口，填写 ${view.relayHint}。已对频的飞机会在开机后自动连接；只有新增飞机或更换遥控器时，才在这里开始对频。自动连接模式下，电脑恢复后手机会重新发现并连接。`;
 }
 
 let routeMenuOpen = false;
