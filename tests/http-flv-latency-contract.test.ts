@@ -32,7 +32,7 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(launch()).not.toContain("discoverFfmpegCandidates");
   });
 
-  it("及时性优先：timeupdate 发现明显积压才跳一次，跳转中和冷却期内不得再 seek", () => {
+  it("小幅落后用倍速追平，只有积压很大才跳一次，跳转中和冷却期内不得再 seek", () => {
     const source = renderer();
     const chase = source.slice(source.indexOf("const chaseLiveEdge"), source.indexOf("const scheduleFlvReattach"));
     const start = source.slice(source.indexOf("const startPlaybackWatch"), source.indexOf("const stopPlaybackWatch"));
@@ -47,10 +47,10 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     const maxBackward = Number(/LIVE_BACKWARD_MAX_S = ([0-9.]+)/.exec(source)?.[1]);
     const minBackward = Number(/LIVE_BACKWARD_KEEP_S = ([0-9.]+)/.exec(source)?.[1]);
 
-    expect(maxLag).toBeGreaterThanOrEqual(1);
-    expect(maxLag).toBeLessThanOrEqual(2);
-    expect(keep).toBeGreaterThanOrEqual(0);
-    expect(keep).toBeLessThanOrEqual(0.15);
+    expect(maxLag).toBeGreaterThanOrEqual(6);
+    expect(maxLag).toBeLessThanOrEqual(8);
+    expect(keep).toBeGreaterThanOrEqual(0.3);
+    expect(keep).toBeLessThanOrEqual(0.6);
     expect(watchMs).toBeGreaterThanOrEqual(1_000);
     expect(watchMs).toBeLessThanOrEqual(2_000);
     expect(cooldown).toBeGreaterThanOrEqual(1_000);
@@ -65,8 +65,9 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(bind).toContain("timeupdate");
     expect(bind).toContain("chaseLiveEdge");
     expect(unbind).toContain("timeupdate");
-    expect(attach).toContain("autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S");
-    expect(attach).toContain("autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S");
+    expect(attach).toContain("LIVE_PLAYER_CONFIG");
+    expect(source).toContain("autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S");
+    expect(source).toContain("autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S");
   });
 
   it("附着期间周期性追直播前沿，卸载时停掉看门狗", () => {
@@ -92,7 +93,12 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(noFrame).toBeGreaterThanOrEqual(20_000);
     expect(source).toContain("hasAudio: false");
     expect(source).toContain("hasVideo: true");
-    expect(source).toContain("enableStashBuffer: false");
+    expect(source).toContain("enableStashBuffer: true");
+    expect(source).toContain("stashInitialSize: 262_144");
+    expect(source).toContain("liveSync: true");
+    expect(source).toContain("liveSyncPlaybackRate: 1.08");
+    expect(source).toContain("liveSyncTargetLatency: 0.5");
+    expect(source).not.toContain("enableStashBuffer: false");
     expect(source).toContain("chaseLiveEdge");
     expect(source).toContain("playbackUrl(");
     expect(source).toContain("attachVideo(url)");

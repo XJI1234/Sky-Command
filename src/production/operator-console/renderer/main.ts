@@ -60,8 +60,9 @@ type RendererBridge = {
   readonly selectRouteFile?: () => Promise<{ ok?: boolean; fileName?: string; bytes?: Uint8Array }>;
 };
 
+const requestedWorkspace = new URLSearchParams(globalThis.location?.search ?? "").get("workspace");
 const state: { workspace: WorkspaceName; flightPanel: FlightPanelName; missionDeviceId: string | null; streamDeviceId: string | null } = {
-  workspace: "devices",
+  workspace: requestedWorkspace === "routes" || requestedWorkspace === "flight" || requestedWorkspace === "monitor" || requestedWorkspace === "devices" ? requestedWorkspace : "devices",
   flightPanel: "stream",
   missionDeviceId: null,
   streamDeviceId: null,
@@ -638,12 +639,24 @@ let pairingCommandInFlight: { readonly deviceId: string; readonly action: "pairi
 
 const NO_FRAME_MS = 25_000;
 const STALL_MS = 12_000;
-const LIVE_EDGE_MAX_LAG_S = 1.5;
-const LIVE_EDGE_KEEP_S = 0.1;
+const LIVE_EDGE_MAX_LAG_S = 8;
+const LIVE_EDGE_KEEP_S = 0.5;
 const PLAYBACK_WATCH_MS = 2000;
 const LIVE_EDGE_SEEK_COOLDOWN_MS = 2000;
 const LIVE_BACKWARD_MAX_S = 8;
 const LIVE_BACKWARD_KEEP_S = 3;
+const LIVE_PLAYER_CONFIG = {
+  enableStashBuffer: true,
+  stashInitialSize: 262_144,
+  lazyLoad: false,
+  liveSync: true,
+  liveSyncMaxLatency: 1,
+  liveSyncTargetLatency: 0.5,
+  liveSyncPlaybackRate: 1.08,
+  autoCleanupSourceBuffer: true,
+  autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S,
+  autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S,
+} as const;
 
 const clearFlvRecoverTimer = (): void => {
   if (flvRecoverTimer === null) return;
@@ -731,6 +744,7 @@ const detachVideo = (): void => {
   firstPlaybackFrameReported = false;
   lastLiveEdgeSeekAtMs = 0;
   selectedPlaybackDeviceId = null;
+  video.playbackRate = 1;
   video.removeAttribute("src");
   video.srcObject = null;
   video.load();
@@ -902,7 +916,7 @@ const attachVideo = (url: string): void => {
     flvPlayer = mpegts.createPlayer(
       { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url },
       // 小 stash 缓毛刺/网络抖动；过大则延迟明显。背压策略已在 HTTP-FLV 侧按关键frame 续写。
-      { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true, autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S, autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S },
+      LIVE_PLAYER_CONFIG,
     );
     bindVideoPlayEvents(video);
     flvPlayer.on(mpegts.Events.MEDIA_INFO, (info: unknown) => {
@@ -1119,7 +1133,7 @@ const attachMonitorPlayer = (slot: number, deviceId: string, url: string): void 
   if (video === null || !url.includes(".flv") || !mpegts.isSupported()) return;
   const player = mpegts.createPlayer(
     { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url },
-    { enableStashBuffer: false, stashInitialSize: 128, lazyLoad: false, autoCleanupSourceBuffer: true, autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S, autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S },
+    LIVE_PLAYER_CONFIG,
   );
   const lane: MonitorPlayer = {
     deviceId,
