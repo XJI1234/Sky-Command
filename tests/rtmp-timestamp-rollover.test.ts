@@ -1,11 +1,26 @@
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import "../src/production/electron-host/media-ports.js";
 
 const require = createRequire(import.meta.url);
 const NodeRtmpSession = require("node-media-server/src/node_rtmp_session.js");
 const context = require("node-media-server/src/node_core_ctx.js");
+
+it.each([undefined, { app: "live" }])("cleans RTMP sessions before or after the connect command: %j", (metadata) => {
+  const socket = Object.assign(new EventEmitter(), {
+    remoteAddress: "127.0.0.1", bytesRead: 0, bytesWritten: 0, destroy: vi.fn(),
+  });
+  const session = new NodeRtmpSession({ rtmp: { chunk_size: 128, gop_cache: true } }, socket);
+  session.isStarting = true;
+  session.connectCmdObj = metadata;
+  try {
+    expect(() => session.stop()).not.toThrow();
+    expect(context.sessions.has(session.id)).toBe(false);
+    expect(socket.destroy).toHaveBeenCalledOnce();
+    expect(session.connectCmdObj).toMatchObject({ bytesRead: 0, bytesWritten: 0, ...(metadata ?? {}) });
+  } finally { context.sessions.delete(session.id); }
+});
 
 function parserFixture() {
   const socket = Object.assign(new EventEmitter(), { remoteAddress: "127.0.0.1" });

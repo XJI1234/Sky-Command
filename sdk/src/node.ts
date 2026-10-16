@@ -6,6 +6,8 @@ import { NodeWebSocketRelayTransport } from '../../src/adapters/node-websocket-r
 import { RelayLink, type RelayLinkInstance, type RelayLinkOptions, type RelayLinkSnapshot, type RelayPhotoProgress } from '../../src/modules/relay-link/index.js';
 import { ProtocolLimits, RelayFrameCodec, validate } from '../../src/modules/relay-link/protocol-core/index.js';
 import { SkyCommandError, emptyRelaySnapshot, isRecord, validId, type SdkErrorCode } from './shared.js';
+export { createRelayDiscovery, loadOrCreateServerId, DISCOVERY_PORT } from '../../src/production/relay-discovery/index.js';
+export type { DiscoveryDependencies, DiscoveryDiagnostic } from '../../src/production/relay-discovery/index.js';
 
 export interface SkyCommandRelay extends RelayLinkInstance { getSnapshot(): RelayLinkSnapshot; }
 export type SkyCommandRelayOptions = Pick<RelayLinkOptions, 'address' | 'diagnosticSink' | 'onPhoto'> & Partial<Pick<RelayLinkOptions, 'handshakeTimeoutMs' | 'maxConnections' | 'commandTimeoutMs' | 'missionTimeoutMs'>>;

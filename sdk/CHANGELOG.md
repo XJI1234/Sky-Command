@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 — 2026-10-16
+
+### Added
+- Node 与 desktop 入口提供局域网自动发现广播及持久电脑身份，供非 Electron 宿主接线。
+
+### Fixed
+- 合并 RTMP 握手前断连清理修复，保留原有 DJI 时间戳回绕与播放时间线修复。
+- 修复 desktop CommonJS 包内 `createRequire` 的模块路径，确保 Node ESM 与 CommonJS 宿主均可加载。
+
 ## 0.2.1 — 2026-10-15
 
 ### Added

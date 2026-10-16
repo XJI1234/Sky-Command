@@ -13,3 +13,5 @@ Node 网关默认监听 loopback，显式 allowedOrigins 才允许跨源浏览�
 业务模块保持既有职责：flight/mission 的门禁、确认、终态判定不下沉到连接核心；发送成功只代表收到协议结果。地图、Electron、系统设置、封存 WHIP/WHEP 不进入浏览器包。视频走独立 RTMP→HTTP-FLV，SDK 的 stream/media 入口提供现有业务与播放器端口。
 
 验证命令：`npm --prefix sdk install`、`npm --prefix sdk test`、`npm --prefix sdk run typecheck`、`npm --prefix sdk run build`、`npm --prefix sdk pack`。原项目用 `npm test`、`npm run test:types` 检查回归。
+
+Node 与 desktop 入口导出 `createRelayDiscovery`、`loadOrCreateServerId` 与 `DISCOVERY_PORT`，浏览器入口不导入 UDP 或文件系统。宿主仅在中继与控制服务就绪后启动广播，并在关闭中继前停止广播；身份由宿主的数据目录持久化，发现不可用不影响已有手动连接。公告沿用 `src/production/relay-discovery/CONTRACT.md` 与 v1 协议，不新增认证或飞行行为。

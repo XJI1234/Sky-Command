@@ -22,10 +22,12 @@ type NmsPublisher = {
 };
 type RtmpVideoHost = { parserPacket?: { clock?: number; payload?: Buffer; header?: { length?: number } } };
 type RtmpPacketHost = { parserPacket: { clock: number } };
+type RtmpSessionHost = { connectCmdObj?: Record<string, unknown> };
 const NodeRtmpSession = require("node-media-server/src/node_rtmp_session.js") as {
   prototype: {
     rtmpVideoHandler: (this: RtmpVideoHost) => void;
     rtmpPacketAlloc: (this: RtmpPacketHost) => void;
+    stop: (this: RtmpSessionHost) => void;
   };
 };
 const mediaContext = require("node-media-server/src/node_core_ctx.js") as {
@@ -42,6 +44,13 @@ NodeRtmpSession.prototype.rtmpPacketAlloc = function allocateRtmpPacket(this: Rt
   // messages split across TCP reads and continuation chunks.
   this.parserPacket.clock = this.parserPacket.clock >>> 0;
   return originalRtmpPacketAlloc.call(this);
+};
+const originalRtmpStop = NodeRtmpSession.prototype.stop;
+// NMS 2.6.6 assumes every TCP client sent an RTMP connect command before closing.
+// Keep its cleanup intact for probes and clients that disconnect during handshake.
+NodeRtmpSession.prototype.stop = function patchedRtmpStop(this: RtmpSessionHost) {
+  this.connectCmdObj ??= {};
+  return originalRtmpStop.call(this);
 };
 let rtmpVideoLog: ((detail: string) => void) | null = null;
 let rtmpVideoLogged = 0;
@@ -117,7 +126,7 @@ function deviceIdFromPublishPath(streamPath: string): string | null {
 
 function keepAvcVideoTag(payload: Buffer): boolean {
   if (payload.length < 5) return false;
-  if ((payload[0] & 0x0f) !== 7) return true;
+  if ((payload[0]! & 0x0f) !== 7) return true;
   const packetType = payload[1];
   if (packetType === 0) return true;
   if (packetType !== 1) return false;
@@ -147,12 +156,12 @@ function deviceIdFromFlvPath(pathname: string): string | null {
 /** NMS HTTP-FLV 头与 flv.js 约定 bit0=视频；无音轨推流时 NMS 常写出 flags=0，播放器会当成空轨。 */
 function markFlvHeaderHasVideo(chunk: Buffer): void {
   if (chunk.length < 9 || chunk[0] !== 0x46 || chunk[1] !== 0x4c || chunk[2] !== 0x56) return;
-  chunk[4] |= 0x01;
+  chunk[4] = chunk[4]! | 0x01;
 }
 
 function isAvcSyncTag(payload: Buffer): boolean {
   if (payload.length < 2) return false;
-  if ((payload[0] & 0x0f) !== 7) return true;
+  if ((payload[0]! & 0x0f) !== 7) return true;
   const packetType = payload[1];
   if (packetType === 0) return true;
   if (packetType !== 1) return false;

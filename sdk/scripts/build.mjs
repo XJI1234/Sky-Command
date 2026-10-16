@@ -13,8 +13,11 @@ const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 // Each entry is self-contained; loading core never loads either UI framework or Node.
 for (const format of ['esm', 'cjs']) {
   for (const [name, source] of Object.entries(entryPoints)) {
+    const nodeCjs = nodeEntries.has(name) && format === 'cjs';
     await build({ entryPoints: [source], outfile: resolve(root, `dist/${name}.${format === 'esm' ? 'js' : 'cjs'}`), bundle: true,
       format, platform: nodeEntries.has(name) ? 'node' : 'browser', target: 'es2022', sourcemap: true,
+      banner: nodeCjs ? { js: 'const __skyImportMetaUrl = require("node:url").pathToFileURL(__filename).href;' } : {},
+      define: nodeCjs ? { 'import.meta.url': '__skyImportMetaUrl' } : {},
       external: [...Object.keys(pkg.dependencies), ...Object.keys(pkg.peerDependencies)],
       plugins: [{ name: 'external-media-server', setup(plugin) {
         plugin.onResolve({ filter: /^node-media-server(?:\/|$)/ }, args => ({ path: args.path, external: true }));

@@ -346,6 +346,7 @@ live-stream-control
 | 主进程能力受限暴露 | `app-shell` | `ipc-bridge` |
 | 本地设置持久化 | `desktop-settings` | `settings-store` |
 | 局域网地址与手动覆盖 | `desktop-settings` | `network-settings` |
+| 就绪后的 WLAN 自动发现公告与退出清理 | `app-shell` 宿主 / Node SDK 宿主 | `production/relay-discovery`（[契约](src/production/relay-discovery/CONTRACT.md)）；仅公告端点，不接管手机会话或业务命令 |
 | 地图凭据与底图配置 | `desktop-settings` | `map-settings` |
 | 接受手机连接与会话管理 | `relay-link` | `relay-server`、`device-registry` |
 | 协议帧编解码与校验 | `relay-link` | `protocol-core` |

@@ -147,7 +147,7 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
   it("HTTP-FLV 写出时把无音轨流的 FLV 头标成有视频，避免 flv.js 探测成空轨", () => {
     const source = mediaPorts();
     expect(source).toContain("markFlvHeaderHasVideo");
-    expect(source).toContain("chunk[4] |= 0x01");
+    expect(source).toContain("chunk[4] = chunk[4]! | 0x01");
   });
 
   it("只为已有 RTMP 发布者创建 HTTP-FLV 播放会话，避免无源请求滞留为 NMS idlePlayers", () => {
@@ -169,7 +169,7 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).toContain("hev1");
     expect(source).toContain("http-flv-publisher-error");
     expect(source).toContain("rtmp-video-error");
-    expect(source).toMatch(/payload\[0\]\s*&\s*0x0f/);
+    expect(source).toMatch(/payload\[0\]!?\s*&\s*0x0f/);
     expect(source).not.toContain("if (!decided)");
     expect(filter).not.toMatch(/let transcode = startHevcTranscode/);
     expect(filter).toContain('route = "avc"');

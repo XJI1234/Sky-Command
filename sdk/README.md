@@ -29,7 +29,7 @@ npm --prefix sdk pack -- --pack-destination artifacts
 先创建 `sdk/artifacts`（打包验证脚本会自动创建）。编译直接复用上级项目源码；安装后的包完全独立，无需保留 Sky-Command 仓库。未发布到 npm，使用生成的 tarball 安装：
 
 ```sh
-npm install /path/to/xjicloud-sky-command-sdk-0.2.0.tgz
+npm install /path/to/xjicloud-sky-command-sdk-0.2.2.tgz
 # Vue 项目已有 vue；React 项目已有 react。无需同时安装两个框架。
 ```
 
