@@ -152,6 +152,28 @@ const PHONE_MISSION = new Set(["STARTING", "EXECUTING", "PAUSED"]);
 const DJI_MISSION = new Set(["PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "RETURN_TO_START_POINT"]);
 const DJI_MISSION_IDLE = new Set(["IDLE", "READY", "UPLOADING", "FINISHED", "INTERRUPTED", "DISCONNECTED", "NOT_SUPPORTED", "UNKNOWN"]);
 
+export function landingProtectionNotice(input: Readonly<{
+  readonly flightController: string | null;
+  readonly flying: string | null;
+  readonly motorsOn: boolean | null;
+  readonly landingConfirmationNeeded: boolean | null;
+  readonly landingProtectionState: string | null;
+  readonly telemetryReceivedAtMs: number | null;
+  readonly noticeAtMs: number | null;
+  readonly nowMs: number;
+}>): string | null {
+  if (input.flightController !== "connected"
+    || (input.flying === "grounded" && input.motorsOn === false)
+    || input.landingConfirmationNeeded === true
+    || input.landingProtectionState === "SAFE_TO_LAND") return null;
+  const current = input.landingProtectionState === "NOT_SAFE_TO_LAND";
+  const atMs = current ? input.telemetryReceivedAtMs : input.noticeAtMs;
+  if (atMs === null || !Number.isFinite(atMs) || input.nowMs < atMs || input.nowMs - atMs > 20_000) return null;
+  return current
+    ? "飞机判定当前不适合降落，请检查下方地面并留意飞行状态。"
+    : "刚才飞机曾判定不适合降落，请留意当前飞行状态。";
+}
+
 export function monitorAircraftStatus(input: Readonly<{
   readonly flying: string | null;
   readonly motorsOn: boolean | null;

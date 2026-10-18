@@ -122,6 +122,29 @@ describe("事故日志", () => {
     expect(log).not.toContain("CONSOLE_BLOCKED");
   });
 
+  it("播放诊断只记录受控字段，不误报操作拦截或泄露原始详情", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
+    directories.push(directory);
+    const journal = IncidentJournal.create(directory);
+    const gateway = wrapGateway({
+      invoke: async () => ({ ok: true as const, value: true }),
+      snapshot: () => ({}), subscribe: () => () => undefined, dispose: () => undefined,
+    }, journal);
+    const input = { action: "video-playback-diagnostic", reason: JSON.stringify({
+      event: "loading-complete", pageId: "page-1", generation: 2, atMs: 50_000,
+      hidden: false, workspace: "flight", time: 12.5, frames: 300,
+      reason: "http://private.invalid/token", url: "http://private.invalid/token", stack: "private path",
+    }) };
+    await expect(gateway.invoke("diagnostics.record", input)).resolves.toEqual({ ok: true, value: true });
+    await expect(gateway.invoke("diagnostics.record", { ...input, reason: "{" })).resolves.toEqual({ ok: false, code: "INVALID_INPUT" });
+    await journal.flush();
+    const log = readFileSync(journal.logPath, "utf8");
+    expect(log).toMatch(/INFO downlink VIDEO_PLAYBACK_DIAGNOSTIC/);
+    expect(log).toContain("loading-complete");
+    expect(log).toContain("12.5");
+    expect(log).not.toMatch(/CONSOLE_BLOCKED|private|token|stack/);
+  });
+
   it("命令超时记为上行 WARN，渲染器高频图传轮询不写日志", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sky-incident-"));
     directories.push(directory);

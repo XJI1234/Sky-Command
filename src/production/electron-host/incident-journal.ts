@@ -202,6 +202,29 @@ function invokeDetail(method: string, input: unknown, result: GatewayResult): st
   return parts.join(" ");
 }
 
+function playbackDiagnosticDetail(reason: string): string | null {
+  if (reason.length > 4096) return null;
+  let value: Record<string, unknown> | null;
+  try { value = asRecord(JSON.parse(reason)); } catch { return null; }
+  const events = ["attach", "detach", "first-frame", "sample", "visibility", "recovery", "error", "loading-complete", "media-event"];
+  const reasons = ["", "source-change", "media-error", "transport-ended", "initialization", "stall", "no-first-frame", "pause", "waiting", "stalled", "ended", "playing", "error", "画面停住", "长时间未出画"];
+  const identifier = (input: unknown): string | null => typeof input === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(input) ? input : null;
+  if (value === null || typeof value.event !== "string" || !events.includes(value.event)
+    || identifier(value.pageId) === null || !Number.isSafeInteger(value.generation) || (value.generation as number) < 1) return null;
+  const detail: Record<string, unknown> = { event: value.event, pageId: value.pageId, generation: value.generation };
+  for (const key of ["atMs", "time", "bufferedEnd", "frames", "readyState", "width", "height", "mediaError"]) {
+    const number = value[key];
+    if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER) detail[key] = number;
+  }
+  for (const key of ["hidden", "paused", "ended", "seeking"]) if (typeof value[key] === "boolean") detail[key] = value[key];
+  if (typeof value.workspace === "string" && ["devices", "routes", "flight", "monitor"].includes(value.workspace)) detail.workspace = value.workspace;
+  if (identifier(value.deviceId) !== null) detail.deviceId = value.deviceId;
+  if (Number.isInteger(value.slot) && (value.slot as number) >= 0 && (value.slot as number) <= 3) detail.slot = value.slot;
+  detail.reason = typeof value.reason === "string" && (reasons.includes(value.reason)
+    || /^(NetworkError|MediaError|OtherError):(Exception|HttpStatusCodeInvalid|ConnectingTimeout|EarlyEof|UnrecoverableEarlyEof|MediaMSEError|MediaFormatError|MediaCodecUnsupported)$/.test(value.reason)) ? value.reason : "unclassified";
+  return JSON.stringify(detail);
+}
+
 export function wrapGateway(gateway: DesktopUiGatewayInstance, journal: IncidentJournal): DesktopUiGatewayInstance {
   return Object.freeze({
     invoke: async (method: unknown, input: unknown) => {
@@ -211,6 +234,12 @@ export function wrapGateway(gateway: DesktopUiGatewayInstance, journal: Incident
         const reason = text(source?.reason);
         if (action === null || reason === null || source === null || Object.keys(source).length !== 2) {
           return Object.freeze({ ok: false as const, code: "INVALID_INPUT" as const });
+        }
+        if (action === "video-playback-diagnostic") {
+          const detail = playbackDiagnosticDetail(reason);
+          if (detail === null) return Object.freeze({ ok: false as const, code: "INVALID_INPUT" as const });
+          journal.record({ link: "downlink", level: "INFO", event: "VIDEO_PLAYBACK_DIAGNOSTIC", detail });
+          return Object.freeze({ ok: true as const, value: true });
         }
         if (action === "video-first-frame-rendered") {
           journal.record({

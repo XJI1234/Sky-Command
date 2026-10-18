@@ -55,7 +55,18 @@ NodeRtmpSession.prototype.stop = function patchedRtmpStop(this: RtmpSessionHost)
 let rtmpVideoLog: ((detail: string) => void) | null = null;
 let rtmpVideoLogged = 0;
 const videoTimelines = new WeakMap<RtmpVideoHost, { raw: number; elapsed: number; output: number }>();
+const rtmpPacketObservations = new WeakMap<RtmpVideoHost, { lastAtMs: number; loggedAtMs: number; report: (gapMs: number) => void }>();
 NodeRtmpSession.prototype.rtmpVideoHandler = function patchedRtmpVideoHandler(this: RtmpVideoHost) {
+  const observation = rtmpPacketObservations.get(this);
+  if (observation !== undefined) {
+    const now = Date.now();
+    const gapMs = now - observation.lastAtMs;
+    if (observation.lastAtMs > 0 && gapMs >= 500 && now - observation.loggedAtMs >= 10_000) {
+      observation.loggedAtMs = now;
+      try { observation.report(gapMs); } catch { /* observation only */ }
+    }
+    observation.lastAtMs = now;
+  }
   const raw = this.parserPacket?.payload;
   const length = this.parserPacket?.header?.length;
   if (rtmpVideoLogged < 3) {
@@ -387,6 +398,11 @@ function createRtmpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLog
         const path = publishPath(String(streamPath));
         const deviceId = deviceIdFromPublishPath(path) ?? undefined;
         rtmpVideoLogged = 0;
+        const publisher = mediaContext.sessions.get(_id);
+        if (publisher !== undefined) rtmpPacketObservations.set(publisher as RtmpVideoHost, {
+          lastAtMs: 0, loggedAtMs: 0,
+          report: gapMs => log?.({ kind: "rtmp-video-gap", ...(deviceId === undefined ? {} : { deviceId }), detail: `gapMs=${gapMs}` }),
+        });
         rtmpVideoLog = (detail) => log?.({ kind: "rtmp-video-error", ...(deviceId === undefined ? {} : { deviceId }), detail });
         log?.({ kind: "rtmp-published", ...(deviceId === undefined ? {} : { deviceId }), detail: "RTMP publish started" });
         events.onPublished(path);
@@ -413,7 +429,8 @@ function createRtmpPort(shared: { rtmpPort: number }, log?: (event: MediaPortLog
 
 function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvServerPort {
   let server: Server | null = null;
-  const sessions = new Map<string, FlvSession>();
+  const sessions = new Map<FlvSession, (reason: string) => void>();
+  let nextViewerId = 0;
   return {
     listen: async (input) => {
       if (server !== null) throw new Error("http-flv already listening");
@@ -434,7 +451,13 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           return;
         }
         let pathname = "/";
-        try { pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname; } catch { /* keep / */ }
+        let pageId = "unmarked";
+        try {
+          const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+          pathname = requestUrl.pathname;
+          const viewer = requestUrl.searchParams.get("viewer");
+          if (viewer !== null && /^[a-zA-Z0-9_-]{1,128}$/.test(viewer)) pageId = viewer;
+        } catch { /* keep / */ }
         const deviceId = deviceIdFromFlvPath(pathname);
         if (deviceId === null) {
           res.writeHead(404, { "Access-Control-Allow-Origin": "*" });
@@ -467,11 +490,6 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           return;
         }
         // 直连 NMS 发布会话播放器槽位，禁止再 RTMP 回环拉流（回环+丢帧曾把有效码率打到几十 kbps）。
-        const previous = sessions.get(deviceId);
-        if (previous !== undefined) {
-          try { previous.stop(); } catch { /* ignore */ }
-          sessions.delete(deviceId);
-        }
         res.writeHead(200, {
           "Content-Type": "video/x-flv",
           "Access-Control-Allow-Origin": "*",
@@ -486,21 +504,34 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
           });
         } catch { /* diagnostics must not affect media */ }
         try { req.socket.setNoDelay(true); } catch { /* ignore */ }
+        // NMS logs its complete query; forward only validated correlation metadata.
+        req.url = `${pathname}?viewer=${pageId}`;
         (req as IncomingMessage & { nmsConnectionType?: string }).nmsConnectionType = "http";
         const session = new NodeFlvSession({}, req, res);
-        sessions.set(deviceId, session);
+        const viewerId = ++nextViewerId;
+        const openedAtMs = Date.now();
+        let closed = false;
+        const stopViewer = (reason: string): void => {
+          if (closed) return;
+          closed = true;
+          sessions.delete(session);
+          const bytes = req.socket.bytesWritten;
+          const pending = res.writableLength;
+          try { session.stop(); } catch { if (!res.destroyed) res.destroy(); }
+          try { log?.({ kind: "http-flv-viewer-close", deviceId,
+            detail: `viewer=${viewerId};page=${pageId};reason=${reason};ageMs=${Date.now() - openedAtMs};bytes=${bytes};pending=${pending}` }); } catch { /* observation only */ }
+        };
+        sessions.set(session, stopViewer);
+        try { log?.({ kind: "http-flv-viewer-open", deviceId, detail: `viewer=${viewerId};page=${pageId};codec=${publisher.videoCodec}` }); } catch { /* observation only */ }
         filterSeiOnlyWrites(res, () => {
           try { log?.({ kind: "http-flv-client-backpressure", deviceId, detail: "HTTP-FLV player queue reached the limit; skipped until the next keyframe" }); } catch { /* diagnostics must not affect media */ }
         }, (kind, detail) => {
           try { log?.({ kind, deviceId, detail }); } catch { /* diagnostics must not affect media */ }
         });
-        const clear = (): void => {
-          if (sessions.get(deviceId) === session) sessions.delete(deviceId);
-        };
-        req.on("close", clear);
-        res.on("close", clear);
+        res.on("close", () => stopViewer("response-closed"));
+        res.on("error", () => stopViewer("response-error"));
         try { session.run(); } catch {
-          clear();
+          stopViewer("initialization-failed");
           if (!res.writableEnded) try { res.end(); } catch { /* ignore */ }
         }
       });
@@ -525,9 +556,7 @@ function createFlvHttpPort(log?: (event: MediaPortLogEvent) => void): HttpFlvSer
       log?.({ kind: "http-flv-listening", detail: `filtered HTTP-FLV listening on ${input.port}` });
     },
     close: () => {
-      for (const session of sessions.values()) {
-        try { session.stop(); } catch { /* ignore */ }
-      }
+      for (const stop of sessions.values()) stop("service-stop");
       sessions.clear();
       server?.close();
       server = null;

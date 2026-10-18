@@ -25,6 +25,7 @@ import {
   hudMotors,
   hudText,
   monitorAircraftStatus,
+  landingProtectionNotice,
   monitorHoverCommand,
   monitorRouteControl,
   monitorDirectFlight,
@@ -632,31 +633,103 @@ let armExpiryTimer: number | null = null;
 let videoPlayRetryTimer: number | null = null;
 let videoPlayEventsBoundTo: HTMLVideoElement | null = null;
 let playbackWatchTimer: number | null = null;
-let lastLiveEdgeSeekAtMs = 0;
+const lastLiveEdgeSeeks = new WeakMap<HTMLVideoElement, number>();
+let flightPlaybackWasVisible = false;
 const phoneLinkProbes = new Map<string, PhoneLinkProbeCacheEntry>();
 let phoneLinkProbeInFlightDeviceId: string | null = null;
 let pairingCommandInFlight: { readonly deviceId: string; readonly action: "pairing-start" | "pairing-stop" } | null = null;
 
 const NO_FRAME_MS = 25_000;
 const STALL_MS = 12_000;
-const LIVE_EDGE_MAX_LAG_S = 8;
-const LIVE_EDGE_KEEP_S = 0.5;
-const PLAYBACK_WATCH_MS = 2000;
-const LIVE_EDGE_SEEK_COOLDOWN_MS = 2000;
+const LIVE_EDGE_MAX_LAG_S = 1;
+const LIVE_EDGE_KEEP_S = 0.3;
+const PLAYBACK_WATCH_MS = 250;
+const LIVE_EDGE_SEEK_COOLDOWN_MS = 500;
 const LIVE_BACKWARD_MAX_S = 8;
 const LIVE_BACKWARD_KEEP_S = 3;
 const LIVE_PLAYER_CONFIG = {
-  enableStashBuffer: true,
-  stashInitialSize: 262_144,
+  enableStashBuffer: false,
   lazyLoad: false,
   liveSync: true,
-  liveSyncMaxLatency: 1,
-  liveSyncTargetLatency: 0.5,
-  liveSyncPlaybackRate: 1.08,
+  liveSyncMaxLatency: 0.6,
+  liveSyncTargetLatency: LIVE_EDGE_KEEP_S,
+  liveSyncPlaybackRate: 1.15,
   autoCleanupSourceBuffer: true,
   autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S,
   autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S,
 } as const;
+
+const playbackPageId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+let playbackGeneration = 0;
+const playbackTraces = new WeakMap<HTMLVideoElement, { generation: number; sampledAt: number }>();
+const playbackDiagnosticHistory: unknown[] = [];
+const playbackRequestUrl = (url: string): string => {
+  const request = new URL(url);
+  request.searchParams.set("viewer", playbackPageId);
+  return request.href;
+};
+const tracePlayback = (video: HTMLVideoElement, event: string, reason = "", slot: number | null = null): void => {
+  try {
+    let trace = playbackTraces.get(video);
+    if (event === "attach" || trace === undefined) {
+      trace = { generation: ++playbackGeneration, sampledAt: 0 };
+      playbackTraces.set(video, trace);
+    }
+    const now = Date.now();
+    if (event === "sample" && now - trace.sampledAt < 10_000) return;
+    if (event === "sample") trace.sampledAt = now;
+    const record = {
+      pageId: playbackPageId, generation: trace.generation, atMs: now, event, reason, slot,
+      workspace: state.workspace, hidden: document.hidden,
+      deviceId: slot === null ? state.streamDeviceId : monitorPlayers.get(slot)?.deviceId ?? null,
+      time: Number.isFinite(video.currentTime) ? video.currentTime : null,
+      bufferedEnd: video.buffered.length > 0 ? video.buffered.end(video.buffered.length - 1) : null,
+      frames: typeof video.getVideoPlaybackQuality === "function" ? video.getVideoPlaybackQuality().totalVideoFrames : null,
+      readyState: video.readyState, paused: video.paused, width: video.videoWidth, height: video.videoHeight,
+      mediaError: video.error?.code ?? null,
+      ended: video.ended, seeking: video.seeking,
+    };
+    playbackDiagnosticHistory.push(record);
+    if (playbackDiagnosticHistory.length > 128) playbackDiagnosticHistory.shift();
+    let mirror = document.getElementById("sky-playback-diagnostics");
+    if (mirror === null) {
+      mirror = document.createElement("script");
+      (mirror as HTMLScriptElement).type = "application/json";
+      mirror.id = "sky-playback-diagnostics";
+      document.body.append(mirror);
+    }
+    mirror.textContent = JSON.stringify(playbackDiagnosticHistory);
+    void safeRenderInvoke("diagnostics-record", { action: "video-playback-diagnostic", reason: JSON.stringify(record) });
+  } catch { /* observation must not interrupt media or business commands */ }
+};
+
+document.addEventListener("visibilitychange", () => {
+  if (attachedUrl !== null) tracePlayback(el("video") as HTMLVideoElement, "visibility");
+  for (const [slot] of monitorPlayers) {
+    const video = monitorVideoElement(slot);
+    if (video !== null) tracePlayback(video, "visibility", "", slot);
+    if (!document.hidden) {
+      const lane = monitorPlayers.get(slot);
+      if (lane !== undefined) {
+        lane.progress.reset();
+        lane.lastPaintAtMs = Date.now();
+        lane.attachedAtMs = Date.now();
+        if (video !== null) {
+          lastLiveEdgeSeeks.delete(video);
+          chaseLiveEdge(video);
+          if (video.paused) void video.play().catch(() => undefined);
+        }
+      }
+    }
+  }
+  flightPlaybackWasVisible = false;
+  if (!document.hidden && attachedUrl !== null) {
+    const video = el("video") as HTMLVideoElement;
+    lastLiveEdgeSeeks.delete(video);
+    chaseLiveEdge(video);
+    scheduleVideoPlay(video);
+  }
+});
 
 const clearFlvRecoverTimer = (): void => {
   if (flvRecoverTimer === null) return;
@@ -678,7 +751,7 @@ const scheduleVideoPlay = (video: HTMLVideoElement): void => {
   clearVideoPlayRetry();
   videoPlayRetryTimer = window.setTimeout(() => {
     videoPlayRetryTimer = null;
-    if (flvPlayer === null || attachedUrl === null) return;
+    if (document.hidden || flvPlayer === null || attachedUrl === null) return;
     if (!video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
     void video.play().catch((error: unknown) => {
       const name = error instanceof Error ? error.name : "";
@@ -690,13 +763,16 @@ const scheduleVideoPlay = (video: HTMLVideoElement): void => {
 type VideoPlayHooks = HTMLVideoElement & {
   __skyCommandPlayReady?: () => void;
   __skyCommandLiveEdge?: () => void;
+  __skyCommandDiagnostic?: (event: Event) => void;
 };
 
 const bindVideoPlayEvents = (video: HTMLVideoElement): void => {
   if (videoPlayEventsBoundTo === video) return;
   const hooked = video as VideoPlayHooks;
-  const onReady = (): void => { scheduleVideoPlay(video); };
+  const onReady = (): void => { chaseLiveEdge(video); scheduleVideoPlay(video); };
   const onLiveEdge = (): void => { chaseLiveEdge(video); };
+  const onDiagnostic = (event: Event): void => { tracePlayback(video, "media-event", event.type); };
+  for (const event of ["pause", "waiting", "stalled", "ended", "playing", "error"]) video.addEventListener(event, onDiagnostic);
   for (const event of ["loadedmetadata", "loadeddata", "canplay", "playing"] as const) {
     video.addEventListener(event, onReady);
   }
@@ -704,12 +780,15 @@ const bindVideoPlayEvents = (video: HTMLVideoElement): void => {
   videoPlayEventsBoundTo = video;
   hooked.__skyCommandPlayReady = onReady;
   hooked.__skyCommandLiveEdge = onLiveEdge;
+  hooked.__skyCommandDiagnostic = onDiagnostic;
 };
 
 const unbindVideoPlayEvents = (video: HTMLVideoElement): void => {
   const hooked = video as VideoPlayHooks;
   const onReady = hooked.__skyCommandPlayReady;
   const onLiveEdge = hooked.__skyCommandLiveEdge;
+  const onDiagnostic = hooked.__skyCommandDiagnostic;
+  if (onDiagnostic !== undefined) for (const event of ["pause", "waiting", "stalled", "ended", "playing", "error"]) video.removeEventListener(event, onDiagnostic);
   if (onReady === undefined && onLiveEdge === undefined) return;
   for (const event of ["loadedmetadata", "loadeddata", "canplay", "playing"] as const) {
     if (onReady !== undefined) video.removeEventListener(event, onReady);
@@ -717,16 +796,18 @@ const unbindVideoPlayEvents = (video: HTMLVideoElement): void => {
   if (onLiveEdge !== undefined) video.removeEventListener("timeupdate", onLiveEdge);
   delete hooked.__skyCommandPlayReady;
   delete hooked.__skyCommandLiveEdge;
+  delete hooked.__skyCommandDiagnostic;
   if (videoPlayEventsBoundTo === video) videoPlayEventsBoundTo = null;
 };
 
-const detachVideo = (): void => {
+const detachVideo = (reason = "source-change"): void => {
   detachingFlightVideo = true;
   try {
   stopPlaybackWatch();
   clearFlvRecoverTimer();
   clearVideoPlayRetry();
   const video = el("video") as HTMLVideoElement;
+  if (attachedUrl !== null) tracePlayback(video, "detach", reason);
   unbindVideoPlayEvents(video);
   if (flvPlayer !== null) {
     try { flvPlayer.pause(); } catch { /* ignore */ }
@@ -742,7 +823,8 @@ const detachVideo = (): void => {
   lastSeenCurrentTime = 0;
   flightPlaybackProgress.reset();
   firstPlaybackFrameReported = false;
-  lastLiveEdgeSeekAtMs = 0;
+  lastLiveEdgeSeeks.delete(video);
+  flightPlaybackWasVisible = false;
   selectedPlaybackDeviceId = null;
   video.playbackRate = 1;
   video.removeAttribute("src");
@@ -779,6 +861,7 @@ const softReloadFlv = (video: HTMLVideoElement): boolean => {
 const startPlaybackWatch = (video: HTMLVideoElement): void => {
   stopPlaybackWatch();
   playbackWatchTimer = window.setInterval(() => {
+    chaseLiveEdge(video);
     watchPlaybackStall(video);
     reportPlaybackHealth(video);
   }, PLAYBACK_WATCH_MS);
@@ -791,7 +874,7 @@ const stopPlaybackWatch = (): void => {
 };
 
 const chaseLiveEdge = (video: HTMLVideoElement): void => {
-  if (flvPlayer === null || attachedUrl === null || !isPainting(video) || video.seeking) return;
+  if (document.hidden || video.seeking || !Number.isFinite(video.currentTime)) return;
   try {
     if (video.buffered.length === 0) return;
     const end = video.buffered.end(video.buffered.length - 1);
@@ -799,9 +882,11 @@ const chaseLiveEdge = (video: HTMLVideoElement): void => {
     const lag = end - video.currentTime;
     if (lag <= LIVE_EDGE_MAX_LAG_S) return;
     const now = Date.now();
-    if (now - lastLiveEdgeSeekAtMs < LIVE_EDGE_SEEK_COOLDOWN_MS) return;
-    lastLiveEdgeSeekAtMs = now;
-    video.currentTime = Math.max(0, end - LIVE_EDGE_KEEP_S);
+    const previous = lastLiveEdgeSeeks.get(video);
+    if (previous !== undefined && now - previous < LIVE_EDGE_SEEK_COOLDOWN_MS) return;
+    const target = Math.max(video.buffered.start(video.buffered.length - 1), end - LIVE_EDGE_KEEP_S);
+    video.currentTime = target;
+    lastLiveEdgeSeeks.set(video, now);
   } catch { /* ignore */ }
 };
 
@@ -817,6 +902,7 @@ const scheduleFlvReattach = (retryUrl: string): void => {
 
 const recoverStuckFlv = (video: HTMLVideoElement, url: string, reason: string): void => {
   if (flvRecoverTimer !== null) return;
+  tracePlayback(video, "recovery", reason);
   flvFatalStreak += 1;
   if (flvFatalStreak <= 3 && softReloadFlv(video)) {
     showPlaybackHealth(`${reason}，正在自动恢复…`);
@@ -830,6 +916,7 @@ const recoverStuckFlv = (video: HTMLVideoElement, url: string, reason: string): 
 const recordFirstPlaybackFrame = (video: HTMLVideoElement): void => {
   if (firstPlaybackFrameReported || video.videoWidth <= 0 || video.videoHeight <= 0) return;
   firstPlaybackFrameReported = true;
+  tracePlayback(video, "first-frame");
   void safeRenderInvoke("diagnostics-record", {
     action: "video-first-frame-rendered",
     reason: `width=${video.videoWidth};height=${video.videoHeight}`,
@@ -852,9 +939,20 @@ const notePaintProgress = (video: HTMLVideoElement): void => {
 
 const watchPlaybackStall = (video: HTMLVideoElement): void => {
   if (attachedUrl === null || flvPlayer === null || flvRecoverTimer !== null) return;
+  tracePlayback(video, "sample");
   const now = Date.now();
+  if (document.hidden || state.workspace !== "flight") {
+    flightPlaybackWasVisible = false;
+    return;
+  }
+  if (!flightPlaybackWasVisible) {
+    flightPlaybackWasVisible = true;
+    flightPlaybackProgress.reset();
+    lastPaintAtMs = now;
+    attachedAtMs = now;
+  }
   notePaintProgress(video);
-  if (isPainting(video)) {
+  if (lastPaintAtMs > 0 && firstPlaybackFrameReported) {
     if (lastPaintAtMs > 0 && now - lastPaintAtMs > STALL_MS) {
       recoverStuckFlv(video, attachedUrl, "画面停住");
     }
@@ -900,6 +998,7 @@ const attachVideo = (url: string): void => {
   clearFlvRecoverTimer();
   detachVideo();
   attachedUrl = url;
+  tracePlayback(video, "attach");
   attachedAtMs = Date.now();
   lastPaintAtMs = 0;
   lastSeenCurrentTime = 0;
@@ -914,25 +1013,38 @@ const attachVideo = (url: string): void => {
       return;
     }
     flvPlayer = mpegts.createPlayer(
-      { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url },
-      // 小 stash 缓毛刺/网络抖动；过大则延迟明显。背压策略已在 HTTP-FLV 侧按关键frame 续写。
+      { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url: playbackRequestUrl(url) },
+      // 不等待额外 stash，保留少量 MSE 缓冲吸收抖动；与监控页共享延迟预算。
       LIVE_PLAYER_CONFIG,
     );
+    const player = flvPlayer;
     bindVideoPlayEvents(video);
     flvPlayer.on(mpegts.Events.MEDIA_INFO, (info: unknown) => {
+      if (flvPlayer !== player || detachingFlightVideo) return;
       scheduleVideoPlay(video);
       const record = info !== null && typeof info === "object" ? info as Record<string, unknown> : null;
       const width = typeof record?.width === "number" ? record.width : 0;
       const height = typeof record?.height === "number" ? record.height : 0;
       if (width > 0) showPlaybackHealth(`已收到视频信息（${width}×${height}），正在等待画面连续播放`);
     });
+    flvPlayer.on(mpegts.Events.LOADING_COMPLETE, () => {
+      if (flvPlayer !== player || detachingFlightVideo || state.workspace === "monitor") return;
+      tracePlayback(video, "loading-complete");
+      const retryUrl = attachedUrl;
+      if (retryUrl === null) return;
+      flvFatalStreak += 1;
+      detachVideo("transport-ended");
+      showPlaybackHealth("图传播放连接已结束，正在自动重连…");
+      scheduleFlvReattach(retryUrl);
+    });
     flvPlayer.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
-      if (detachingFlightVideo || state.workspace === "monitor") return;
+      if (flvPlayer !== player || detachingFlightVideo || state.workspace === "monitor") return;
       flvFatalStreak += 1;
       const retryUrl = attachedUrl;
+      tracePlayback(video, "error", `${errorType}:${errorDetail}`);
       console.warn("图传播放连接异常", errorType, errorDetail);
       if (retryUrl === null) return;
-      detachVideo();
+      detachVideo("media-error");
       showPlaybackHealth("图传播放连接尚未就绪，正在自动重连…");
       scheduleFlvReattach(retryUrl);
     });
@@ -941,6 +1053,7 @@ const attachVideo = (url: string): void => {
     play();
     startPlaybackWatch(video);
   } catch {
+    tracePlayback(video, "error", "initialization");
     flvFatalStreak += 1;
     detachVideo();
     showPlaybackHealth("图传播放器初始化失败，正在自动重试…");
@@ -1026,6 +1139,8 @@ type MonitorPlayer = {
   lastPaintAtMs: number;
   lastSeenCurrentTime: number;
   watchTimer: number | null;
+  readonly progress: ReturnType<typeof createPlaybackProgress>;
+  readonly unbindDiagnostics: () => void;
 };
 
 const monitorPlayers = new Map<number, MonitorPlayer>();
@@ -1100,9 +1215,12 @@ const monitorVideoElement = (slot: number): HTMLVideoElement | null => {
   return node instanceof HTMLVideoElement ? node : null;
 };
 
-const releaseMonitorSlot = (slot: number, cooldownMs = 0): void => {
+const releaseMonitorSlot = (slot: number, cooldownMs = 0, reason = "source-change"): void => {
   const lane = monitorPlayers.get(slot);
   if (lane !== undefined) {
+    const video = monitorVideoElement(slot);
+    if (video !== null) tracePlayback(video, "detach", reason, slot);
+    lane.unbindDiagnostics();
     monitorPlayers.delete(slot);
     if (lane.watchTimer !== null) window.clearInterval(lane.watchTimer);
     try { lane.player.pause(); } catch { /* ignore */ }
@@ -1112,6 +1230,7 @@ const releaseMonitorSlot = (slot: number, cooldownMs = 0): void => {
   }
   const video = monitorVideoElement(slot);
   if (video !== null) {
+    lastLiveEdgeSeeks.delete(video);
     video.removeAttribute("src");
     video.srcObject = null;
     try { video.load(); } catch { /* ignore */ }
@@ -1127,16 +1246,24 @@ const attachMonitorPlayer = (slot: number, deviceId: string, url: string): void 
   const existing = monitorPlayers.get(slot);
   if (existing !== undefined && existing.deviceId === deviceId && existing.url === url) {
     const current = monitorVideoElement(slot);
-    if (current !== null && current.paused) void current.play().catch(() => undefined);
+    if (!document.hidden && current !== null && current.paused) {
+      chaseLiveEdge(current);
+      void current.play().catch(() => undefined);
+    }
     return;
   }
   releaseMonitorSlot(slot);
   const video = monitorVideoElement(slot);
   if (video === null || !url.includes(".flv") || !mpegts.isSupported()) return;
   const player = mpegts.createPlayer(
-    { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url },
+    { type: "flv", isLive: true, hasAudio: false, hasVideo: true, url: playbackRequestUrl(url) },
     LIVE_PLAYER_CONFIG,
   );
+  const diagnosticEvents = ["pause", "waiting", "stalled", "ended", "playing", "error"];
+  const onDiagnostic = (event: Event): void => {
+    if (monitorPlayers.get(slot) === lane) tracePlayback(video, "media-event", event.type, slot);
+  };
+  const onLiveEdge = (): void => { if (monitorPlayers.get(slot) === lane) chaseLiveEdge(video); };
   const lane: MonitorPlayer = {
     deviceId,
     url,
@@ -1145,32 +1272,52 @@ const attachMonitorPlayer = (slot: number, deviceId: string, url: string): void 
     lastPaintAtMs: 0,
     lastSeenCurrentTime: 0,
     watchTimer: null,
+    progress: createPlaybackProgress(),
+    unbindDiagnostics: () => {
+      for (const event of diagnosticEvents) video.removeEventListener(event, onDiagnostic);
+      for (const event of ["timeupdate", "loadeddata", "canplay"]) video.removeEventListener(event, onLiveEdge);
+    },
   };
   monitorPlayers.set(slot, lane);
+  tracePlayback(video, "attach", "", slot);
+  for (const event of diagnosticEvents) video.addEventListener(event, onDiagnostic);
+  for (const event of ["timeupdate", "loadeddata", "canplay"]) video.addEventListener(event, onLiveEdge);
   video.muted = true;
   video.defaultMuted = true;
   video.volume = 0;
   video.setAttribute("playsinline", "");
-  const play = (): void => { void video.play().catch(() => undefined); };
-  player.on(mpegts.Events.MEDIA_INFO, () => { play(); });
-  player.on(mpegts.Events.ERROR, () => {
+  const play = (): void => {
+    if (document.hidden) return;
+    chaseLiveEdge(video);
+    void video.play().catch(() => undefined);
+  };
+  player.on(mpegts.Events.MEDIA_INFO, () => { if (monitorPlayers.get(slot) === lane) play(); });
+  player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
     if (monitorPlayers.get(slot) !== lane) return;
-    releaseMonitorSlot(slot, 1_500);
+    tracePlayback(video, "error", `${errorType}:${errorDetail}`, slot);
+    releaseMonitorSlot(slot, 1_500, "media-error");
+  });
+  player.on(mpegts.Events.LOADING_COMPLETE, () => {
+    if (monitorPlayers.get(slot) !== lane) return;
+    tracePlayback(video, "loading-complete", "", slot);
+    releaseMonitorSlot(slot, 800, "transport-ended");
   });
   player.attachMediaElement(video);
   player.load();
   play();
   lane.watchTimer = window.setInterval(() => {
     if (monitorPlayers.get(slot) !== lane || state.workspace !== "monitor") return;
+    tracePlayback(video, "sample", "", slot);
+    if (document.hidden) return;
+    chaseLiveEdge(video);
     if (isPainting(video)) {
-      if (lane.lastPaintAtMs === 0 || Math.abs(video.currentTime - lane.lastSeenCurrentTime) >= 0.05) {
-        lane.lastPaintAtMs = Date.now();
-        lane.lastSeenCurrentTime = video.currentTime;
-      }
-      if (lane.lastPaintAtMs > 0 && Date.now() - lane.lastPaintAtMs > STALL_MS) releaseMonitorSlot(slot, 1_000);
+      if (lane.lastPaintAtMs === 0) tracePlayback(video, "first-frame", "", slot);
+      const frames = typeof video.getVideoPlaybackQuality === "function" ? video.getVideoPlaybackQuality().totalVideoFrames : null;
+      lane.lastPaintAtMs = lane.progress.observe(Date.now(), video.currentTime, frames);
+      if (lane.lastPaintAtMs > 0 && Date.now() - lane.lastPaintAtMs > STALL_MS) releaseMonitorSlot(slot, 1_000, "stall");
       return;
     }
-    if (Date.now() - lane.attachedAtMs > NO_FRAME_MS) releaseMonitorSlot(slot, 1_000);
+    if (Date.now() - lane.attachedAtMs > NO_FRAME_MS) releaseMonitorSlot(slot, 1_000, "no-first-frame");
   }, PLAYBACK_WATCH_MS);
 };
 
@@ -2119,6 +2266,36 @@ function paintMonitorActionRail(rail: HTMLElement, deviceId: string, title: stri
   rail.append(head, body);
 }
 
+function renderMonitorLandingNotices(view: ReturnType<typeof OperatorConsole.project>): void {
+  const host = document.querySelector(".monitor-landing-notices");
+  if (!(host instanceof HTMLElement)) return;
+  const notices = monitorDevices(view).flatMap((device) => {
+    const deviceId = text(read(device, "deviceId"));
+    const connection = connectionOf(device);
+    const message = landingProtectionNotice({
+      ...monitorFactsOf(device),
+      telemetryReceivedAtMs: finiteNumber(read(connection, "telemetryReceivedAtMs")),
+      noticeAtMs: finiteNumber(read(connection, "landingProtectionNoticeAtMs")),
+      nowMs: Date.now(),
+    });
+    return deviceId === null || message === null ? [] : [{ deviceId, name: callSign(deviceId), message }];
+  });
+  const signature = JSON.stringify(notices);
+  if (host.dataset.signature === signature) return;
+  host.dataset.signature = signature;
+  host.hidden = notices.length === 0;
+  host.replaceChildren(...notices.map((notice) => {
+    const row = document.createElement("p");
+    row.className = "monitor-landing-notice";
+    const name = document.createElement("strong");
+    name.textContent = notice.name;
+    const message = document.createElement("span");
+    message.textContent = notice.message;
+    row.append(name, message);
+    return row;
+  }));
+}
+
 function renderMonitorRail(view: ReturnType<typeof OperatorConsole.project>): void {
   const rail = document.querySelector(".monitor-rail-panel");
   if (!(rail instanceof HTMLElement)) return;
@@ -2263,6 +2440,7 @@ const applyMonitorView = (): void => {
 
 function renderMonitor(view: ReturnType<typeof OperatorConsole.project>): void {
   const devices = monitorDevices(view);
+  renderMonitorLandingNotices(view);
   document.querySelectorAll<HTMLElement>("[data-monitor-slot]").forEach((slot) => {
     const index = Number(slot.dataset.monitorSlot);
     const device = Number.isInteger(index) ? devices[index] : undefined;

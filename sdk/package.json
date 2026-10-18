@@ -1,6 +1,6 @@
 {
   "name": "@xjicloud/sky-command-sdk",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Sky Command Android relay SDK for Vue, React and Node.js",
   "type": "module",
   "license": "UNLICENSED",

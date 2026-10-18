@@ -564,6 +564,11 @@
       min-height: 0;
       overflow: hidden;
     }
+    .monitor-landing-notices { flex: 0 0 auto; max-height: 45%; overflow: auto; padding: 10px; border-bottom: 1px solid var(--line); }
+    .monitor-landing-notices[hidden] { display: none !important; }
+    .monitor-landing-notice { margin: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line)); border-radius: var(--radius-ctrl); background: var(--warn-soft); color: var(--warn); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+    .monitor-landing-notice + .monitor-landing-notice { margin-top: 8px; }
+    .monitor-landing-notice strong { display: block; margin-bottom: 4px; }
     .monitor-route {
       display: block;
       width: 100%;
@@ -1067,6 +1072,7 @@
         <button type="button" data-monitor-mode="grid" class="is-selected">缩略</button>
         <button type="button" data-monitor-mode="single">单机</button>
       </div>
+      <div class="monitor-landing-notices" role="status" aria-live="polite" aria-atomic="true" hidden></div>
       <div class="monitor-rail-panel"></div>
     </aside>
     <section class="monitor-grid" aria-label="多机图传">

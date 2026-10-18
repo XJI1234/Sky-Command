@@ -1,5 +1,7 @@
 # Sky Command SDK 契约
 
+0.2.6 的 desktop 图传适配器按 HTTP 响应隔离观看连接，同机新观看者不再替换旧观看者；共享发布者和控制协议不变。连接开闭与 RTMP 视频包间隔沿用 electron-host 的脱敏诊断契约，日志回调不参与业务裁决。
+
 目标：将现有 Android 中继能力封装为独立 npm 包，Vue 3、React 18/19 与普通 TypeScript 共用核心。Node 20+ 提供中继监听和浏览器控制网关。手机协议 v1 与原有字节传输保持一致。
 
 结构：`src/client.ts` 管理浏览器控制连接；`src/node.ts` 组合现有 RelayLink 与 NodeWebSocketRelayTransport；`src/vue.ts` / `src/react.ts` 仅订阅客户端；`src/entries` 复用现有业务模块；`tests` 验证真实本机网络、生命周期与错误路径。构建生成 ESM、CJS 和声明，npm pack 产生可安装文件。

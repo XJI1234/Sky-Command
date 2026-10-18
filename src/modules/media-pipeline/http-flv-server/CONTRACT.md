@@ -47,6 +47,8 @@ interface HttpFlvServerInstance {
 
 ## 生命周期与播放地址
 
+生产端口适配器按 HTTP 响应隔离观看会话：同一流允许多个独立观看者，一个响应关闭或背压超限不得关闭另一个响应或 RTMP 发布者。该规则不改变下列公开接口和监听状态机。
+
 1. 初始为 `idle`、修订号 0、无端口、无诊断。
 2. `idle` 或 `failed` 可 `start`；调用后先为 `starting`，并且只以 `{ host: "127.0.0.1", port, rootDirectory }` 调用 `listen` 一次。只有适配器 Promise 成功兑现时才进入 `listening` 并返回成功；`listening` 严格表示端口已实际绑定。
 3. `listen` 同步抛出或 Promise 拒绝时进入 `failed`，返回 `LISTEN_FAILED` 和稳定诊断；不泄露根目录或原始异常。
