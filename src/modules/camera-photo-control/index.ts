@@ -10,7 +10,7 @@ export interface CameraPhotoControlDependencies {
   readonly relay: PhotoRelay;
   readonly now: () => number;
   readonly fs?: PhotoInboxFs;
-  /** Photos already saved for this phone. Used so a restarted desktop does not ask for them again. */
+  /** Current disk inventory for this phone. Replaces cached records before every fetch. */
   readonly storedPhotos?: (deviceId: string) => readonly Pick<StoredPhoto, "fileName" | "size" | "sha256">[] | Promise<readonly Pick<StoredPhoto, "fileName" | "size" | "sha256">[]>;
 }
 
@@ -34,8 +34,9 @@ function create(dependencies: CameraPhotoControlDependencies): CameraPhotoContro
   const rememberStored = async (deviceId: string): Promise<void> => {
     if (dependencies.storedPhotos === undefined) return;
     let stored: readonly Pick<StoredPhoto, "fileName" | "size" | "sha256">[];
-    try { stored = await dependencies.storedPhotos(deviceId); } catch { return; }
-    if (!Array.isArray(stored)) return;
+    stored = await dependencies.storedPhotos(deviceId);
+    if (!Array.isArray(stored)) throw new Error("Invalid stored photo inventory");
+    inbox.forget(deviceId);
     for (const photo of stored) inbox.remember(deviceId, photo);
   };
   return freeze({

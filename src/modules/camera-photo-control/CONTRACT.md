@@ -48,6 +48,8 @@ camera.photo.fetch      fields: { knownPhotos: [{ fileName, sha256 }] }
 
 ## 状态、并发和断线
 
+配置 `storedPhotos` 时，每次人工 fetch 在同设备锁内读取当前磁盘清单，并用本次结果替换该设备的旧收件箱记录，再发送 `knownPhotos`。外部删除或修改的文件不得继续按旧记录去重；未删除文件仍跳过。空目录产生空清单，允许重新回传全部照片。读取失败或返回无效清单时返回 `DEPENDENCY_FAILURE`，不发送旧清单，不清空原记录。未配置 `storedPhotos` 的内存宿主维持原有去重规则；其它设备清单不受影响。
+
 每台设备的控制快照仅为 `idle`、`capturing`、`captured`、`fetching`、`stored`、`failed` 或 `disconnected`，并包含最后一次安全文件名、稳定失败码。状态不保存绝对路径、原始异常或照片字节。`stored` 表示本次批量回传的最后一张文件已在收件箱确认；同一文件名或同一 SHA-256 再次到达不得覆盖，只保持已有记录。`fetch` 成功结果额外包含本次实际回传数量 `count`。
 
 同一设备在等待命令结果或本地收件箱确认时，第二个 capture 或 fetch 返回 `OPERATION_IN_PROGRESS`，且不触发依赖；不同设备互不阻塞。capture 与 fetch 不得合成一次点击。一次 fetch 必须携带调用开始时该设备收件箱的 `(fileName, sha256)` 清单，手机逐张等待 `media-result.ok=true` 后继续，直到返回 `NONE`；中途失败不得把未确认文件写入本次清单。设备断开时进行中的结果不能覆盖 `disconnected`；重连后必须由操作者再点，不能自动重拍或自动回传。

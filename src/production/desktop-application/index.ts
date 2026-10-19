@@ -146,7 +146,10 @@ const hashFile = (path: string): Promise<string> => new Promise((resolve, reject
 const listStoredPhotos = async (directory: string, deviceId: string): Promise<readonly { readonly fileName: string; readonly size: number; readonly sha256: string }[]> => {
   if (typeof deviceId !== "string" || deviceId.trim().length === 0 || deviceId.includes("..") || /[\\/]/u.test(deviceId)) return [];
   let names: string[];
-  try { names = await readdir(join(directory, deviceId)); } catch { return []; }
+  try { names = await readdir(join(directory, deviceId)); } catch (error) {
+    if (record(error)?.code === "ENOENT") return [];
+    throw error;
+  }
   const stored: { fileName: string; size: number; sha256: string }[] = [];
   for (const fileName of names) {
     if (!photoFileName.test(fileName) || fileName.includes("..") || /[\\/]/u.test(fileName)) continue;

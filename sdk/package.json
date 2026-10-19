@@ -1,6 +1,6 @@
 {
   "name": "@xjicloud/sky-command-sdk",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Sky Command Android relay SDK for Vue, React and Node.js",
   "type": "module",
   "license": "UNLICENSED",
@@ -172,11 +172,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json && node scripts/cjs-types.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "test:upstream": "node scripts/upstream.mjs",
-    "verify:package": "node scripts/verify-package.mjs",
+    "build": "node ../scripts/record-verification.mjs --label sdk-build -- node scripts/recorded-build.mjs",
+    "typecheck": "node ../scripts/record-verification.mjs --label sdk-typecheck -- node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "node ../scripts/record-verification.mjs --label sdk-test -- node node_modules/vitest/vitest.mjs run",
+    "test:upstream": "node ../scripts/record-verification.mjs --label sdk-upstream -- node scripts/upstream.mjs",
+    "verify:package": "node ../scripts/record-verification.mjs --label sdk-package -- node scripts/verify-package.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {

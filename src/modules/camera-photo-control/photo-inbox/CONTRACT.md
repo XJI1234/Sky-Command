@@ -23,6 +23,8 @@ instance.subscribe(listener) -> unsubscribe
 
 ## 规则
 
+- 配置磁盘清单来源的一级组合根在每次 fetch 准备阶段调用 `forget` 后按当前磁盘内容 `remember`，使外部删除的照片不再被内存记录误判为重复；这些操作不删除或重写磁盘文件。
+
 - 同一 `deviceId` 下相同 `fileName` 或相同 `sha256` 返回 `Duplicate`，不覆盖已有文件，不二次写入；
 - 配置持久化端口时，只有 `writeAtomic` 返回 `true` 才登记清单；写入失败不登记；
 - 清单条目只有 `fileName`、`size`、`sha256` 和本机接收时刻；不含绝对路径；
