@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PhotoDispatcher } from "../src/modules/camera-photo-control/photo-dispatcher/index.js";
 
@@ -40,7 +41,76 @@ const delivered = (fileName = "DJI_0001.jpg", sha256 = "a".repeat(64), count = 1
   },
 });
 
+const stopped = (count = 1) => ({
+  status: "succeeded",
+  result: {
+    kind: "object",
+    fields: {
+      domain: { kind: "string", value: "photo" },
+      outcome: { kind: "string", value: "STOPPED" },
+      count: { kind: "number", value: String(count) },
+    },
+  },
+});
+
 describe("photo-dispatcher", () => {
+  it("回传进行中停止会立刻下发停止命令，不等待原回传结束", async () => {
+    const sent: string[] = [];
+    let releaseFetch: (() => void) | undefined;
+    const dispatcher = PhotoDispatcher.create({ relay: {
+      latestTelemetry: () => ready(),
+      sendCommand: async (_deviceId, request) => {
+        sent.push(request.name);
+        if (request.name === "camera.photo.fetch") {
+          await new Promise<void>((resolve) => { releaseFetch = resolve; });
+          return stopped();
+        }
+        expect(request.fields).toEqual({});
+        return stopped(2);
+      },
+    } });
+    const fetching = dispatcher.fetch("phone-1");
+    for (let step = 0; step < 20 && !sent.includes("camera.photo.fetch"); step += 1) await Promise.resolve();
+    await expect(dispatcher.stopFetch("phone-1")).resolves.toMatchObject({ ok: true, code: "STOPPED", count: 2 });
+    expect(sent).toEqual(["camera.photo.fetch", "camera.photo.fetch.stop"]);
+    expect(dispatcher.get("phone-1").phase).toBe("fetching");
+    releaseFetch?.();
+    await expect(fetching).resolves.toMatchObject({ ok: true, code: "STOPPED", count: 1 });
+    expect(dispatcher.get("phone-1")).toMatchObject({ phase: "idle", code: "STOPPED", progress: { stage: "stopped" } });
+    expect(dispatcher.get("phone-1").progress?.finishedAtMs).toEqual(expect.any(Number));
+  });
+
+  it("准备清单期间停止不得再把回传命令发给手机", async () => {
+    const sent: string[] = [];
+    let releasePrepare: (() => void) | undefined;
+    const notRunning = {
+      status: "succeeded",
+      result: {
+        kind: "object",
+        fields: {
+          domain: { kind: "string", value: "photo" },
+          outcome: { kind: "string", value: "NOT_RUNNING" },
+          count: { kind: "number", value: "0" },
+        },
+      },
+    };
+    const dispatcher = PhotoDispatcher.create({ relay: {
+      latestTelemetry: () => ready(),
+      sendCommand: async (_deviceId, request) => {
+        sent.push(request.name);
+        return notRunning;
+      },
+    } });
+    const fetching = dispatcher.fetch("phone-1", () => new Promise<void>((resolve) => { releasePrepare = resolve; }));
+    for (let step = 0; step < 20 && dispatcher.get("phone-1").progress?.stage !== "preparing"; step += 1) await Promise.resolve();
+    await expect(dispatcher.stopFetch("phone-1")).resolves.toMatchObject({ ok: true, code: "STOPPED" });
+    expect(sent).toEqual(["camera.photo.fetch.stop"]);
+    releasePrepare?.();
+    await expect(fetching).resolves.toMatchObject({ ok: true, code: "STOPPED" });
+    expect(sent).toEqual(["camera.photo.fetch.stop"]);
+    expect(dispatcher.get("phone-1")).toMatchObject({ phase: "idle", code: "STOPPED", progress: { stage: "stopped" } });
+  });
+
   it("两张批次必须等两张落盘，最后一张先到也不能提前报成功", async () => {
     const dispatcher = PhotoDispatcher.create({ relay: {
       latestTelemetry: () => ready(),
@@ -214,5 +284,22 @@ describe("photo-dispatcher", () => {
     await expect(first).resolves.toMatchObject({ ok: true, fileName: "phone-a.jpg" });
     await expect(second).resolves.toMatchObject({ ok: true, fileName: "phone-b.jpg" });
     expect(sent).toEqual(["phone-a:camera.photo.capture", "phone-b:camera.photo.capture"]);
+  });
+
+  it("回传照片在主相机断开时和拍照一样本地拒绝", async () => {
+    const sent: string[] = [];
+    const dispatcher = PhotoDispatcher.create({
+      relay: {
+        latestTelemetry: () => ({ payload: { sdkAvailability: "READY", camera: "DISCONNECTED" } }),
+        sendCommand: async (deviceId, request) => {
+          sent.push(`${deviceId}:${request.name}`);
+          return none();
+        },
+      },
+    });
+    const contract = readFileSync(new URL("../src/modules/camera-photo-control/photo-dispatcher/CONTRACT.md", import.meta.url), "utf8");
+    await expect(dispatcher.fetch("phone-1")).resolves.toMatchObject({ ok: false, code: "CAMERA_OFFLINE" });
+    expect(sent).toEqual([]);
+    expect(contract).toContain("capture 与 fetch 都在本地返回");
   });
 });

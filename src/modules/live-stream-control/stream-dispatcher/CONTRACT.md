@@ -34,11 +34,11 @@ instance.subscribe(listener) -> unsubscribe
 2. 读取 `media-pipeline` 快照，只有 `phase === "running"` 且存在有效 `endpoint.host`、`endpoint.port` 时继续；
 3. 调用 `stream-protocol-config.createRtmpTarget`，获得唯一的 RTMP 目标；
 4. 读取该设备遥测，并调用 `CapabilityGate.evaluate({ operation: "live-stream", ... })`。开始要求中继在线、MSDK `READY`、原始 `AirLinkKey.KeyConnection` 为 `CONNECTED`、原始 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 为 `CONNECTED`；不得读取或依赖 `capabilities.liveVideo`、飞控、遥控器、产品、电量、航线或对频。源 Key 的未知或断开必须在桌面拒绝，并由手机端在调用 MSDK 前再次检查；
-5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。
+5. 进入 `starting`，发送冻结字段 `{ rtmpUrl }`；仅中继结果 `status === "succeeded"` 时进入 `streaming`。成功结果必须带 `code: "SUCCEEDED"`，且不得带 `platformError`，供操作台显示 DJI `onSuccess`。
 
 当同一设备正处于 `stopping` 时，`start(deviceId)` 不是并发命令：它登记一次“停止后重启”意图，并等待现有停止命令的终态。停止成功后，调度器必须重新执行上述全部启动检查，再发送唯一一条 `live-stream.start`；停止失败、设备断线或图传源失效时，不得发送启动命令，所有已登记调用必须得到该终态失败。处于 `starting` 的同设备 `start`、以及所有其他忙碌冲突，仍返回 `OPERATION_IN_PROGRESS`。多个停止期间的启动请求可以合并为一次实际启动，但每个调用都必须收到该次启动的最终结果。
 
-`stop(deviceId)` 不读取媒体端点、不构造地址、也不走启动用的 `CapabilityGate(live-stream)`。它只校验设备标识与同设备互斥，进入 `stopping` 后发送冻结空字段对象。中继成功时进入 `idle`，失败时进入 `failed`。手机端命令成功只表示 DJI 操作结果，播放器可用性仍由 `media-pipeline` 决定。
+`stop(deviceId)` 不读取媒体端点、不构造地址、也不走启动用的 `CapabilityGate(live-stream)`。它只校验设备标识与同设备互斥，进入 `stopping` 后发送冻结空字段对象。中继成功时进入 `idle` 并返回 `code: "SUCCEEDED"`，失败时进入 `failed`。手机端命令成功只表示 DJI 操作结果，播放器可用性仍由 `media-pipeline` 决定。
 
 错误码只能是：`INVALID_INPUT`、`MEDIA_PIPELINE_UNAVAILABLE`、`CONFIGURATION_INVALID`、`CAPABILITY_BLOCKED`、`OPERATION_IN_PROGRESS`、`RELAY_REJECTED`、`STREAM_ACTION_REJECTED`、`STREAM_ACTION_INVOCATION_FAILED`、`STREAM_ACTION_UNCONFIRMED`、`DEPENDENCY_FAILURE`、`DISCONNECTED`、`SOURCE_UNAVAILABLE` 或 `ILLEGAL_STATE`。能力拒绝必须复制 `CapabilityGate` 的原因码。`RELAY_REJECTED` 可以把手机端已知拒绝详情映射为封闭原因码 `ANOTHER_VIDEO_TRANSPORT_ACTIVE`，但不能把遥测、RTMP URL 或原始异常带入结果。
 
@@ -50,6 +50,10 @@ instance.subscribe(listener) -> unsubscribe
 
 同设备的进行中操作互斥，不同设备可并行；唯一例外是 `stopping` 期间登记的“停止后重启”意图，它绝不与停止命令并发执行。断线立即将已存在的设备记录标记为 `disconnected`，并终止尚未执行的重启意图；断线前开始的异步结果是迟到结果，必须忽略。图传源失效仅将活动/停止中的车道标记为 `failed/SOURCE_UNAVAILABLE`，并同样终止尚未执行的重启意图；它不发送第二条命令，也不影响任何其他设备。`forget` 只能删除 `idle`、`failed` 或 `disconnected` 记录。快照按 `deviceId` 排序、逐层冻结并与内部状态隔离；订阅者异常不会影响状态或其他订阅者，注销幂等。
 
+每台设备独立维护操作代次。`recordDisconnected` 或有效的 `recordSourceUnavailable` 必须在发布中断状态前使旧代次失效，并保存该次中断的失败码与冻结快照。恢复后的显式开始/停止使用新代次；即使新操作已进入 `starting`、`stopping` 或完成，旧代次的成功、拒绝和传输异常都只能向原调用方返回原中断失败，不得覆盖当前快照、发布状态、释放新操作互斥或启动重试。停止完成后的重启队列处理也必须验证代次，旧停止回调不得取走或结算新停止期间登记的任何重启调用。
+
 ## 验收
 
 测试必须精确验证命令名与字段、每项前置检查的顺序、能力门禁、媒体端点缺失、同设备互斥、多设备并行、断线和迟到完成、稳定状态迁移、订阅隔离、恶意依赖和不泄密。模块不导入 Node、Electron、WebSocket、FFmpeg、DJI、UI 或其他一级模块的内部实现，并通过类型、100% 覆盖率、性能和 100% Stryker 变异测试。
+
+`tests/stream-operation-recovery.test.ts` 使用可延迟完成的命令结果验证断线/源失效后新开始或停止仍在等待时的旧回执隔离、新停止重启队列的归属，以及四台设备交错完成时的独立性。

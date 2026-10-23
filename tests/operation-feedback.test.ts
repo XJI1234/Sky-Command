@@ -65,6 +65,30 @@ describe("操作回调展示", () => {
     ].join("\n"));
   });
 
+  it("航线暂停成功时显示 DJI onSuccess", () => {
+    expect(operationFeedback("mission-pause", {
+      ok: true,
+      value: { ok: true, value: { ok: true, operation: "pause", state: { phase: "paused" } } },
+    })).toEqual({
+      source: "dji",
+      outcome: "accepted",
+      message: ["MSDK 回调：成功", "原始类型：onSuccess"].join("\n"),
+    });
+  });
+
+  it("图传成功时显示 DJI onSuccess，而不是手机中继的笼统完成", () => {
+    const feedback = operationFeedback("stream-start", {
+      ok: true,
+      value: { ok: true, operation: "start", code: "SUCCEEDED", state: { phase: "streaming" } },
+    });
+
+    expect(feedback).toEqual({
+      source: "dji",
+      outcome: "accepted",
+      message: ["MSDK 回调：成功", "原始类型：onSuccess"].join("\n"),
+    });
+  });
+
   it("保留 DJI 图传动作拒绝的原始错误码和说明", () => {
     const feedback = operationFeedback("stream-start", {
       ok: false,

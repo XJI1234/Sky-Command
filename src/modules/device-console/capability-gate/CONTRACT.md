@@ -26,16 +26,16 @@ CapabilityGate.evaluate(input: unknown) -> CapabilityDecisionResult<CapabilityDe
   remoteController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
   /** 仅 pairing 读取。FlightControllerKey.KeyConnection 的原始状态。 */
   flightController?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
-  /** 仅 live-stream 读取。AirLinkKey.KeyConnection 的原始状态。 */
+  /** 仅 live-stream 读取。原始连接状态。 */
   airLink?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
-  /** 仅 live-stream 读取。CameraKey.KeyConnection(LEFT_OR_MAIN) 的原始状态。 */
+  /** 仅 live-stream 读取。原始连接状态。 */
   camera?: "CONNECTED" | "DISCONNECTED" | "UNKNOWN";
 }
 ```
 
 `sdkAvailability` 是所有分支唯一共同的 MSDK 事实。旧的 `sdkRegistered`、`remoteControllerConnected` 与 `flightControllerConnected` 仅供非生产兼容调用使用，不能覆盖已存在的原始字段。遥控器和飞控事实只属于对频维护操作；AirLink 和主相机事实只属于生产 RTMP 图传启动。无关字段不应被读取，因此无关 getter、未知枚举或畸形能力值不能阻止其它操作到达手机端。
 
-输出为冻结对象 `{ operation, enabled, reason }`。`enabled: true` 时 `reason` 固定为 `null`；实际拒绝码只能是 `RELAY_OFFLINE`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_OFFLINE`、`FLIGHT_CONTROLLER_CONNECTION_UNKNOWN`、`PAIRING_NOT_NEEDED`、`AIRLINK_CONNECTION_UNKNOWN`、`AIRLINK_OFFLINE`、`CAMERA_CONNECTION_UNKNOWN` 或 `CAMERA_OFFLINE`。图传源门禁只使用 Android 持续订阅并投影到当前会话的原始 AirLink/主相机 Key；手机端会在真正调用 MSDK 前使用同一语义重检，因此桌面预检不能成为唯一裁决。
+输出为冻结对象 `{ operation, enabled, reason }`。`enabled: true` 时 `reason` 固定为 `null`。当前 `evaluate` 实际返回的拒绝码只能是 `RELAY_OFFLINE`、`SDK_NOT_READY`、`REMOTE_CONTROLLER_OFFLINE`、`FLIGHT_CONTROLLER_CONNECTION_UNKNOWN` 或 `PAIRING_NOT_NEEDED`。类型里仍保留 `AIRLINK_CONNECTION_UNKNOWN`、`AIRLINK_OFFLINE`、`CAMERA_CONNECTION_UNKNOWN` 与 `CAMERA_OFFLINE`，但本模块不再返回它们。手机生产组合根当前也不在调用 MSDK 前用图传源状态拒绝，桌面同样不做这一预检。
 
 ## 判定规则
 

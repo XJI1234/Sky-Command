@@ -82,7 +82,6 @@ function create(dependencies: MissionControlDependencies, options: MissionContro
     const cancel = schedule(graceMs, () => {
       disconnectTimers.delete(deviceId);
       if (disposed) return;
-      appliedPhases.delete(deviceId);
       dispatcher.recordDisconnected(deviceId);
     });
     disconnectTimers.set(deviceId, cancel);
@@ -115,6 +114,10 @@ function create(dependencies: MissionControlDependencies, options: MissionContro
     const currentDevices = RelayDeviceSnapshotReader.read(snapshot);
     if (currentDevices === null) return;
     const currentSessions = sessionsOf(snapshot);
+    for (const [deviceId, sessionId] of currentSessions) {
+      const previous = previousSessions.get(deviceId);
+      if (previous !== undefined && previous !== sessionId) appliedPhases.delete(deviceId);
+    }
     if (previousDevices !== null) {
       for (const deviceId of currentDevices) cancelDisconnectTimer(deviceId);
       for (const deviceId of previousDevices) {
@@ -122,14 +125,14 @@ function create(dependencies: MissionControlDependencies, options: MissionContro
       }
     }
     previousDevices = currentDevices;
-    previousSessions.clear();
     for (const [deviceId, sessionId] of currentSessions) previousSessions.set(deviceId, sessionId);
     const missionPhases = RelayMissionPhaseSnapshotReader.read(snapshot);
-    if (missionPhases === null) return;
-    for (const phase of missionPhases) {
+    for (const phase of missionPhases ?? []) {
       if (stalePhase(phase.deviceId, phase)) continue;
-      const applied = dispatcher.recordMissionPhase(phase.deviceId, phase.fileName, phase.missionRevision, phase.deviceGeneration, phase.sequence, phase.phase);
-      if (applied !== null) appliedPhases.set(phase.deviceId, freeze({ deviceGeneration: phase.deviceGeneration, missionRevision: phase.missionRevision, sequence: phase.sequence }));
+      // Snapshots retain the last milestone after a task ends. Consume it even
+      // outside an active task so it cannot bind a later same-file mission.
+      appliedPhases.set(phase.deviceId, freeze({ deviceGeneration: phase.deviceGeneration, missionRevision: phase.missionRevision, sequence: phase.sequence }));
+      dispatcher.recordMissionPhase(phase.deviceId, phase.fileName, phase.missionRevision, phase.deviceGeneration, phase.sequence, phase.phase);
     }
     const terminals = RelayMissionPhaseSnapshotReader.readTerminalStates(snapshot);
     if (terminals === null) return;
@@ -137,11 +140,7 @@ function create(dependencies: MissionControlDependencies, options: MissionContro
   };
   const relaySubscription = subscribeSafely(dependencies.relay, receiveRelaySnapshot);
   return freeze({
-    stage: async (deviceId, routeId) => {
-      const result = await dispatcher.stage(deviceId, routeId);
-      if (result.ok) appliedPhases.delete(deviceId);
-      return result;
-    },
+    stage: dispatcher.stage,
     upload: dispatcher.upload,
     start: dispatcher.start,
     pause: dispatcher.pause,
@@ -150,11 +149,7 @@ function create(dependencies: MissionControlDependencies, options: MissionContro
     get: dispatcher.get,
     list: dispatcher.list,
     forget: dispatcher.forget,
-    release: (deviceId) => {
-      const released = dispatcher.release(deviceId);
-      if (released !== null) appliedPhases.delete(deviceId);
-      return released;
-    },
+    release: dispatcher.release,
     subscribe: dispatcher.subscribe,
     dispose: () => {
       if (disposed) return;

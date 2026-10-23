@@ -43,6 +43,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
   const connectionEpochs = new Map<string, number>();
+  const flightGenerations = new Map<string, number>();
   const reconnectGrace = new Map<string, () => void>();
   const cancelReconnectGrace = (deviceId: string): void => {
     const cancel = reconnectGrace.get(deviceId);
@@ -91,7 +92,8 @@ function create(dependencies: OperationWorkflowDependencies) {
   };
   const pendingFlightAction = (deviceId: string): unknown => { try { return dependencies.flightControl.get(deviceId); } catch { return null; } };
   const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
-  const snapshot = () => WorkflowSnapshot.create({
+  let frozenSnapshot: ReturnType<typeof WorkflowSnapshot.create> | null = null;
+  const snapshot = () => frozenSnapshot ?? WorkflowSnapshot.create({
     devices: deviceRecords().map(({ deviceId }) => {
       const rawTelemetry = telemetryRaw(deviceId);
       return freeze({
@@ -163,6 +165,7 @@ function create(dependencies: OperationWorkflowDependencies) {
         const nextSession = sessions.get(deviceId);
         const replaced = !gone && previousSession !== undefined && nextSession !== undefined && previousSession !== nextSession;
         if (!gone && !replaced) continue;
+        flightGenerations.set(deviceId, (flightGenerations.get(deviceId) ?? 0) + 1);
         // 闪断或换会话：作废未点的危险确认和图传，但不拆掉已在执行的航线回执。
         clearFlightConfirm(deviceId);
         landingIntents.delete(deviceId);
@@ -275,7 +278,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!validId(deviceId) || read(entry, "phase") !== "failed" || !online(deviceId)) continue;
       const phase = read(stream(deviceId), "phase");
       if (phase !== "starting" && phase !== "streaming") continue;
-      try { await actions.stopStream(deviceId); } catch { /* isolate a single failed-lane stop */ }
+      void actions.stopStream(deviceId).catch(() => undefined);
     }
   };
   return freeze({
@@ -385,6 +388,17 @@ function create(dependencies: OperationWorkflowDependencies) {
         return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
       } catch { return failure("DEPENDENCY_FAILURE"); }
     }),
+    stopPhotoFetch: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
+      if (!validId(deviceId)) return failure("INVALID_INPUT");
+      if (!online(deviceId)) return failure("DEVICE_OFFLINE");
+      const control = dependencies.photoControl;
+      if (control?.stopFetch === undefined) return failure("DEPENDENCY_FAILURE");
+      try {
+        const result = await control.stopFetch(deviceId);
+        const code = read(result, "code");
+        return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
+      } catch { return failure("DEPENDENCY_FAILURE"); }
+    }),
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
       const result = actions.requestFlight(deviceId, action);
@@ -399,10 +413,16 @@ function create(dependencies: OperationWorkflowDependencies) {
     },
     confirmFlightAction: async (deviceId: string, confirmationId: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
+      const sessionAtStart = sessionMap().get(deviceId);
+      const generationAtStart = flightGenerations.get(deviceId) ?? 0;
       const result = await actions.confirmFlight(deviceId, confirmationId);
-      if (result.ok) {
-        pending.delete(deviceId);
-        pendingFlightActions.delete(deviceId);
+      if (disposed) return result;
+      const live = sessionMap().get(deviceId) === sessionAtStart && (flightGenerations.get(deviceId) ?? 0) === generationAtStart;
+      if (live && result.ok) {
+        if (pending.get(deviceId) === confirmationId) {
+          pending.delete(deviceId);
+          pendingFlightActions.delete(deviceId);
+        }
         const inner = read(result, "value");
         if (read(inner, "ok") === true && read(inner, "code") === "SUCCEEDED") {
           const action = read(inner, "action");
@@ -419,7 +439,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; for (const deviceId of [...reconnectGrace.keys()]) cancelReconnectGrace(deviceId); subscriptions.dispose(); listeners.clear(); pending.clear(); pendingFlightActions.clear(); landingIntents.clear(); unavailableVideoSources.clear(); connectionEpochs.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; for (const deviceId of [...reconnectGrace.keys()]) cancelReconnectGrace(deviceId); subscriptions.dispose(); listeners.clear(); pending.clear(); pendingFlightActions.clear(); landingIntents.clear(); unavailableVideoSources.clear(); connectionEpochs.clear(); flightGenerations.clear(); selectedRouteId = null; selectedVideoDeviceId = null; frozenSnapshot = snapshot(); }
   });
 }
 

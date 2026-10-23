@@ -215,7 +215,7 @@ function create(initial?: MissionPhaseState): MissionPhaseMachine {
         current = makeState(current.missionId, previous, null); return success(current);
       }
       if (type === "mission-completed") {
-        if (current.phase !== "starting" && current.phase !== "running" && current.phase !== "disconnected") return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
+        if (!["starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"].includes(current.phase)) return error("ILLEGAL_TRANSITION", current.phase, "Mission transition is not allowed");
         stoppedFrom = null;
         startRetry = false;
         current = makeState(current.missionId, "completed", null); return success(current);

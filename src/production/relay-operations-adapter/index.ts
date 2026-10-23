@@ -173,7 +173,7 @@ export interface RelaySettingsGateway {
 }
 export interface PhotoRelayGateway {
   readonly latestTelemetry: (deviceId: string) => DesktopRelayTelemetry | null;
-  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch"; readonly fields: Readonly<Record<string, never>> | Readonly<{ readonly knownPhotos: readonly Readonly<{ readonly fileName: string; readonly sha256: string }>[] }> }>, onProgress?: (progress: PhotoProgressUpdate) => void) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
+  readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "camera.photo.capture" | "camera.photo.fetch" | "camera.photo.fetch.stop"; readonly fields: Readonly<Record<string, never>> | Readonly<{ readonly knownPhotos: readonly Readonly<{ readonly fileName: string; readonly sha256: string }>[] }> }>, onProgress?: (progress: PhotoProgressUpdate) => void) => Promise<Readonly<{ readonly status: CommandStatus; readonly result?: JsonValue }>>;
 }
 export interface RelayOperationsAdapterInstance {
   readonly telemetry: (deviceId: string) => DesktopRelayTelemetry | null;
@@ -694,7 +694,7 @@ function create(options: RelayOperationsAdapterOptions): RelayOperationsAdapterI
   const photoGateway: PhotoRelayGateway = freeze({
     latestTelemetry: telemetry,
     sendCommand: async (deviceId, request, onProgress) => {
-      if (request.name === "camera.photo.capture" && Object.keys(request.fields).length === 0) return send(deviceId, request.name, {});
+      if ((request.name === "camera.photo.capture" || request.name === "camera.photo.fetch.stop") && Object.keys(request.fields).length === 0) return send(deviceId, request.name, {});
       if (request.name !== "camera.photo.fetch" || Object.keys(request.fields).length !== 1 || !Array.isArray(request.fields.knownPhotos) || request.fields.knownPhotos.length > 256) return commandFailure();
       const entries = request.fields.knownPhotos;
       if (entries.some((entry) => entry === null || typeof entry.fileName !== "string" || typeof entry.sha256 !== "string" || !validPhotoName(entry.fileName) || !/^[0-9a-f]{64}$/u.test(entry.sha256))) return commandFailure();

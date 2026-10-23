@@ -1,4 +1,4 @@
-export type PhotoProgressStage = "preparing" | "listing" | "downloading" | "receiving" | "verifying" | "saving" | "saved" | "completed" | "empty" | "failed" | "disconnected";
+export type PhotoProgressStage = "preparing" | "listing" | "downloading" | "receiving" | "verifying" | "saving" | "saved" | "completed" | "empty" | "failed" | "stopped" | "disconnected";
 export interface PhotoProgressUpdate {
   readonly stage: PhotoProgressStage;
   readonly photoIndex: number;
@@ -22,7 +22,7 @@ export interface PhotoBatchProgress extends PhotoProgressUpdate {
   readonly platformError?: Readonly<{ readonly code: string; readonly description: string }>;
   readonly failedStage?: PhotoProgressStage;
 }
-const terminalStages = new Set<PhotoProgressStage>(["completed", "empty", "failed", "disconnected"]);
+const terminalStages = new Set<PhotoProgressStage>(["completed", "empty", "failed", "stopped", "disconnected"]);
 export function advancePhotoProgress(previous: PhotoBatchProgress | undefined, update: PhotoProgressUpdate, nowMs: number): PhotoBatchProgress {
   const changed = previous === undefined || previous.stage !== update.stage || previous.photoIndex !== update.photoIndex || previous.fileName !== update.fileName;
   const history = changed

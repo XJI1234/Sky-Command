@@ -309,6 +309,72 @@ describe("DesktopApplication", () => {
     }
   });
 
+  it("回传尚未结束时，停止回传必须经生产装配发到手机", async () => {
+    const relayPort = await reservePort();
+    const created = DesktopApplication.create(options(relayPort, []));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await expect(created.value.start()).resolves.toMatchObject({ ok: true });
+    const socket = new WebSocket(`ws://127.0.0.1:${relayPort}/relay`);
+    const fail = (message: string): never => { throw new Error(message); };
+    try {
+      await once(socket, "open");
+      const hello = RelayFrameCodec.encode({ type: "hello", deviceId: "photo-device", protocolVersion: "1" });
+      if (!hello.ok) fail("hello encoding failed");
+      socket.send(hello.value);
+      expect(RelayFrameCodec.decode(await nextMessage(socket))).toMatchObject({ kind: "decoded", frame: { type: "paired" } });
+      const telemetry = RelayFrameCodec.encode({
+        type: "telemetry",
+        payload: object({
+          deviceRevision: { kind: "number" as const, value: "1" },
+          sdkAvailability: text("READY"),
+          remoteController: text("CONNECTED"),
+          flightController: text("CONNECTED"),
+          aircraft: text("CONNECTED"),
+          airLink: text("CONNECTED"),
+          camera: text("CONNECTED"),
+          battery: text("CONNECTED"),
+          connected: bool(true),
+          isFlying: bool(false),
+          motorsOn: bool(false),
+          batteryPercent: { kind: "number" as const, value: "80" },
+        }) as never,
+        capabilities: object({ liveVideo: bool(true), waypointMission: bool(true), waypointMissionSupport: text("SUPPORTED") }) as never,
+      });
+      if (!telemetry.ok) fail("telemetry encoding failed");
+      socket.send(telemetry.value);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const workflow = created.value.workflow();
+      const fetching = workflow.fetchPhoto("photo-device");
+      const fetchFrame = RelayFrameCodec.decode(await nextMessage(socket));
+      expect(fetchFrame).toMatchObject({ kind: "decoded", frame: { type: "command", command: { name: "camera.photo.fetch" } } });
+      if (fetchFrame.kind !== "decoded" || fetchFrame.frame.type !== "command") fail("fetch command decoding failed");
+      const stopping = workflow.stopPhotoFetch("photo-device");
+      const stopFrame = await Promise.race([
+        nextMessage(socket).then((bytes) => ({ kind: "frame" as const, bytes })),
+        stopping.then((result) => ({ kind: "result" as const, result })),
+      ]);
+      expect(stopFrame.kind).toBe("frame");
+      if (stopFrame.kind !== "frame") return;
+      const decodedStop = RelayFrameCodec.decode(stopFrame.bytes);
+      expect(decodedStop).toMatchObject({ kind: "decoded", frame: { type: "command", command: { name: "camera.photo.fetch.stop", fields: {} } } });
+      if (decodedStop.kind !== "decoded" || decodedStop.frame.type !== "command") fail("stop command decoding failed");
+      const stopped = object({ domain: text("photo"), outcome: text("STOPPED"), count: { kind: "number" as const, value: "1" } });
+      const stopResult = RelayFrameCodec.encode({ type: "command-result", id: decodedStop.frame.id, ok: true, detail: "Photo fetch stopped", result: stopped as never });
+      if (!stopResult.ok) fail("stop result encoding failed");
+      socket.send(stopResult.value);
+      await expect(stopping).resolves.toMatchObject({ ok: true, value: { ok: true, code: "STOPPED", count: 1 } });
+      const fetchResult = RelayFrameCodec.encode({ type: "command-result", id: fetchFrame.frame.id, ok: true, detail: "Photo fetch stopped", result: stopped as never });
+      if (!fetchResult.ok) fail("fetch result encoding failed");
+      socket.send(fetchResult.value);
+      await expect(fetching).resolves.toMatchObject({ ok: true, value: { ok: true, code: "STOPPED" } });
+    } finally {
+      socket.close();
+      await once(socket, "close");
+      await created.value.dispose();
+    }
+  });
+
   it("通过真实中继会话桥接四类设置命令和结构化快照", async () => {
     const relayPort = await reservePort();
     const created = DesktopApplication.create(options(relayPort, []));

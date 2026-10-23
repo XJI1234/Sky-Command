@@ -503,7 +503,7 @@ type OperationFeedbackRecord = Readonly<{
   readonly connectionEpoch: number | null;
   readonly feedback: OperationFeedback;
 }>;
-const feedbackByAction = new Map<string, OperationFeedbackRecord>();
+const feedbackByAction = new Map<string, Map<string | null, OperationFeedbackRecord>>();
 const actionRequests = createActionRequests();
 // `operationFeedback` owns the wording, including the literal "DJI MSDK 回调" for
 // an actual structured callback. The renderer only chooses the correct operation lane.
@@ -523,7 +523,11 @@ const showPlaybackHealth = (message: string): void => {
 };
 
 const feedbackForDevice = (action: string, deviceId: string | null, connectionEpoch: number | null, feedback: OperationFeedback): void => {
-  feedbackByAction.set(action, Object.freeze({ deviceId, connectionEpoch, feedback }));
+  const devices = feedbackByAction.get(action) ?? new Map<string | null, OperationFeedbackRecord>();
+  const previousEpoch = devices.get(deviceId)?.connectionEpoch;
+  if (deviceId !== null && typeof previousEpoch === "number" && (connectionEpoch === null || connectionEpoch < previousEpoch)) return;
+  devices.set(deviceId, Object.freeze({ deviceId, connectionEpoch, feedback }));
+  feedbackByAction.set(action, devices);
 };
 
 const feedbackDeviceEpoch = (view: ReturnType<typeof OperatorConsole.project>, deviceId: string | null): number | null => {
@@ -542,7 +546,7 @@ const captureFeedback = (action: string, deviceId: string | null, connectionEpoc
 const renderOperationFeedback = (action: string, deviceId: string | null, connectionEpoch: number | null): void => {
   const node = document.querySelector(`[data-operation-feedback="${action}"]`);
   if (!(node instanceof HTMLElement)) return;
-  const record = feedbackByAction.get(action);
+  const record = feedbackByAction.get(action)?.get(deviceId);
   const visible = record !== undefined && record.deviceId === deviceId && (deviceId === null || record.connectionEpoch === connectionEpoch);
   node.textContent = visible ? record.feedback.message : "";
   if (visible) {
@@ -1732,14 +1736,7 @@ const runtimeStatusRows = (view: ReturnType<typeof OperatorConsole.project>, dev
 async function projectView(signal?: AbortSignal): Promise<ReturnType<typeof OperatorConsole.project>> {
   const snapshotResult = unwrap(await awaitCurrentRender(bridge().invoke("state-snapshot"), signal));
   lastSnapshot = unwrap(snapshotResult) ?? lastSnapshot;
-  try {
-    const hintResult = unwrap(await awaitCurrentRender(bridge().invoke("network-hint"), signal));
-    const listed = read(hintResult, "hints");
-    const liveHints = Array.isArray(listed) ? listed.filter((item): item is string => typeof item === "string" && item.startsWith("ws://")) : [];
-    if (liveHints.length > 0) lastRelayHint = liveHints.join(" 或 ");
-  } catch {
-    /* keep the last reachable hint */
-  }
+  refreshNetworkHint();
   const view = projectCached();
   state.missionDeviceId = view.missionDeviceId;
   state.streamDeviceId = view.streamDeviceId;
@@ -2019,15 +2016,30 @@ function renderStreamButtons(view: ReturnType<typeof OperatorConsole.project>): 
   }
   renderOperationFeedback("stream-start", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
   renderOperationFeedback("stream-stop", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
-  for (const action of ["photo-capture", "photo-fetch"] as const) {
-    const button = document.querySelector(`button[data-action="${action}"]`);
-    if (!(button instanceof HTMLButtonElement)) continue;
+  const photoFetchButton = document.querySelector('button[data-action="photo-fetch"], button[data-action="photo-fetch-stop"]');
+  if (photoFetchButton instanceof HTMLButtonElement) {
+    const fetching = photoFetchActive(view.streamDeviceId);
+    const action = fetching ? "photo-fetch-stop" : "photo-fetch";
+    photoFetchButton.dataset.action = action;
+    photoFetchButton.textContent = fetching ? "停止回传" : "回传照片";
     const decision = OperatorConsole.evaluate(action, view);
-    button.disabled = !decision.ok;
-    button.title = decision.ok ? button.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
+    photoFetchButton.disabled = !decision.ok;
+    photoFetchButton.title = !decision.ok ? decision.reason ?? "当前状态不允许此操作" : fetching ? "停止回传，并让大疆停止下载、退出回放" : "回传照片";
     renderOperationFeedback(action, view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
   }
+  const captureButton = document.querySelector('button[data-action="photo-capture"]');
+  if (captureButton instanceof HTMLButtonElement) {
+    const decision = OperatorConsole.evaluate("photo-capture", view);
+    captureButton.disabled = !decision.ok;
+    captureButton.title = decision.ok ? captureButton.textContent ?? "" : decision.reason ?? "当前状态不允许此操作";
+    renderOperationFeedback("photo-capture", view.streamDeviceId, feedbackDeviceEpoch(view, view.streamDeviceId));
+  }
   renderFlightPhotoProgress(view);
+}
+
+function photoFetchActive(deviceId: string | null): boolean {
+  if (deviceId === null) return false;
+  return actionRequests.pending(deviceId, "photo-fetch") || photoProgressView(photoProgressCache.get(deviceId), Date.now())?.active === true;
 }
 
 function renderFlightPhotoProgress(view: ReturnType<typeof OperatorConsole.project>): void {
@@ -2175,10 +2187,18 @@ const paintMonitorRouteButton = (slot: HTMLElement, device: Record<string, unkno
     return;
   }
   const chosen = picking && plan.routeId !== null;
+  const remoteReady = OperatorConsole.remoteControllerEverConnected(device);
+  if (!remoteReady && !picking) {
+    button.textContent = "航线选择";
+    button.disabled = true;
+    button.title = OperatorConsole.REMOTE_ONCE_REASON;
+    button.dataset.monitorRouteMode = "choose";
+    return;
+  }
   button.textContent = chosen ? "一键执行" : picking ? "退出选择" : "航线选择";
   button.dataset.monitorRouteMode = chosen ? "execute" : picking ? "exit" : "choose";
-  button.disabled = false;
-  button.title = button.textContent ?? "";
+  button.disabled = !remoteReady && chosen;
+  button.title = button.disabled ? OperatorConsole.REMOTE_ONCE_REASON : button.textContent ?? "";
 };
 
 const paintMonitorPhotoButton = (slot: HTMLElement, view: ReturnType<typeof OperatorConsole.project>, deviceId: string | null): void => {
@@ -2192,10 +2212,11 @@ const paintMonitorPhotoButton = (slot: HTMLElement, view: ReturnType<typeof Oper
   }
   const decision = OperatorConsole.evaluate("photo-fetch", { ...view, workspace: "flight", streamDeviceId: deviceId });
   const progress = photoProgressView(photoProgressCache.get(deviceId), Date.now());
-  const busy = monitorPhotoBusy.has(deviceId) || actionRequests.reason(deviceId, "photo-fetch") !== null;
-  button.disabled = busy || !decision.ok;
-  button.textContent = progress?.active === true ? "回传中" : "回传照片";
-  button.title = progress?.active === true ? `${progress.heading} · ${progress.count}` : decision.ok ? "回传照片" : decision.reason ?? "当前状态不允许此操作";
+  const fetching = progress?.active === true || actionRequests.pending(deviceId, "photo-fetch");
+  button.disabled = fetching ? actionRequests.pending(deviceId, "photo-fetch-stop") : !decision.ok;
+  button.textContent = fetching ? "停止回传" : "回传照片";
+  button.title = fetching ? "停止回传，并让大疆停止下载、退出回放" : decision.ok ? "回传照片" : decision.reason ?? "当前状态不允许此操作";
+  button.dataset.monitorPhotoMode = fetching ? "stop" : "fetch";
 };
 
 const paintMonitorHoldButton = (slot: HTMLElement, deviceId: string | null): void => {
@@ -2529,7 +2550,7 @@ const previewGeometry = (value: unknown): { polyline: RouteMapPreview["polyline"
   return points.length >= 2 && start !== null && end !== null ? { polyline: points, startMarker: start, endMarker: end } : null;
 };
 
-const settledInvoke = async (name: string, input: unknown, signal: AbortSignal): Promise<unknown> => {
+const settledInvoke = async (name: string, input: unknown, signal?: AbortSignal): Promise<unknown> => {
   try {
     return await awaitCurrentRender(bridge().invoke(name, input), signal);
   } catch {
@@ -2537,24 +2558,36 @@ const settledInvoke = async (name: string, input: unknown, signal: AbortSignal):
   }
 };
 
+const auxiliaryRefreshes = new Set<string>();
+const refreshInBackground = (name: string, input: unknown, update: (result: unknown) => void): void => {
+  if (auxiliaryRefreshes.has(name)) return;
+  auxiliaryRefreshes.add(name);
+  void settledInvoke(name, input).then(update).catch((error) => {
+    console.error("[sky-render]", error);
+  }).finally(() => auxiliaryRefreshes.delete(name));
+};
+const refreshNetworkHint = (): void => refreshInBackground("network-hint", undefined, (result) => {
+  const listed = read(unwrap(result), "hints");
+  const liveHints = Array.isArray(listed) ? listed.filter((item): item is string => typeof item === "string" && item.startsWith("ws://")) : [];
+  if (liveHints.length > 0) lastRelayHint = liveHints.join(" 或 ");
+});
+
 async function fetchOnce(signal: AbortSignal): Promise<void> {
-  const snapshotTask = settledInvoke("state-snapshot", undefined, signal);
-  const hintTask = settledInvoke("network-hint", undefined, signal);
-  const streamTask = settledInvoke("stream-refresh", undefined, signal);
-  const [snapshotResult, hintResult] = await Promise.all([snapshotTask, hintTask, streamTask]);
+  refreshNetworkHint();
+  refreshInBackground("stream-refresh", undefined, () => undefined);
+  const snapshotResult = await settledInvoke("state-snapshot", undefined, signal);
   if (signal.aborted) return;
   const snapshot = unwrap(unwrap(snapshotResult));
   if (snapshot !== undefined && snapshot !== null) lastSnapshot = snapshot;
-  const listed = read(unwrap(hintResult), "hints");
-  const liveHints = Array.isArray(listed) ? listed.filter((item): item is string => typeof item === "string" && item.startsWith("ws://")) : [];
-  if (liveHints.length > 0) lastRelayHint = liveHints.join(" 或 ");
   const view = projectCached();
   state.missionDeviceId = view.missionDeviceId;
   state.streamDeviceId = view.streamDeviceId;
   const routeId = view.selectedRoute?.routeId ?? null;
   if (state.workspace === "routes" && routeId !== null && lastRoutePreview?.routeId !== routeId) {
-    const preview = previewGeometry(await settledInvoke("route-preview", { routeId }, signal));
-    if (preview !== null) lastRoutePreview = { routeId, preview };
+    refreshInBackground("route-preview", { routeId }, (result) => {
+      const preview = previewGeometry(result);
+      if (preview !== null) lastRoutePreview = { routeId, preview };
+    });
   }
 }
 
@@ -2836,6 +2869,18 @@ async function runMonitorRoute(deviceId: string, routeId: string): Promise<void>
     plan.phone = "done";
     plan.aircraft = "running";
     await paint();
+    let uploadView: ReturnType<typeof OperatorConsole.project>;
+    try {
+      uploadView = projectCached();
+    } catch {
+      await fail("aircraft", OperatorConsole.FLIGHT_CONTROLLER_REASON);
+      return;
+    }
+    const uploadDevice = monitorDevices(uploadView).find((item) => text(read(item, "deviceId")) === deviceId);
+    if (uploadDevice === undefined || !OperatorConsole.flightControllerConnected(uploadDevice)) {
+      await fail("aircraft", OperatorConsole.FLIGHT_CONTROLLER_REASON);
+      return;
+    }
     const uploaded = await bridge().invoke("mission-upload", { deviceId });
     const uploadFeedback = captureFeedback("mission-upload", deviceId, epoch, uploaded);
     if (!monitorStepSucceeded(uploadFeedback)) {
@@ -2890,6 +2935,10 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-route]").forEach((bu
     const deviceId = device === undefined ? null : text(read(device, "deviceId"));
     if (deviceId === null) return;
     const mode = button.dataset.monitorRouteMode;
+    if (mode !== "pause" && mode !== "resume" && mode !== "exit" && device !== undefined && !OperatorConsole.remoteControllerEverConnected(device)) {
+      show(OperatorConsole.REMOTE_ONCE_REASON);
+      return;
+    }
     if (mode === "pause" || mode === "resume") {
       if (monitorRouteActionBusy.has(deviceId)) return;
       const action = mode === "pause" ? "mission-pause" : "mission-resume";
@@ -2989,7 +3038,35 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-photo]").forEach((bu
     }
     const device = monitorDevices(view)[slot];
     const deviceId = device === undefined ? null : text(read(device, "deviceId"));
-    if (deviceId === null || monitorPhotoBusy.has(deviceId)) return;
+    if (deviceId === null) return;
+    const progressNow = photoProgressView(photoProgressCache.get(deviceId), Date.now());
+    const fetchRunning = button.dataset.monitorPhotoMode === "stop" || button.textContent === "停止回传" || actionRequests.pending(deviceId, "photo-fetch") || progressNow?.active === true;
+    if (fetchRunning) {
+      const detail = tile instanceof HTMLElement ? tile.querySelector("[data-monitor-detail]") : null;
+      const stopReservation = actionRequests.reserve(deviceId, "photo-fetch-stop");
+      if (!stopReservation.ok) {
+        if (detail instanceof HTMLElement) detail.textContent = stopReservation.reason;
+        show(`${callSign(deviceId)}：${stopReservation.reason}`);
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "正在停止";
+      if (detail instanceof HTMLElement) detail.textContent = "正在停止回传";
+      show(`${callSign(deviceId)}：正在停止回传`);
+      try {
+        const result = await bridge().invoke("photo-fetch-stop", { deviceId });
+        const feedback = captureFeedback("photo-fetch-stop", deviceId, feedbackDeviceEpoch(view, deviceId), result);
+        if (detail instanceof HTMLElement) detail.textContent = feedback.message;
+        show(`${callSign(deviceId)}：${feedback.message}`);
+      } catch {
+        if (detail instanceof HTMLElement) detail.textContent = "暂时无法停止回传，请稍后重试";
+        show(`${callSign(deviceId)}：暂时无法停止回传，请稍后重试`);
+      } finally {
+        stopReservation.release();
+        try { await render(); } catch { /* the button state is redrawn on the next snapshot */ }
+      }
+      return;
+    }
     const decision = OperatorConsole.evaluate("photo-fetch", { ...view, workspace: "flight", streamDeviceId: deviceId });
     if (!decision.ok) {
       show(`${callSign(deviceId)}：${decision.reason ?? "当前状态不允许此操作"}`);
@@ -2999,7 +3076,8 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-photo]").forEach((bu
     if (!photoReservation.ok) { show(photoReservation.reason); return; }
     renderActionRequests(view);
     monitorPhotoBusy.add(deviceId);
-    button.disabled = true;
+    button.textContent = "停止回传";
+    button.dataset.monitorPhotoMode = "stop";
     monitorPhotoProgress.set(deviceId, { state: "running", detail: "正在请求照片回传，等待进度" });
     monitorRailDeviceId = deviceId;
     monitorRailKind = "photo";
@@ -3333,6 +3411,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-monitor-stream]").forEach((b
         "stream-stop": "stream-stop",
         "photo-capture": "photo-capture",
         "photo-fetch": "photo-fetch",
+        "photo-fetch-stop": "photo-fetch-stop",
         "flight-confirm-landing": "flight-request",
         "flight-stop-takeoff": "flight-request",
         "flight-stop-auto-landing": "flight-request",

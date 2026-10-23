@@ -28,6 +28,26 @@ const workflowWith = (overrides: Record<string, unknown> = {}) => OperationWorkf
 } as never);
 
 describe("飞行作业工作流模块契约", () => {
+  it("停止回传只委托 stopFetch，未接线时不得写成已停止", async () => {
+    const missing = workflowWith({ photoControl: {
+      capture: async () => ({ ok: true }),
+      fetch: async () => ({ ok: true }),
+      recordDisconnected: () => null,
+      subscribe: () => () => undefined,
+    } });
+    await expect(missing.stopPhotoFetch("relay-a")).resolves.toEqual({ ok: false, code: "DEPENDENCY_FAILURE" });
+    let calls = 0;
+    const wired = workflowWith({ photoControl: {
+      capture: async () => ({ ok: true }),
+      fetch: async () => ({ ok: true }),
+      stopFetch: async (deviceId: string) => { calls += 1; return { ok: true, code: "STOPPED", deviceId, count: 3 }; },
+      recordDisconnected: () => null,
+      subscribe: () => () => undefined,
+    } });
+    await expect(wired.stopPhotoFetch("relay-a")).resolves.toEqual({ ok: true, value: { ok: true, code: "STOPPED", deviceId: "relay-a", count: 3 } });
+    expect(calls).toBe(1);
+  });
+
   it("保留整批实际回传张数，批次结束后不再发起一次相机下载", async () => {
     let fetches = 0;
     const workflow = workflowWith({ photoControl: {
@@ -668,6 +688,8 @@ describe("飞行作业工作流模块契约", () => {
       expect(value).not.toContain("待实施");
     }
     expect(workflow).not.toContain("实现前必须");
+    expect(workflow).toContain("`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 都必须为 `CONNECTED`");
+    expect(workflow).not.toContain("图传还需 `capabilities.liveVideo`");
     expect(registry).toContain("instance.assign(deviceId, routeId) -> boolean");
     expect(registry).toContain("instance.clear(deviceId) -> boolean");
     expect(subscriptions).toContain("WorkflowSubscriptions.create(sources, onChange) -> instance");
@@ -1555,5 +1577,36 @@ describe("飞行作业工作流模块契约", () => {
 
     await expect(workflow.startStream("relay-a")).resolves.toMatchObject({ ok: true });
     expect(allowed).toEqual(["relay-a"]);
+  });
+
+  it("启动命令尚未返回时，AirLink 或主相机断开仍记成图传源不可用", async () => {
+    let airLink = "CONNECTED";
+    let signal!: () => void;
+    const sourceUnavailable: string[] = [];
+    const workflow = workflowWith({
+      relayOperations: {
+        devices: () => [{ deviceId: "relay-a", sessionId: "session-a" }],
+        telemetry: () => ({ payload: { airLink, camera: "CONNECTED" }, capabilities: {} }),
+        controlTelemetry: () => ({ payload: { sdkAvailability: "READY" }, capabilities: {} }),
+        refreshTelemetry: async () => ({ status: "succeeded" }),
+        subscribe: (listener: () => void) => { signal = listener; return () => undefined; },
+      },
+      liveStreamControl: {
+        start: async () => ({ ok: true }), stop: async () => ({ ok: true }),
+        get: () => ({ deviceId: "relay-a", phase: "starting" }), list: () => [],
+        recordDisconnected: () => null,
+        recordSourceUnavailable: (deviceId: string) => { sourceUnavailable.push(deviceId); return { deviceId, phase: "failed", failureCode: "SOURCE_UNAVAILABLE" }; },
+        forget: () => false, subscribe: () => () => undefined,
+      },
+      mediaPipeline: {
+        snapshot: () => ({ streams: [{ deviceId: "relay-a", phase: "ready" }] }), evaluate: () => ({ ok: true }), selectPlayer: () => ({ ok: true }), clearPlayer: () => ({ ok: true }),
+        invalidateStreamSource: () => ({ ok: true }),
+        allowStreamSource: () => ({ ok: true }),
+      },
+    });
+    expect(workflow.selectVideo("relay-a")).toMatchObject({ ok: true });
+    airLink = "DISCONNECTED";
+    signal();
+    expect(sourceUnavailable).toEqual(["relay-a"]);
   });
 });

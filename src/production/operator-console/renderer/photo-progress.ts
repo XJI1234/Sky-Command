@@ -1,4 +1,4 @@
-const stages = ["preparing", "listing", "downloading", "receiving", "verifying", "saving", "saved", "completed", "empty", "failed", "disconnected"] as const;
+const stages = ["preparing", "listing", "downloading", "receiving", "verifying", "saving", "saved", "completed", "empty", "failed", "stopped", "disconnected"] as const;
 type PhotoStage = typeof stages[number];
 
 export interface PhotoProgressView {
@@ -23,7 +23,7 @@ const nonnegative = (value: unknown): number | null => typeof value === "number"
 const integer = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 const safeText = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 && value.length <= 4096 && !/[\p{Cc}]/u.test(value) ? value : null;
 const stageOf = (value: unknown): PhotoStage | null => typeof value === "string" && stages.includes(value as PhotoStage) ? value as PhotoStage : null;
-const terminal = (stage: PhotoStage): boolean => stage === "completed" || stage === "empty" || stage === "failed" || stage === "disconnected";
+const terminal = (stage: PhotoStage): boolean => stage === "completed" || stage === "empty" || stage === "failed" || stage === "stopped" || stage === "disconnected";
 const stageText = (stage: PhotoStage, index: number): string => {
   const current = index > 0 ? `第 ${index} 张：` : "";
   switch (stage) {
@@ -37,6 +37,7 @@ const stageText = (stage: PhotoStage, index: number): string => {
     case "completed": return "回传完成";
     case "empty": return "飞机上没有电脑缺少的照片";
     case "failed": return "回传失败";
+    case "stopped": return "回传已停止";
     case "disconnected": return "连接已断开，回传中断";
   }
 };
@@ -66,7 +67,26 @@ export function createPhotoProgressCache(): PhotoProgressCache {
       if (read(read(device, "connection"), "relay") !== "offline") online.add(deviceId);
       const photo = read(device, "photo");
       const incoming = photoProgressView(photo, nowMs);
-      if (incoming === null) continue;
+      if (incoming === null) {
+        const phase = safeText(read(photo, "phase"));
+        const code = safeText(read(photo, "code"));
+        const cached = photos.get(deviceId);
+        const cachedProgress = cached?.progress;
+        const cachedStage = stageOf(read(cachedProgress, "stage"));
+        if (online.has(deviceId) && cached !== undefined && cachedStage !== null && !terminal(cachedStage) && phase !== null && phase !== "fetching" && phase !== "capturing") {
+          const atMs = Math.max(nonnegative(read(cachedProgress, "updatedAtMs")) ?? nowMs, nowMs);
+          const history = Array.isArray(read(cachedProgress, "history")) ? read(cachedProgress, "history") as unknown[] : [];
+          const stage = code === "STOPPED" ? "stopped" : phase === "stored" ? "completed" : "failed";
+          const event = { stage, photoIndex: read(cachedProgress, "photoIndex"), completedCount: read(cachedProgress, "completedCount"), fileName: read(cachedProgress, "fileName"), atMs };
+          photos.set(deviceId, {
+            ...cached,
+            phase,
+            code,
+            progress: { ...(cachedProgress as Record<string, unknown>), stage, updatedAtMs: atMs, finishedAtMs: atMs, history: [...history, event].slice(-8) },
+          });
+        }
+        continue;
+      }
       if (!online.has(deviceId) && incoming.active && photos.has(deviceId)) continue;
       // New authoritative batches replace the full cache, including prior history and errors.
       const progress = read(photo, "progress") as Record<string, unknown>;

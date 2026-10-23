@@ -276,6 +276,7 @@ function create(raw: unknown): DesktopApplicationCreateResult {
         get: (deviceId: string) => photos.get(deviceId),
         capture: (deviceId: string) => photos.capture(deviceId),
         fetch: (deviceId: string) => photos.fetch(deviceId),
+        stopFetch: (deviceId: string) => photos.stopFetch(deviceId),
         recordDisconnected: (deviceId: string) => photos.recordDisconnected(deviceId),
         subscribe: (listener: (snapshot: unknown) => void) => photos.subscribe((snapshot) => listener(snapshot)),
       }),

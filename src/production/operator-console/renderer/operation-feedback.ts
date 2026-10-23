@@ -47,7 +47,7 @@ const missionLabel = (action: string): string => {
 };
 
 const streamLabel = (action: string): string => action === "stream-stop" ? "停止图传" : "启动图传";
-const photoLabel = (action: string): string => action === "photo-fetch" ? "回传照片" : "拍照";
+const photoLabel = (action: string): string => action === "photo-fetch-stop" ? "停止回传" : action === "photo-fetch" ? "回传照片" : "拍照";
 const pairingLabel = (action: string): string => action === "pairing-stop" ? "停止对频" : "开始对频";
 
 const localReason = (code: string | null): string => {
@@ -168,6 +168,9 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
     const reasons = Array.isArray(blockers) ? blockers.map((item) => localReason(text(read(item, "code")))) : [];
     return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${reasons.length > 0 ? reasons.join("；") : localReason(code)}` };
   }
+  if ((code === "STOPPED" || code === "NOT_RUNNING") && (action === "photo-fetch" || action === "photo-fetch-stop")) {
+    return { source: "relay", outcome: "completed", message: code === "NOT_RUNNING" ? "当前没有正在回传的照片" : "回传已停止，已请求大疆停止下载并退出回放" };
+  }
   if (code !== null && code !== "SUCCEEDED") return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${localReason(reason ?? code)}` };
 
   if (record(inner)?.confirmation !== undefined) return { source: "desktop", outcome: "pending", message: `等待人工确认：${flightLabel(confirmedAction)} 尚未调用 DJI MSDK` };
@@ -177,7 +180,7 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
     const landing = confirmedAction === "land" || confirmedAction === "confirm-landing" || action === "flight-land" || action === "flight-confirm-landing";
     return msdkCallback("dji", "accepted", "成功", "onSuccess", landing ? ["说明：降落接口调用已受理；是否正在下降、是否落地请以飞控状态为准"] : []);
   }
-  if (code === "SUCCEEDED" && action.startsWith("mission-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
+  if (action.startsWith("mission-") && (code === "SUCCEEDED" || (code === null && read(inner, "ok") === true))) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action.startsWith("stream-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action === "photo-fetch") {
     const count = read(inner, "count");

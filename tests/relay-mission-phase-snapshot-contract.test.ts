@@ -38,6 +38,9 @@ describe("中继航线阶段快照解析模块契约", () => {
         { deviceId: "phone-3", payload: { missionExecution: "EXECUTING", missionFileName: "active.kmz" } },
       ],
     };
+    expect(RelayMissionPhaseSnapshotReader.readTerminalStates({
+      telemetry: [{ deviceId: "phone-1", payload: { missionExecution: "PAUSED", missionDjiExecutionState: "FINISHED", missionFileName: "survey.kmz", missionRevision: 3, missionDeviceGeneration: 0 } }],
+    })).toEqual([{ deviceId: "phone-1", fileName: "survey.kmz", outcome: "completed", missionRevision: 3, deviceGeneration: 0 }]);
     expect(RelayMissionPhaseSnapshotReader.readTerminalStates(raw)).toEqual([
       { deviceId: "phone-1", fileName: "survey.kmz", outcome: "completed", missionRevision: 1, deviceGeneration: 0 },
       { deviceId: "phone-2", fileName: "failed.kmz", outcome: "failed", missionRevision: 2, deviceGeneration: 1 },

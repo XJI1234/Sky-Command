@@ -514,6 +514,70 @@ describe("操作台工作区", () => {
     });
     expect(notUploaded.missionLabel).toBe("航线已准备到手机（飞机尚未收到）。下一步：上传至飞机");
     expect(OperatorConsole.evaluate("mission-upload", notUploaded)).toEqual({ ok: true });
+
+    const neverConnected = OperatorConsole.project({
+      snapshot: snapshot([device({
+        deviceId: "phone-never",
+        connection: { ...device().connection, remoteController: "unknown" },
+        mission: { phase: "staged", routeId: "route-1" },
+      })], { routes: [kmz], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-never", streamDeviceId: "phone-never" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("mission-upload", neverConnected)).toEqual({
+      ok: false,
+      reason: "请先连接一次遥控器。连过一次后拔下仍可操作",
+    });
+    OperatorConsole.project({
+      snapshot: snapshot([device({
+        deviceId: "phone-once",
+        connection: { ...device().connection, remoteController: "connected" },
+        mission: { phase: "staged", routeId: "route-1" },
+      })]),
+      selection: { missionDeviceId: "phone-once", streamDeviceId: "phone-once" },
+      workspace: "flight",
+    });
+    const unplugged = OperatorConsole.project({
+      snapshot: snapshot([device({
+        deviceId: "phone-once",
+        connection: { ...device().connection, remoteController: "disconnected" },
+        mission: { phase: "staged", routeId: "route-1" },
+      })], { routes: [kmz], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-once", streamDeviceId: "phone-once" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("mission-upload", unplugged)).toEqual({ ok: true });
+    const remembered = OperatorConsole.project({
+      snapshot: snapshot([device({
+        deviceId: "phone-sticky",
+        connection: { ...device().connection, remoteController: "disconnected", remoteControllerHasConnectedOnce: true },
+        mission: { phase: "staged", routeId: "route-1" },
+      })], { routes: [kmz], selectedRouteId: "route-1" }),
+      selection: { missionDeviceId: "phone-sticky", streamDeviceId: "phone-sticky" },
+      workspace: "flight",
+    });
+    expect(OperatorConsole.evaluate("mission-upload", remembered)).toEqual({ ok: true });
+    for (const flightController of ["disconnected", "unknown"]) {
+      const noFlightController = OperatorConsole.project({
+        snapshot: snapshot([device({
+          connection: { ...device().connection, flightController },
+          mission: { phase: "staged", routeId: "route-1" },
+        })], { routes: [kmz], selectedRouteId: "route-1" }),
+        selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+        workspace: "flight",
+      });
+      expect(OperatorConsole.evaluate("mission-upload", noFlightController)).toEqual({ ok: false, reason: "请先连接飞控" });
+      expect(renderer()).toContain("!OperatorConsole.flightControllerConnected(uploadDevice)");
+      expect(renderer()).not.toContain('mode === "execute" && device !== undefined && !OperatorConsole.flightControllerConnected(device)');
+      expect(OperatorConsole.evaluate("mission-start", OperatorConsole.project({
+        snapshot: snapshot([device({
+          connection: { ...device().connection, flightController },
+          mission: { phase: "uploaded", routeId: "route-1" },
+        })], { routes: [kmz], selectedRouteId: "route-1" }),
+        selection: { missionDeviceId: "phone-1", streamDeviceId: "phone-1" },
+        workspace: "flight",
+      }))).toEqual({ ok: true });
+    }
     expect(OperatorConsole.evaluate("mission-start", notUploaded)).toEqual({
       ok: false,
       reason: "请先将当前航线上传到所选飞机",
@@ -1002,13 +1066,17 @@ describe("操作台工作区", () => {
 });
 
 describe("航线操作台渲染契约", () => {
-  it("图传启动提示明确显示 AirLink 和主相机是图传源前置", () => {
-    const source = renderer();
+  it("图传启动把 AirLink 和主相机当作点击门禁", () => {
     const consoleSource = operatorConsole();
-    expect(source).toContain("图传可请求启动：手机中继、MSDK、AirLink 和主相机均已就绪");
+    const contract = readFileSync(new URL("../src/production/operator-console/CONTRACT.md", import.meta.url), "utf8");
     expect(consoleSource).toContain('if (airLink !== "connected")');
-    expect(consoleSource).toContain('if (camera !== "connected")');
-    expect(source).not.toContain("DJI 产品、AirLink 和主相机均已就绪");
+    expect(consoleSource).toContain("手机尚未就绪，无法启动图传");
+    expect(consoleSource).toContain("主相机未连接，无法拍照");
+    expect(consoleSource).toContain("sky-operator-remote-once");
+    expect(contract).toContain("AirLink 未明确连接或主相机未明确连接");
+    expect(contract).toContain("sky-operator-remote-once");
+    expect(renderer()).toContain("AirLink 和主相机均已就绪");
+    expect(renderer()).not.toContain("不因 AirLink 或主相机拦截");
   });
 
   it("图传源已断开时，渲染器清理旧播放器且不允许其绕过停止门禁", () => {

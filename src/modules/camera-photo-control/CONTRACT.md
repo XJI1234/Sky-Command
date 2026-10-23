@@ -15,6 +15,7 @@ CameraPhotoControl.create({ relay, now, fs?, storedPhotos? }) -> CameraPhotoCont
 
 instance.capture(deviceId) -> Promise<PhotoDispatchResult>
 instance.fetch(deviceId) -> Promise<PhotoDispatchResult>
+instance.stopFetch(deviceId) -> Promise<PhotoDispatchResult>
 instance.get(deviceId) -> PhotoDispatchSnapshot
 instance.list(deviceId) -> readonly StoredPhoto[]
 instance.recordDisconnected(deviceId) -> PhotoDispatchSnapshot | null
@@ -40,9 +41,10 @@ instance.subscribe(listener) -> unsubscribe
 ```text
 camera.photo.capture    fields: {}
 camera.photo.fetch      fields: { knownPhotos: [{ fileName, sha256 }] }
+camera.photo.fetch.stop fields: {}
 ```
 
-桌面在发送前只检查：已选图传/任务所用的那台在线手机、MSDK 为 `READY`、主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 为 `CONNECTED`。不要求 AirLink（那是视频源，不是快门）。`fetch` 先把生产装配层给出的、已经落在该设备照片目录里的原图记入收件箱（只记文件名、大小和 SHA-256，不重写文件），再把收件箱当前的 `(fileName, sha256)` 清单交给手机。不要求本次桌面会话刚刚执行过 `capture`。手机会逐张回传清单中缺失的照片，直到明确返回 `NONE`。清单超过 256 条时只发送前 256 条，不得把超限清单当成空清单。飞控、遥控器、电量、航线、图传是否正在推流均不得作为本地拒绝理由。手机将在调用 MSDK 前再次检查硬件；DJI 拒绝必须原样显示。
+桌面在发送前：`capture` 检查已选在线手机、MSDK 为 `READY`、主相机 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 为 `CONNECTED`。`fetch` 只检查已选在线手机和 MSDK 为 `READY`，主相机断开或未知不在桌面拦截。两者都不要求 AirLink。`fetch` 先把生产装配层给出的、已经落在该设备照片目录里的原图记入收件箱（只记文件名、大小和 SHA-256，不重写文件），再把收件箱当前的 `(fileName, sha256)` 清单交给手机。不要求本次桌面会话刚刚执行过 `capture`。手机会逐张回传清单中缺失的照片，直到明确返回 `NONE`。清单超过 256 条时只发送前 256 条，不得把超限清单当成空清单。飞控、遥控器、电量、航线、图传是否正在推流均不得作为本地拒绝理由。`capture` 的相机关断仍在桌面返回，不发命令。DJI 拒绝必须原样显示。
 
 拍照命令超时沿用桌面中继的 120_000 ms。回传命令单独使用 3_600_000 ms，避免一批原图还在传输时被标成失败。回传期间桌面必须继续处理遥测、图传和其它命令；媒体分块不得堵住命令结果。
 
@@ -52,7 +54,7 @@ camera.photo.fetch      fields: { knownPhotos: [{ fileName, sha256 }] }
 
 每台设备的控制快照仅为 `idle`、`capturing`、`captured`、`fetching`、`stored`、`failed` 或 `disconnected`，并包含最后一次安全文件名、稳定失败码。状态不保存绝对路径、原始异常或照片字节。`stored` 表示本次批量回传的最后一张文件已在收件箱确认；同一文件名或同一 SHA-256 再次到达不得覆盖，只保持已有记录。`fetch` 成功结果额外包含本次实际回传数量 `count`。
 
-同一设备在等待命令结果或本地收件箱确认时，第二个 capture 或 fetch 返回 `OPERATION_IN_PROGRESS`，且不触发依赖；不同设备互不阻塞。capture 与 fetch 不得合成一次点击。一次 fetch 必须携带调用开始时该设备收件箱的 `(fileName, sha256)` 清单，手机逐张等待 `media-result.ok=true` 后继续，直到返回 `NONE`；中途失败不得把未确认文件写入本次清单。设备断开时进行中的结果不能覆盖 `disconnected`；重连后必须由操作者再点，不能自动重拍或自动回传。
+同一设备在等待命令结果或本地收件箱确认时，第二个 capture 或 fetch 返回 `OPERATION_IN_PROGRESS`，且不触发依赖；不同设备互不阻塞。`stopFetch` 不占用这把锁，回传进行中必须立刻下发 `camera.photo.fetch.stop`。capture 与 fetch 不得合成一次点击。一次 fetch 必须携带调用开始时该设备收件箱的 `(fileName, sha256)` 清单，手机逐张等待 `media-result.ok=true` 后继续，直到返回 `NONE`；中途失败不得把未确认文件写入本次清单。设备断开时进行中的结果不能覆盖 `disconnected`；重连后必须由操作者再点，不能自动重拍或自动回传。
 
 本地照片目录由生产装配层提供的原子写入端口决定。原子写入端口允许返回 Promise，异步保存确认前不得记入收件箱或回复媒体成功；写入失败仍可人工重试。控制模块只暴露文件安全基名、大小、摘要和接收时间，禁止把绝对路径写进快照或 UI 文案。整批成功必须确认已收到至少 count 个不同文件，且批次最后文件的名称和摘要匹配；工作流直接保留批次 count，不得把命令次数当张数，也不得自动再发一次下载或重试失败批次。
 

@@ -32,6 +32,7 @@ export interface PhotoControlPort {
   readonly get?: (deviceId: string) => unknown;
   readonly capture: (deviceId: string) => Promise<unknown>;
   readonly fetch: (deviceId: string) => Promise<unknown>;
+  readonly stopFetch?: (deviceId: string) => Promise<unknown>;
   readonly recordDisconnected: (deviceId: string) => unknown;
   readonly subscribe: (listener: (snapshot: unknown) => void) => () => void;
 }

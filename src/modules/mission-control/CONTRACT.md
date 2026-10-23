@@ -33,7 +33,7 @@ instance.dispose() -> void
 
 ## 3. 组合规则
 
-`release(deviceId)` 委托调度器收回本地任务，并清除该设备的阶段去重水位；它不发送航线停止或飞控命令，也不证明飞机已停止。
+`release(deviceId)` 委托调度器收回本地任务，保留该设备的阶段去重水位以拒绝上一任务缓存的里程碑；它不发送航线停止或飞控命令，也不证明飞机已停止。
 
 航线适配层只能调用 `RouteLibrary.getMissionPayload(routeId)`；中继适配层只能调用 `RelayLink.sendMission`、`RelayLink.sendCommand` 和 `RelayLink.latestTelemetry`。任务阶段、预检、命令发送和每设备状态仅由 `mission-dispatcher` 及其子模块拥有，本模块不得复制另一套状态机。
 
@@ -41,7 +41,9 @@ instance.dispose() -> void
 
 ## 4. 中继断线协调
 
-本模块订阅一次中继设备快照，并比较前后两次的在线 `deviceId`。一个持有活动任务的设备从已确认在线列表中消失后，等待约 15 秒；期间若同一 `deviceId` 重新出现（包括 `sessionId` 替换），视为中继闪断，任务阶段保持不变，不发送停止命令、不重传、不自动恢复。只有宽限期结束时设备仍不在快照中，才调用调度器的 `recordDisconnected(deviceId)` 并清除该设备阶段去重水位：任务进入 `disconnected`。桌面进入 `disconnected` 只结束本端等待；它不表示飞机上的 DJI 航线已经停下。新会话的阶段事实只要通过既有身份校验仍可继续更新当前任务；操作者显式暂存新任务时才清除水位。
+本模块订阅一次中继设备快照，并比较前后两次的在线 `deviceId`。一个持有活动任务的设备从已确认在线列表中消失后，等待约 15 秒；期间若同一 `deviceId` 重新出现（包括 `sessionId` 替换），视为中继闪断，任务阶段保持不变，不发送停止命令、不重传、不自动恢复。只有宽限期结束时设备仍不在快照中，才调用调度器的 `recordDisconnected(deviceId)`：任务进入 `disconnected`。桌面进入 `disconnected` 只结束本端等待；它不表示飞机上的 DJI 航线已经停下。阶段去重水位在暂存、收回和断线时保留，仅观察到会话替换时重置，以允许手机重启后的任务编号重新计数。新会话的阶段事实仍须通过既有任务身份校验。
+
+已校验的阶段事实即使当前没有可接受的任务，也记录去重水位；不能在下一次同名航线启动时重新解释旧快照。终态遥测独立校验，缺失或畸形的里程碑数组不能阻塞有效终态。匹配任务的结束、失败可以从暂停、继续、停止的中间阶段收敛，且不等待在途命令回执；迟到回执不得覆盖终态或新任务。
 
 同一快照中的 `missionPhases` 只允许经过 `relay-mission-phase-snapshot` 校验的 `START_POINT_REACHED` 与 `ROUTE_EXECUTION_STARTED` 进入调度器。前者只记录当前匹配任务“已进入首航点”的独立事实；后者在保留前者的同时才可把 `starting` 任务变为 `running`。两个事实都必须同时匹配设备、当前文件名、`missionRevision`、`deviceGeneration` 与严格递增的 `sequence`；本模块只转交，不自行解释或补造里程碑。同一快照中的已校验 `missionExecution` 终态只允许 `FINISHED -> completed`、`FAILED -> failed`；它们必须同时匹配设备、当前文件名、`missionRevision`、`deviceGeneration` 与此前可信执行事实，绝不把“手机接受启动请求”或任意自由文本当作执行完成。终态遥测遗漏正向阶段帧时可从 `starting` 直接变为 `completed`，也可在断线后收敛匹配终态，但不得伪造 `running`。设备在宽限期后仍离线时，`disconnected` 任务不自动恢复；操作者只能显式停止，或重新暂存。
 

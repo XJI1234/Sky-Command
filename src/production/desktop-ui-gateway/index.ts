@@ -145,7 +145,7 @@ function create(options: DesktopUiGatewayOptions): DesktopUiGatewayInstance {
       if (method === "stream.clear") return empty(input) ? call("clearVideo", []) : failure("INVALID_INPUT");
       const streams: Readonly<Record<string, string>> = freeze({ "stream.start": "startStream", "stream.stop": "stopStream", "stream.select": "selectVideo" });
       if (typeof method === "string" && streams[method] !== undefined) { const deviceId = one(input, "deviceId"); return deviceId === null ? failure("INVALID_INPUT") : call(streams[method]!, [deviceId]); }
-      const photos: Readonly<Record<string, string>> = freeze({ "photo.capture": "capturePhoto", "photo.fetch": "fetchPhoto" });
+      const photos: Readonly<Record<string, string>> = freeze({ "photo.capture": "capturePhoto", "photo.fetch": "fetchPhoto", "photo.fetch.stop": "stopPhotoFetch" });
       if (typeof method === "string" && photos[method] !== undefined) { const deviceId = one(input, "deviceId"); return deviceId === null ? failure("INVALID_INPUT") : call(photos[method]!, [deviceId]); }
       const settings: Readonly<Record<string, string>> = freeze({ "settings.transmission.read": "readTransmissionSettings", "settings.camera.read": "readCameraSettings" });
       if (typeof method === "string" && settings[method] !== undefined) { const deviceId = one(input, "deviceId"); return deviceId === null ? failure("INVALID_INPUT") : call(settings[method]!, [deviceId]); }

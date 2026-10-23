@@ -70,19 +70,22 @@ function read(value: unknown): readonly RelayMissionPhaseSnapshot[] | null {
     const rawFacts = (value as { readonly missionPhases?: unknown }).missionPhases;
     if (!Array.isArray(rawFacts)) return null;
     const facts: RelayMissionPhaseSnapshot[] = [];
+    let invalid = false;
     for (const raw of rawFacts) {
-      if (raw === null || typeof raw !== "object") return null;
-      const entry = raw as Record<string, unknown>;
-      const deviceId = entry.deviceId;
-      const missionRevision = entry.missionRevision;
-      const deviceGeneration = entry.deviceGeneration;
-      const sequence = entry.sequence;
-      const currentPhase = entry.phase;
-      const fileName = entry.fileName;
-      if (!validId(deviceId) || !positiveInteger(missionRevision) || typeof deviceGeneration !== "number" || !Number.isSafeInteger(deviceGeneration) || deviceGeneration < 0 || !positiveInteger(sequence) || !phase(currentPhase) || !validFileName(fileName)) return null;
-      facts.push(Object.freeze({ deviceId, missionRevision, deviceGeneration, sequence, phase: currentPhase, fileName }));
+      try {
+        const entry = record(raw);
+        if (entry === null) { invalid = true; continue; }
+        const deviceId = entry.deviceId;
+        const missionRevision = entry.missionRevision;
+        const deviceGeneration = entry.deviceGeneration;
+        const sequence = entry.sequence;
+        const currentPhase = entry.phase;
+        const fileName = entry.fileName;
+        if (!validId(deviceId) || !positiveInteger(missionRevision) || typeof deviceGeneration !== "number" || !Number.isSafeInteger(deviceGeneration) || deviceGeneration < 0 || !positiveInteger(sequence) || !phase(currentPhase) || !validFileName(fileName)) { invalid = true; continue; }
+        facts.push(Object.freeze({ deviceId, missionRevision, deviceGeneration, sequence, phase: currentPhase, fileName }));
+      } catch { invalid = true; }
     }
-    return Object.freeze(facts);
+    return invalid && facts.length === 0 ? null : Object.freeze(facts);
   } catch {
     return null;
   }
@@ -94,18 +97,25 @@ function readTerminalStates(value: unknown): readonly RelayMissionTerminalState[
     const rawTelemetry = root?.telemetry;
     if (!Array.isArray(rawTelemetry)) return null;
     const facts: RelayMissionTerminalState[] = [];
+    let invalid = false;
     for (const raw of rawTelemetry) {
-      const entry = record(raw);
-      if (entry === null || !validId(entry.deviceId)) return null;
-      const execution = payloadText(entry.payload, "missionExecution");
-      if (execution !== "FINISHED" && execution !== "FAILED") continue;
-      const fileName = payloadText(entry.payload, "missionFileName");
-      const missionRevision = payloadInteger(entry.payload, "missionRevision");
-      const deviceGeneration = payloadInteger(entry.payload, "missionDeviceGeneration");
-      if (!validFileName(fileName) || !positiveInteger(missionRevision) || deviceGeneration === undefined || deviceGeneration < 0) return null;
-      facts.push(Object.freeze({ deviceId: entry.deviceId, fileName, outcome: execution === "FINISHED" ? "completed" as const : "failed" as const, missionRevision, deviceGeneration }));
+      try {
+        const entry = record(raw);
+        const deviceId = entry?.deviceId;
+        if (!validId(deviceId)) { invalid = true; continue; }
+        const execution = payloadText(entry!.payload, "missionExecution");
+        const djiExecution = payloadText(entry!.payload, "missionDjiExecutionState");
+        const djiLeftActiveWayline = (djiExecution === "FINISHED" || djiExecution === "READY" || djiExecution === "IDLE")
+          && (execution === "PAUSED" || execution === "EXECUTING" || execution === "STOPPING");
+        if (execution !== "FINISHED" && execution !== "FAILED" && !djiLeftActiveWayline) continue;
+        const fileName = payloadText(entry!.payload, "missionFileName");
+        const missionRevision = payloadInteger(entry!.payload, "missionRevision");
+        const deviceGeneration = payloadInteger(entry!.payload, "missionDeviceGeneration");
+        if (!validFileName(fileName) || !positiveInteger(missionRevision) || deviceGeneration === undefined || deviceGeneration < 0) { invalid = true; continue; }
+        facts.push(Object.freeze({ deviceId, fileName, outcome: execution === "FAILED" ? "failed" as const : "completed" as const, missionRevision, deviceGeneration }));
+      } catch { invalid = true; }
     }
-    return Object.freeze(facts);
+    return invalid && facts.length === 0 ? null : Object.freeze(facts);
   } catch {
     return null;
   }

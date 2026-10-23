@@ -17,6 +17,7 @@ export interface CameraPhotoControlDependencies {
 export interface CameraPhotoControlInstance {
   readonly capture: (deviceId: string) => Promise<PhotoDispatchResult>;
   readonly fetch: (deviceId: string) => Promise<PhotoDispatchResult>;
+  readonly stopFetch: (deviceId: string) => Promise<PhotoDispatchResult>;
   readonly get: (deviceId: string) => PhotoDispatchSnapshot;
   readonly list: (deviceId: string) => readonly StoredPhoto[];
   readonly recordDisconnected: (deviceId: string) => PhotoDispatchSnapshot | null;
@@ -42,6 +43,7 @@ function create(dependencies: CameraPhotoControlDependencies): CameraPhotoContro
   return freeze({
     capture: (deviceId) => dispatcher.capture(deviceId),
     fetch: (deviceId) => dispatcher.fetch(deviceId, () => rememberStored(deviceId)),
+    stopFetch: (deviceId) => dispatcher.stopFetch(deviceId),
     get: (deviceId) => dispatcher.get(deviceId),
     list: (deviceId) => inbox.list(deviceId),
     recordDisconnected: (deviceId) => dispatcher.recordDisconnected(deviceId),

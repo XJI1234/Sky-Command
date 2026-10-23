@@ -2,7 +2,7 @@ export type ActionReservation =
   | Readonly<{ readonly ok: true; readonly release: () => void }>
   | Readonly<{ readonly ok: false; readonly reason: string }>;
 
-const cameraActions = new Set(["stream-start", "stream-stop", "photo-capture", "photo-fetch"]);
+const cameraActions = new Set(["stream-start", "stream-stop", "photo-capture", "photo-fetch", "photo-fetch-stop"]);
 const missionActions = new Set(["mission-stage", "mission-upload", "mission-start", "mission-pause", "mission-resume", "mission-stop"]);
 
 /** Tracks outstanding clicks, without queuing commands or changing device facts. */
@@ -15,7 +15,7 @@ export function createActionRequests() {
     if (active === undefined) return null;
     if (active.has(action)) return "这条命令正在处理，请稍候";
     // A stop remains available while another camera request is awaiting its reply.
-    if (cameraActions.has(action) && action !== "stream-stop" && [...active.keys()].some(key => cameraActions.has(key))) {
+    if (cameraActions.has(action) && action !== "stream-stop" && action !== "photo-fetch-stop" && [...active.keys()].some(key => cameraActions.has(key))) {
       return "相机操作正在处理，完成后再执行此操作";
     }
     // Pause and stop must not wait for a long upload or start request.

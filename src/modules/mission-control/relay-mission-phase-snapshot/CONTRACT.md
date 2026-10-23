@@ -19,9 +19,9 @@ RelayMissionPhaseSnapshotReader.readTerminalStates(value: unknown): readonly Rel
 { missionPhases: readonly { deviceId, missionRevision, deviceGeneration, sequence, phase, fileName }[] }
 ```
 
-`deviceId`、`fileName`、整数字段和阶段枚举必须符合 `mission-phase-intake` 契约。数组中的任一条目无效、属性读取抛错或根对象畸形时，整体返回 `null`；调用方必须完全忽略该快照，不能据此改变任务状态。
+`deviceId`、`fileName`、整数字段和阶段枚举必须符合 `mission-phase-intake` 契约。逐设备校验，单条无效或属性读取抛错只丢弃该条，不得阻塞其他设备的有效事实。根对象畸形、数组不可读取或所有事实均无效时返回 `null`；有效空数组返回冻结空数组。调用方不能根据被丢弃的事实改变任务状态。
 
-`readTerminalStates` 只读取 `telemetry` 数组中每台设备的 `payload.missionExecution`、`payload.missionFileName`、`payload.missionRevision` 和 `payload.missionDeviceGeneration`。它兼容 relay-link 的受限 JSON 对象和生产适配器已投影的普通值，但只接受 `FINISHED` 与 `FAILED` 两种封闭终态、安全 `.kmz` 基名、正整数任务版本和非负安全整数设备代际；`STARTING`、`EXECUTING`、`PAUSED`、`STOPPING`、`NOT_STARTED`、缺失、null、未知枚举或畸形字段都不产生终态事实。调用方还必须将这组身份与此前可信 `ROUTE_EXECUTION_STARTED` 所绑定的身份逐项相等后才可结束任务。一个条目无法安全读取时整体返回 `null`，调用方不得据此改变任务状态。
+`readTerminalStates` 只读取 `telemetry` 数组中每台设备的 `payload.missionExecution`、`payload.missionFileName`、`payload.missionRevision` 和 `payload.missionDeviceGeneration`。它兼容 relay-link 的受限 JSON 对象和生产适配器已投影的普通值，但只接受 `FINISHED` 与 `FAILED` 两种封闭终态、安全 `.kmz` 基名、正整数任务版本和非负安全整数设备代际；`STARTING`、`EXECUTING`、`PAUSED`、`STOPPING`、`NOT_STARTED`、缺失、null、未知枚举或畸形字段都不产生终态事实。调用方还必须将这组身份与此前可信里程碑所绑定的身份逐项相等后才可结束任务。单条终态缺少身份或无法安全读取时，仍须保留其他设备完整有效的终态；没有有效终态且存在无效条目时返回 `null`。
 
 ## 输出与验收
 
