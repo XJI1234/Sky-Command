@@ -67,6 +67,12 @@ export interface DesktopRelayTelemetryPayload {
   readonly latitude?: number;
   readonly longitude?: number;
   readonly altitudeMeters?: number;
+  readonly headingDegrees?: number;
+  readonly positionSampleId?: string;
+  readonly positionAgeMillis?: number;
+  readonly gpsIsValid?: boolean;
+  readonly locationAltitudeMeters?: number;
+  readonly takeoffAltitudeMeters?: number;
   readonly liveStreaming?: boolean;
   /** Raw MSDK LiveStreamStatusListener.onError errorCode; never inferred from a command result. */
   readonly liveStreamRuntimeErrorCode?: string;
@@ -447,6 +453,12 @@ function projectDeviceFacts(payload: UnknownRecord, outputPayload: MutableDeskto
     outputPayload.longitude = longitudeValue;
   }
   const altitudeMeters = finiteNumber(payload.altitudeMeters); if (altitudeMeters !== undefined) outputPayload.altitudeMeters = altitudeMeters;
+  const heading = finiteNumber(payload.headingDegrees); if (heading !== undefined && heading >= 0 && heading < 360) outputPayload.headingDegrees = heading;
+  const sample = safeText(string(payload.positionSampleId)); if (sample !== undefined) outputPayload.positionSampleId = sample;
+  const age = nonNegativeIntegerValue(payload.positionAgeMillis); if (age !== undefined) outputPayload.positionAgeMillis = age;
+  const validGps = boolean(payload.gpsIsValid); if (validGps !== undefined) outputPayload.gpsIsValid = validGps;
+  const locationHeight = finiteNumber(payload.locationAltitudeMeters); if (locationHeight !== undefined) outputPayload.locationAltitudeMeters = locationHeight;
+  const takeoffHeight = finiteNumber(payload.takeoffAltitudeMeters); if (takeoffHeight !== undefined) outputPayload.takeoffAltitudeMeters = takeoffHeight;
 }
 
 function project(deviceId: string, source: unknown): DesktopRelayTelemetry | null {

@@ -77,7 +77,7 @@ let lastSnapshot: unknown = {};
 const aircraftPositions = createAircraftPositionTracker();
 const aircraftMap = createAircraftMapOverlay();
 const updateAircraftMap = (): void => {
-  aircraftMap.update(getRouteMapViewer(), aircraftPositions.update(lastSnapshot, state.missionDeviceId, Date.now(), callSign));
+  aircraftMap.update(getRouteMapViewer(), aircraftPositions.update(read(lastSnapshot, "workflow"), state.missionDeviceId, Date.now(), callSign));
 };
 let lastRelayHint = "";
 let lastRoutePreview: { readonly routeId: string; readonly preview: RouteMapPreview } | null = null;

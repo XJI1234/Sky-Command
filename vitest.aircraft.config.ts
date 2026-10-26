@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     include: [
       "tests/operator-aircraft-position.test.ts",
+      "tests/relay-operations-adapter-contract.test.ts",
       "tests/operation-workflow-contract.test.ts",
       "tests/operation-workflow-internals.test.ts",
       "tests/workflow-snapshot-camera-frame-contract.test.ts",

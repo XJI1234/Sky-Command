@@ -1,5 +1,7 @@
 # Relay 业务适配器契约
 
+定位扩展：白名单接收 headingDegrees（有限 [0,360)）、安全 positionSampleId、非负安全整数 positionAgeMillis、布尔 gpsIsValid、有限原始 locationAltitudeMeters 和 takeoffAltitudeMeters。缺失/非法字段不填值，不推导高度基准、连接状态或控制门禁。
+
 状态：已实现；待与生产组合根及真机联调
 
 所属层：Sky Command 桌面端生产适配层

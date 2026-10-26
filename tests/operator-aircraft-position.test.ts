@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createAircraftPositionTracker, screenHeadingRotation } from "../src/production/operator-console/renderer/aircraft-position.js";
 import { WorkflowSnapshot } from "../src/production/operation-workflow/workflow-snapshot/index.js";
+import { RelayOperationsAdapter } from "../src/production/relay-operations-adapter/index.js";
+import { jsonFields } from "../sdk/src/json.js";
 
 function device(id = "mini-1", sample = "observer:1", receivedAt = 10_000, age = 200) {
   return { deviceId: id, connectionEpoch: 1, connection: {
@@ -86,6 +88,19 @@ describe("aircraft map position state", () => {
 });
 
 describe("workflow navigation projection", () => {
+  it("carries navigation across the production relay whitelist and rejects malformed values", () => {
+    let payload: Record<string, unknown> = { headingDegrees: 270, positionSampleId: "observer:1", positionAgeMillis: 350,
+      gpsIsValid: true, locationAltitudeMeters: 35, takeoffAltitudeMeters: 80 };
+    const adapter = RelayOperationsAdapter.create({ relay: {
+      devices: () => [{ deviceId: "mini-1", sessionId: "s1" }],
+      latestTelemetry: () => ({ sessionId: "s1", payload: { kind: "object", fields: jsonFields(payload) }, capabilities: { kind: "object", fields: {} } }),
+    } });
+    expect(adapter.telemetry("mini-1")?.payload).toMatchObject(payload);
+    payload = { headingDegrees: 360, positionSampleId: "bad\n", positionAgeMillis: -1, gpsIsValid: "yes", locationAltitudeMeters: "35", takeoffAltitudeMeters: "80" };
+    const result = adapter.telemetry("mini-1")?.payload;
+    for (const key of Object.keys(payload)) expect(result?.[key]).toBeUndefined();
+    adapter.dispose();
+  });
   it("preserves optional navigation without interpreting raw height as ellipsoid height", () => {
     const input = { devices: [{ deviceId: "mini-1", connectionEpoch: 1, telemetry: { receivedAtMs: 10_000,
       payload: { flightController: "CONNECTED", latitude: 31.2, longitude: 121.5, altitudeMeters: 35,
