@@ -40,3 +40,9 @@ WorkflowSnapshot.create(input) -> OperationWorkflowSnapshot
 设备额外包含 `photo`：直接投影同设备相机照片控制的冻结快照，未注入端口或没有快照时为 null。其 progress 只表示照片批次，不参与任何任务、图传、飞行或设置门禁；不得把手机下载字节、电脑接收字节和已保存张数合成未经确认的总进度。
 
 覆盖全部已声明枚举、缺失/畸形事实、设备排序、多设备隔离、冻结、敏感字段排除和不保留输入引用。
+
+## 飞机定位只读扩展（2026-10-26）
+
+连接快照增加 navigation：headingDegrees 为 [0,360)，positionSampleId 为安全采样标识，positionAgeMillis 为非负安全整数，gpsIsValid 为可空布尔，locationAltitudeMeters / takeoffAltitudeMeters 只保留有限原始值；heightReference 固定 unknown，不推导椭球高。飞控明确断开时 navigation 为 null，既有 pose 形状不变。字段缺失或非法时为 null，协议保持 v1。
+
+航线地图在独立 CustomDataSource 展示各设备最后有效位置，当前任务设备高亮。点击仅查看，不能更改分配、发送命令或移动相机。采样时间由电脑接收时间减手机单调时钟年龄锚定，同一采样不因重复遥测而变新；超过 5 秒变灰，断连立即保留灰色最后位置。缺少位置不建点，航向缺失使用无方向图标；高度基准不明时明确平面定位，不把相对起飞点高度放入地图高度。图层随地图切换保留，卸载释放；静止不强制持续绘制。

@@ -31,3 +31,6 @@ cross-runtime-verification-report.json
 *.keystore
 *.p12
 *.pfx
+
+# Local npm download cache.
+.sky-command-npm-cache/

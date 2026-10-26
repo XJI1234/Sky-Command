@@ -17,3 +17,9 @@ Node 网关默认监听 loopback，显式 allowedOrigins 才允许跨源浏览�
 验证命令：`npm --prefix sdk install`、`npm --prefix sdk test`、`npm --prefix sdk run typecheck`、`npm --prefix sdk run build`、`npm --prefix sdk pack`。原项目用 `npm test`、`npm run test:types` 检查回归。
 
 Node 与 desktop 入口导出 `createRelayDiscovery`、`loadOrCreateServerId` 与 `DISCOVERY_PORT`，浏览器入口不导入 UDP 或文件系统。宿主仅在中继与控制服务就绪后启动广播，并在关闭中继前停止广播；身份由宿主的数据目录持久化，发现不可用不影响已有手动连接。公告沿用 `src/production/relay-discovery/CONTRACT.md` 与 v1 协议，不新增认证或飞行行为。
+
+## 飞机定位只读扩展（2026-10-26）
+
+连接快照增加 navigation：headingDegrees 为 [0,360)，positionSampleId 为安全采样标识，positionAgeMillis 为非负安全整数，gpsIsValid 为可空布尔，locationAltitudeMeters / takeoffAltitudeMeters 只保留有限原始值；heightReference 固定 unknown，不推导椭球高。飞控明确断开时 navigation 为 null，既有 pose 形状不变。字段缺失或非法时为 null，协议保持 v1。
+
+航线地图在独立 CustomDataSource 展示各设备最后有效位置，当前任务设备高亮。点击仅查看，不能更改分配、发送命令或移动相机。采样时间由电脑接收时间减手机单调时钟年龄锚定，同一采样不因重复遥测而变新；超过 5 秒变灰，断连立即保留灰色最后位置。缺少位置不建点，航向缺失使用无方向图标；高度基准不明时明确平面定位，不把相对起飞点高度放入地图高度。图层随地图切换保留，卸载释放；静止不强制持续绘制。

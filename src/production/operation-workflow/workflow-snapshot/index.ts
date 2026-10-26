@@ -110,6 +110,16 @@ const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
   return freeze({
     relay: "online" as const,
     telemetryReceivedAtMs: boundedInteger(telemetryReceivedAtMs, 0, Number.MAX_SAFE_INTEGER),
+    navigation: flightFactsAvailable ? freeze({
+      headingDegrees: boundedNumber(read(payload, "headingDegrees"), 0, 359.99999999999994),
+      positionSampleId: safeText(read(payload, "positionSampleId")),
+      positionAgeMillis: boundedInteger(read(payload, "positionAgeMillis"), 0, Number.MAX_SAFE_INTEGER),
+      gpsIsValid: typeof read(payload, "gpsIsValid") === "boolean" ? read(payload, "gpsIsValid") as boolean : null,
+      locationAltitudeMeters: poseNumber(read(payload, "locationAltitudeMeters")),
+      takeoffAltitudeMeters: poseNumber(read(payload, "takeoffAltitudeMeters")),
+      // MSDK's public descriptions do not establish a Cesium ellipsoid-height datum.
+      heightReference: "unknown" as const,
+    }) : null,
     sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"),
     msdk: msdkState(read(payload, "sdkAvailability")),
     remoteController: linkState(read(payload, "remoteController")),

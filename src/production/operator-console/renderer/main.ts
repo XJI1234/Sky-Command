@@ -42,7 +42,9 @@ import { createBackgroundRefresh, createRenderScheduler } from "./render-schedul
 import { createActionRequests } from "./action-requests.js";
 import { createPlaybackProgress } from "./playback-progress.js";
 import { createPhotoProgressCache, photoProgressView, renderPhotoProgress } from "./photo-progress.js";
-import { clearRoutePreview, drawnPreviewId, ensureRouteMap, locateDrawnRoute, routeMapNotice, setRouteMapVisible, showRoutePreview, type RouteMapPreview } from "./route-map.js";
+import { clearRoutePreview, drawnPreviewId, ensureRouteMap, getRouteMapViewer, locateDrawnRoute, routeMapNotice, setRouteMapVisible, showRoutePreview, type RouteMapPreview } from "./route-map.js";
+import { createAircraftPositionTracker } from "./aircraft-position.js";
+import { createAircraftMapOverlay } from "./aircraft-map.js";
 
 type WorkspaceName = "devices" | "routes" | "flight" | "monitor";
 type FlightPanelName = "stream" | "mission" | "direct-flight";
@@ -70,6 +72,11 @@ const state: { workspace: WorkspaceName; flightPanel: FlightPanelName; missionDe
 };
 
 let lastSnapshot: unknown = {};
+const aircraftPositions = createAircraftPositionTracker();
+const aircraftMap = createAircraftMapOverlay();
+const updateAircraftMap = (): void => {
+  aircraftMap.update(getRouteMapViewer(), aircraftPositions.update(lastSnapshot, state.missionDeviceId, Date.now(), callSign));
+};
 let lastRelayHint = "";
 let lastRoutePreview: { readonly routeId: string; readonly preview: RouteMapPreview } | null = null;
 let lastDeviceDetailHtml: string | null = null;
@@ -2601,6 +2608,7 @@ function applyRouteMap(view: ReturnType<typeof OperatorConsole.project>): void {
       return;
     }
     setRouteMapVisible(true);
+    updateAircraftMap();
     el("map-notice").textContent = routeMapNotice();
     const routeId = view.selectedRoute?.routeId ?? null;
     if (routeId === null) {
@@ -2657,6 +2665,10 @@ const photoClockTimer = window.setInterval(() => {
   if (progress?.active === true) void paintScheduler.request();
 }, 1_000);
 window.addEventListener("beforeunload", () => { window.clearInterval(photoClockTimer); });
+const aircraftClockTimer = window.setInterval(() => {
+  if (state.workspace === "routes") updateAircraftMap();
+}, 1_000);
+window.addEventListener("beforeunload", () => { window.clearInterval(aircraftClockTimer); aircraftMap.dispose(); });
 const render = async (): Promise<void> => {
   try {
     await paintScheduler.request();
