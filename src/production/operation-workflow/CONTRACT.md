@@ -266,7 +266,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 1. `refreshDeviceState(deviceId)` 是设备页的显式只读刷新入口。它仅发送一次 `telemetry.read` 并返回稳定结果；只有手机回复的快照被适配器验证为当前会话的 `accepted` 或 `already-current` 时才成功。成功只表示桌面取得了当次手机状态，绝不表示飞机或图传就绪，也不发送 DJI、任务、图传或飞控命令。
 2. `measurePhoneLink(deviceId)` 是设备页独立的网络自检入口。它仅在指定手机当前在线时转交 `relayOperations.measurePhoneLink` 的固定 10 样本 WebSocket RTT 报告，不发布或修改工作流快照，不读取/写入 MSDK 遥测，也不调用 DJI、任务、图传、媒体或飞控模块。成功只表示该次协议往返已完成；不可测结果同样是诊断事实，绝不改变任何控制门禁。
-3. `startStream(deviceId)` 只在电脑端媒体接收服务可用时调用 `live-stream-control.start`；`hardware-readiness` 的 `legacy-video` 结果只包含局域网地址和本机媒体服务事实，不读取完整控制遥测。`live-stream-control` 以 Relay/MSDK 可达性、RTMP 接收端点、同设备操作顺序和当前会话的原始图传源 Key 决定是否下发：`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 都必须为 `CONNECTED`。手机端在真正调用 MSDK 前使用同一门禁重检，避免桌面与手机遥测更新间的竞态。此处的源门禁是必要例外：真机已经证实，源断开时 `startStream` 成功和 `LiveStreamStatus.isStreaming=true` 都不能证明有效视频。DJI `startStream` 回调、`LiveStreamStatus.isStreaming`、RTMP 有效 AVC/H.264 视频和桌面实际出画仍分别确认真实结果。
+3. `startStream(deviceId)` 只在电脑端媒体接收服务可用时调用 `live-stream-control.start`；`hardware-readiness` 的 `legacy-video` 结果只包含局域网地址和本机媒体服务事实，不读取完整控制遥测。`live-stream-control` 以 Relay/MSDK 可达性、RTMP 接收端点、同设备操作顺序和当前会话的原始图传源 Key 决定是否下发：`AirLinkKey.KeyConnection` 与 `CameraKey.KeyConnection(LEFT_OR_MAIN)` 都必须为 `CONNECTED`。手机端在真正调用 MSDK 前使用同一门禁重检，避免桌面与手机遥测更新间的竞态。此处的源门禁是必要例外：真机已经证实，源断开时 `startStream` 成功和 `LiveStreamStatus.isStreaming=true` 都不能证明有效视频。DJI `startStream` 回调、`LiveStreamStatus.isStreaming`、RTMP 有效 AVC/H.264 视频和桌面实际出画仍分别确认真实结果。源 Key 在启动尚未返回或已经活动时断开，都按图传源失效清理，不自动重启。
 4. `stopStream(deviceId)` 不经过独立预检按钮或控制遥测读取，仍只委托 `live-stream-control`，确保操作者总能停止旧图传。
 5. 图传开始成功只能显示“手机端已开始推流”；只有媒体快照中同设备进入 `ready` 才能显示“画面可用”。
 6. `selectVideo(deviceId)` 仅允许该设备视频已经 `ready`；它委托 `mediaPipeline.selectPlayer(deviceId)`，失败时不改变原视频选择。生产渲染器在成功附着当前图传机的 HTTP-FLV 播放器时必须调用该入口，使主进程选择状态与实际播放器目标一致；该选择本身不等同于首帧已经绘制。
@@ -286,11 +286,11 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 ## 10. 直接飞控规则
 
-1. `requestFlightAction` 只负责释放前一次有效确认并委托 `flightControl.request` 创建新的显式二次确认；它不得读取控制遥测或替 DJI 预先拒绝任何六类动作。`flightControl` 在创建确认与实际发送前均重新执行同一最小可达性检查：目标 Relay 在线且 MSDK 已就绪。工作流不得以飞控、遥控器、飞行模式、电量、电机、降落确认或其它遥测替 DJI Action 裁决。
+1. `requestFlightAction` 只负责释放前一次有效确认并委托 `flightControl.request` 创建新的显式二次确认；它不得读取控制遥测或替 DJI 预先拒绝任何六类动作。`flightControl` 在创建确认与实际发送前均重新执行同一最小可达性检查：目标 Relay 在线且 MSDK 已就绪。工作流不得以飞控、遥控器、飞行模式、电量或电机遥测替 DJI Action 裁决。仅 `confirm-landing` 由下游飞控预检额外复核原始确认请求标志严格为 true，创建请求与实际发送前均检查，工作流不重复该判断。
 2. `confirmFlightAction` 必须直接委托 `flightControl.confirm`，不得在消费确认前再次以工作流控制快照阻断。飞控调度器会在真正发送前重读最小可达性；因此下游的 `PREFLIGHT_BLOCKED`、DJI 明确拒绝、结果未确认或调用失败必须保留到界面。确认一经下游消费即不可重试；`cancelFlightAction` 不需要控制遥测或实机预检。确认不可跨设备、跨动作、重复或过期复用。
-3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 对应 `KeyConfirmLanding`，停止自动起飞、停止自动降落、退出返航分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`、`KeyStopGoHome`，不表示停机或已经落地。它们的实际适用状态由 MSDK Action 回调裁决，不由工作流使用页面快照推断。
+3. 起飞、降落、确认继续降落、返航、停止自动起飞、停止自动降落始终属于独立的人工安全动作，不由航线暂存、上传、启动、暂停、恢复、停止或设备重连隐式触发。`confirm-landing` 对应 `KeyConfirmLanding`，停止自动起飞、停止自动降落、退出返航分别对应 `KeyStopTakeoff`、`KeyStopAutoLanding`、`KeyStopGoHome`，不表示停机或已经落地。确认继续降落必须有原始 `KeyIsLandingConfirmationNeeded=true`；其余实际适用状态由 MSDK Action 回调裁决，不由工作流使用页面快照推断。
 4. `flight.land` 的 DJI Action 成功只使该设备的 `landing.phase` 进入 `awaiting-msdk`，它只描述同一 Relay 会话观察到的降落进度，不表示已经着陆，也不构成后续 `land` 的本地拒绝理由。只要 Relay 在线且 MSDK 已就绪，新的人工 `land` 请求必须创建新的显式确认并交给 DJI Action 裁决。其后只能由同一会话的持续 MSDK 遥测改变：`KeyIsLandingConfirmationNeeded=true` 为 `confirmation-required`，`KeyIsFlying=false` 且 `KeyAreMotorsOn=false` 为 `confirmed-grounded`，任一所需事实未知或飞控断开为 `state-unknown`。它绝不因时间流逝、命令回调、页面刷新或旧缓存显示为已落地。`flight.stop-auto-landing` 成功才进入 `stopped`；其它成功的直接飞行动作重置为 `idle`。
-5. 工作流只保存由 `requestFlightAction` 返回的待确认 ID 和上述已接受降落的最小意图。设备断连或会话替换时，如动作仍未确认，工作流只能调用既有 `flightControl.cancel(deviceId, confirmationId)` 取消确认，并丢弃该会话的降落意图；它绝不补发飞控命令。已经发送中的 DJI 调用不可由本模块撤销，其迟到结果也不得让离线设备重新出现在工作流快照中。
+5. 工作流只保存由 `requestFlightAction` 返回的待确认 ID 和上述已接受降落的最小意图。设备断连或会话替换时，如动作仍未确认，工作流只能调用既有 `flightControl.cancel(deviceId, confirmationId)` 取消确认，并丢弃该会话的降落意图；它绝不补发飞控命令。已经发送中的 DJI 调用不可由本模块撤销，其迟到结果也不得让离线设备重新出现在工作流快照中。会话标识在回执返回前发生变化，或断线后又以相同标识重连，都使该次回执失去降落意图的写入权；它也不得清掉期间新创建的确认。工作流关闭后，迟到回执不得再改快照或通知监听者。失败媒体的停止按飞机分别发出，不得等前一架的回执。
 
 ## 11. 断连、异常与释放
 
@@ -310,7 +310,7 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 
 同 ID 的手机在宽限期结束后才重新出现时，旧任务若已 `disconnected` 不得复活，操作者必须重新分配、暂存、上传、启动和开始图传。图传在闪断后始终需要操作者再次启动。
 
-设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示已知状态；它不是后端授权。图传启动、设备设置、航线上传、航线启动、暂停、恢复和停止分别只接受各自模块读取的当前同会话最小事实：图传还需 `capabilities.liveVideo`，任务还需合法阶段；其余设备安全条件由 DJI 回调裁决。直接飞行动作由 `flight-control` 的同一最小 Relay+MSDK 可达性检查统一裁决，不得被其它缺失或旧遥测阻断。
+设备页连接快照必须直接显示同一包遥测中的 `sdkAvailability`、`remoteController`、`flightController`、`airLink`、`camera` 与 `pairing`，只将每个封闭状态值一对一翻译为操作员中文；不得显示 `ProductKey.KeyConnection`，也不得使用 `sdkRegistered`、`remoteControllerConnected`、`flightControllerConnected`、`connected` 或 `pairingState` 等兼容投影，不得组合多个状态，也不得施加连接滞回。每个设备快照仍须输出同一次控制遥测的 `control` 连接事实，供操作台提前提示已知状态；它不是后端授权。图传启动、设备设置、航线上传、航线启动、暂停、恢复和停止分别只接受各自模块读取的当前同会话最小事实：图传启动只要求 Relay 与 MSDK 可达，不读取 `capabilities.liveVideo`、AirLink 或主相机；任务还需合法阶段。其余设备安全条件由 DJI 回调裁决。操作台对上传和监控页航线选择另有一次遥控器连接记录，该记录不在本工作流内。直接飞行动作由 `flight-control` 的同一最小 Relay+MSDK 可达性检查统一裁决，不得被其它缺失或旧遥测阻断。
 
 所有依赖异常都必须收敛为稳定、可显示的工作流错误码；不得泄露原始异常、地址、端口、文件路径、令牌、会话标识或 DJI 文本。某一个订阅者抛出异常不得阻碍其它订阅者或破坏已提交状态。
 
@@ -329,6 +329,10 @@ stop(deviceId)   -> missionControl.stop(deviceId)
 未来 IPC 只能暴露本模块上述白名单操作及受控航线预览/播放资源读取，不得把下游模块实例、WebSocket、文件路径、RTMP 地址、FFmpeg 参数或 DJI 对象交给渲染进程。
 
 ## 13. 验收与测试
+
+`fetchPhoto` 只提交一次整批 `camera.photo.fetch`，直接保留相机照片控制模块返回的实际 `count`。手机已逐张确认媒体落盘并完成缺失照片遍历，工作流不得把一批算为一张、额外发起下一批检查，或在部分结果失败后自动重试并把失败改为成功。`stopPhotoFetch` 只委托同一 photoControl 的 `stopFetch`，不得等待正在进行的 fetch 结束；生产装配未交出 `stopFetch` 时返回 `DEPENDENCY_FAILURE`，不得把它写成已停止。
+
+可选 photoControl.get 的同设备快照投影到 devices[].photo，订阅沿已有工作流订阅汇合，不维护第二套照片状态机。照片 progress 只供观察准备、清单、每张下载/接收、校验、保存和批次终态。设备消失/会话替换立即通知 recordDisconnected；在线 devices 不保留离线控制目标，前端可保留最后批次证据供断线提示，但不得用缓存授权新命令。
 
 实现已经按下列二级模块拆分；每个二级模块都有独立中文契约。后续修改必须保持职责归属不变：
 

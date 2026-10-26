@@ -97,7 +97,9 @@ describe("飞行页现在状态文案", () => {
     expect(monitorAircraftStatus({ ...facts, flightController: "disconnected", flying: "grounded", motorsOn: false })).toEqual({ label: "飞控未连接", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flightController: "connected", flying: "grounded", motorsOn: null })).toEqual({ label: "未确认", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GO_HOME", landingConfirmationNeeded: true })).toEqual({ label: "继续降落", detail: "" });
-    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING" })).toEqual({ label: "继续降落", detail: "" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING" })).toEqual({ label: "降落", detail: "" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: false })).toEqual({ label: "降落", detail: "" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: true })).toEqual({ label: "继续降落", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "AUTO_LANDING", landingProtectionState: "NOT_SAFE_TO_LAND" })).toEqual({ label: "降落", detail: "当前不适合降落" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GO_HOME" })).toEqual({ label: "返航", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GPS_NORMAL", lowBatteryRthState: "COUNTING_DOWN" })).toEqual({ label: "返航", detail: "" });
@@ -107,6 +109,7 @@ describe("飞行页现在状态文案", () => {
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GPS_NORMAL", missionExecution: "EXECUTING", djiMissionState: "FINISHED" })).toEqual({ label: "悬停", detail: "GPS_NORMAL" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", missionExecution: "PAUSED", djiMissionState: "EXECUTING", waypointIndex: 4 })).toEqual({ label: "执行航线", detail: "航点 4" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", djiMissionState: "PAUSED", waypointIndex: 2 })).toEqual({ label: "执行航线", detail: "已暂停 · 航点 2" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", missionExecution: "PAUSED", djiMissionState: "INTERRUPTED", waypointIndex: 13 })).toEqual({ label: "执行航线", detail: "已暂停 · 航点 13" });
     expect(monitorAircraftStatus({ ...facts, flying: "grounded", motorsOn: false, missionExecution: "EXECUTING" })).toEqual({ label: "地面", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "grounded", motorsOn: true })).toEqual({ label: "起飞", detail: "" });
     expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GPS_NORMAL" })).toEqual({ label: "悬停", detail: "GPS_NORMAL" });
@@ -140,6 +143,9 @@ describe("飞行页现在状态文案", () => {
     expect(monitorHoverCommand({ ...facts, flying: "flying", missionExecution: "STARTING" })).toMatchObject({ kind: "stop" });
     expect(monitorHoverCommand({ ...facts, flying: "flying", djiMissionState: "ENTER_WAYLINE" })).toMatchObject({ kind: "stop" });
     expect(monitorHoverCommand({ ...facts, flying: "flying", djiMissionState: "EXECUTING" })).toMatchObject({ kind: "stop" });
+    expect(monitorHoverCommand({ ...facts, flying: "flying", missionExecution: "FINISHED", djiMissionState: "EXECUTING" })).toEqual({ kind: "none", state: "done", detail: "飞机已在悬停" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GPS_ATTI", missionExecution: "FINISHED", djiMissionState: "EXECUTING" })).toEqual({ label: "悬停", detail: "GPS_ATTI" });
+    expect(monitorAircraftStatus({ ...facts, flying: "flying", flightMode: "GPS_ATTI", missionExecution: "PAUSED", djiMissionState: "INTERRUPTED" })).toEqual({ label: "执行航线", detail: "已暂停" });
     expect(monitorHoverCommand(facts)).toEqual({ kind: "none", state: "failed", detail: "飞控状态未确认，未发送悬停" });
   });
 
@@ -162,6 +168,16 @@ describe("飞行页现在状态文案", () => {
     expect(monitorRouteControl({ ...idle, missionPhase: "pausing", djiMissionState: "PAUSED" })).toBe("resume");
     expect(monitorRouteControl({ ...idle, missionPhase: "paused" })).toBe("resume");
     expect(monitorRouteControl({ ...idle, djiMissionState: "PAUSED" })).toBe("resume");
+    expect(monitorRouteControl({ ...idle, missionPhase: "paused", missionExecution: "PAUSED", djiMissionState: "INTERRUPTED" })).toBe("resume");
+    expect(monitorRouteControl({ ...idle, missionPhase: "paused", missionExecution: "PAUSED", djiMissionState: "FINISHED" })).toBe("choose");
+    expect(monitorRouteControl({ ...idle, missionPhase: "paused", missionExecution: "PAUSED", djiMissionState: "READY" })).toBe("choose");
+    expect(monitorAircraftStatus({
+      flying: "flying", motorsOn: true, flightMode: "GO_HOME", landingConfirmationNeeded: false, landingProtectionState: null,
+      lowBatteryRthState: null, missionExecution: "PAUSED", djiMissionState: "FINISHED", waypointIndex: null, flightController: "connected",
+    })).toEqual({ label: "返航", detail: "" });
+    expect(monitorRouteControl({ ...idle, missionPhase: "idle", missionExecution: "FINISHED", djiMissionState: "EXECUTING" })).toBe("choose");
+    expect(monitorRouteControl({ ...idle, missionPhase: "starting", missionExecution: "FINISHED", djiMissionState: "FINISHED" })).toBe("await");
+    expect(monitorRouteControl({ ...idle, missionPhase: "running", missionExecution: "EXECUTING", djiMissionState: "INTERRUPTED" })).toBe("resume");
     expect(monitorRouteControl({ ...idle, missionPhase: "running", djiMissionState: "PAUSED" })).toBe("resume");
     expect(monitorRouteControl({ ...idle, missionPhase: "resuming" })).toBe("resume");
     expect(monitorRouteControl({ ...idle, missionPhase: "resuming", djiMissionState: "EXECUTING" })).toBe("pause");
@@ -186,7 +202,9 @@ describe("飞行页现在状态文案", () => {
     expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "GPS_NORMAL", lowBatteryRthState: "EXECUTED" })).toMatchObject({ home: { mode: "return-home" }, land: { mode: "land" } });
     expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "AUTO_LANDING" })).toMatchObject({ home: { mode: "return-home" }, land: { label: "降落", mode: "land" } });
     expect(monitorDirectFlight({ ...idle, flying: "flying", landingConfirmationNeeded: true })).toMatchObject({ home: { mode: "return-home" }, land: { label: "确认降落", mode: "confirm-landing" } });
-    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING" })).toMatchObject({ land: { mode: "confirm-landing" } });
+    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING" })).toMatchObject({ land: { label: "降落", mode: "land" } });
+    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: false })).toMatchObject({ land: { label: "降落", mode: "land" } });
+    expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "CONFIRM_LANDING", landingConfirmationNeeded: true })).toMatchObject({ land: { label: "确认降落", mode: "confirm-landing" } });
     expect(monitorDirectFlight({ ...idle, flying: "flying", flightMode: "GO_HOME", landingConfirmationNeeded: true })).toMatchObject({ home: { mode: "return-home" }, land: { mode: "confirm-landing" } });
     expect(monitorDirectFlight({ ...idle, flying: "grounded", motorsOn: false, flightMode: "GO_HOME", landingConfirmationNeeded: true })).toMatchObject({ home: { mode: "return-home" }, land: { mode: "land" } });
   });
@@ -207,6 +225,8 @@ describe("飞行页现在状态文案", () => {
     expect(monitorStreamToggle({ ...idle, present: false })).toMatchObject({ label: "启动图传", enabled: false, mode: "idle" });
     expect(monitorStreamToggle(idle)).toMatchObject({ label: "启动图传", enabled: true, mode: "start" });
     expect(monitorStreamToggle({ ...idle, sdkReady: false })).toMatchObject({ enabled: false, mode: "idle", title: "手机尚未就绪，无法启动图传" });
+    expect(monitorStreamToggle({ ...idle, airLink: "disconnected" })).toMatchObject({ enabled: false, title: "AirLink 未连接，无法启动图传" });
+    expect(monitorStreamToggle({ ...idle, camera: "unknown" })).toMatchObject({ enabled: false, title: "主相机状态未知，无法启动图传" });
     expect(monitorStreamToggle({ ...idle, streamPhase: "streaming" })).toMatchObject({ label: "停止图传", enabled: true, mode: "stop" });
     expect(monitorStreamToggle({ ...idle, videoPhase: "ready" })).toMatchObject({ label: "停止图传", mode: "stop" });
     expect(monitorStreamToggle({ ...idle, streamPhase: "stopping" })).toMatchObject({ label: "停止图传", enabled: true, mode: "stop" });

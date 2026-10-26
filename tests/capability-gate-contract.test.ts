@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CapabilityGate } from "../src/modules/device-console/capability-gate/index.js";
 
@@ -17,9 +18,18 @@ describe("设备操作能力门禁契约", () => {
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
   });
 
-  it("配对只在遥控器已明确连接且飞控已明确断开时允许", () => {
+  it("旧输入缺失飞控事实或遥控器未连接时不允许配对", () => {
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base, flightControllerConnected: undefined })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "FLIGHT_CONTROLLER_CONNECTION_UNKNOWN" } });
     expect(CapabilityGate.evaluate({ operation: "pairing", ...base, remoteControllerConnected: false, flightControllerConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
+  });
+
+  it("飞控原始 Key 未回报连接时允许遥控器对频，并保留其它门禁", () => {
+    const input = { operation: "pairing", relayConnected: true, sdkAvailability: "READY", remoteController: "CONNECTED", flightController: "UNKNOWN" };
+    expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: "pairing", enabled: true, reason: null } });
+    expect(CapabilityGate.evaluate({ ...input, flightController: "CONNECTED" })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "PAIRING_NOT_NEEDED" } });
+    expect(CapabilityGate.evaluate({ ...input, remoteController: "UNKNOWN" })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "REMOTE_CONTROLLER_OFFLINE" } });
+    expect(CapabilityGate.evaluate({ ...input, sdkAvailability: "STARTING" })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "SDK_NOT_READY" } });
+    expect(CapabilityGate.evaluate({ ...input, relayConnected: false })).toEqual({ ok: true, value: { operation: "pairing", enabled: false, reason: "RELAY_OFFLINE" } });
   });
 
   it("直接飞行只判断 MSDK 可达，不把遥控器显示状态当作本地硬拦截", () => {
@@ -61,8 +71,14 @@ describe("设备操作能力门禁契约", () => {
     [{ operation: "live-stream", ...base, camera: "DISCONNECTED" }, "CAMERA_OFFLINE"],
     [{ operation: "live-stream", ...base, camera: "UNKNOWN" }, "CAMERA_CONNECTION_UNKNOWN"],
     [{ operation: "live-stream", relayConnected: true, sdkAvailability: "READY" }, "AIRLINK_CONNECTION_UNKNOWN"],
-  ])("图传源没有明确连接时，在调用 MSDK 前以精确原因拒绝", (input, reason) => {
+  ] as const)("图传启动在 AirLink 或主相机未明确连接时本地拒绝", (input, reason) => {
     expect(CapabilityGate.evaluate(input)).toEqual({ ok: true, value: { operation: "live-stream", enabled: false, reason } });
+  });
+
+  it("契约与图传启动实现一致：桌面读取 AirLink 和主相机", () => {
+    const contract = readFileSync(new URL("../src/modules/device-console/capability-gate/CONTRACT.md", import.meta.url), "utf8");
+    expect(contract).toContain("还必须要求 `AirLinkKey.KeyConnection`");
+    expect(contract).not.toContain("`live-stream` 在 Relay 在线且 MSDK 就绪后直接允许");
   });
 
   it.each(["transmission-settings", "camera-settings"] as const)("%s 只要求手机中继和 MSDK 可达，不以遥控器或飞控遥测提前拒绝", (operation) => {

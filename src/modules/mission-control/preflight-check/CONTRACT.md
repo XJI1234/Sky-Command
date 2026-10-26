@@ -4,7 +4,7 @@
 
 ## 1. 职责
 
-`preflight-check` 是直接飞行动作与航线命令可达性的纯决策模块。对航线上传和启动，它只判断桌面是否已知命令能进入当前手机会话中的已就绪 MSDK，并对启动保留已上传任务这一业务顺序；它绝不以本地电量、地面状态、遥控器、飞控或机型能力替 DJI 预先裁决。全部直接飞行动作同样只确认命令能送达已就绪的 MSDK；当前硬件条件及拒绝原因均由对应 DJI Action 的完成回调裁决。
+`preflight-check` 是直接飞行动作与航线命令可达性的纯决策模块。对航线上传和启动，它只判断桌面是否已知命令能进入当前手机会话中的已就绪 MSDK，并对启动保留已上传任务这一业务顺序；它绝不以本地电量、地面状态、遥控器、飞控或机型能力替 DJI 预先裁决。直接飞行动作检查命令能送达已就绪的 MSDK；仅 `confirm-landing` 额外要求原始 `KeyIsLandingConfirmationNeeded=true`，确认确有待处理的 DJI 请求；当前硬件条件及拒绝原因均由对应 DJI Action 的完成回调裁决。
 
 它不发送命令、不改变设备状态、不上传文件、不读取航线字节，也不调用中继、Android、DJI、Electron 或 UI。调度器必须在发送 `wayline.start` 前立即调用它，调用方不得把拒绝结果简化为一个布尔值。
 
@@ -56,9 +56,9 @@ interface PreflightInput {
 PreflightCheck.evaluateFlightAction(input) -> PreflightResult
 ```
 
-`input.action` 只能是 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff`、`stop-auto-landing` 或 `stop-go-home`。它不读取任务阶段、航线能力、遥控器、飞控、电量、飞行状态、电机或降落确认状态。所有动作都要求当前中继会话存在且 MSDK 明确为 `READY`；这是桌面可以确认命令能送达并安全调用 MSDK 的最小条件。只要该条件满足，就必须把准确的 Action 交给 MSDK；MSDK 拒绝时保留其原始错误，未获得终态时报告结果未确认。本模块绝不自动调用动作。
+`input.action` 只能是 `takeoff`、`land`、`confirm-landing`、`return-home`、`stop-takeoff`、`stop-auto-landing` 或 `stop-go-home`。它不读取任务阶段、航线能力、遥控器、飞控、电量、飞行状态、电机。仅 `confirm-landing` 读取原始 `landingConfirmationNeeded`，且必须严格为 `true`；`CONFIRM_LANDING` 模式不能覆盖 false、null 或缺失值，其它动作和航线预检不读取该字段。所有动作都要求当前中继会话存在且 MSDK 明确为 `READY`；这是桌面可以确认命令能送达并安全调用 MSDK 的最小条件。该条件满足且（仅确认降落）确认请求仍存在时，才把准确的 Action 交给 MSDK；MSDK 拒绝时保留其原始错误，未获得终态时报告结果未确认。本模块绝不自动调用动作。
 
-直接飞行动作仍必须由 `flight-control` 创建一次性确认。确认消费前，调度器重新读取原始遥测并再次调用本接口；任一动作的最小可达性不再满足时均不得发送命令。
+直接飞行动作仍必须由 `flight-control` 创建一次性确认。确认消费后、实际发送前，调度器重新读取原始遥测并再次调用本接口；任一动作的最小可达性不再满足时均不得发送命令。
 
 ## 5. 阻塞项和顺序
 
@@ -67,9 +67,10 @@ PreflightCheck.evaluateFlightAction(input) -> PreflightResult
 1. `INVALID_INPUT`
 2. `RELAY_DISCONNECTED`
 3. `SDK_NOT_READY`
-4. `MISSION_NOT_UPLOADED`
+4. `LANDING_CONFIRMATION_NOT_REQUIRED`（仅确认降落）
+5. `MISSION_NOT_UPLOADED`（仅航线启动）
 
-`evaluateUpload` 仅可返回 `RELAY_DISCONNECTED` 或 `SDK_NOT_READY`（非法输入除外）。`evaluate` 仅可在此基础上返回 `MISSION_NOT_UPLOADED`。二者不产生任何设备能力、连接或动态飞行事实阻塞项。全部直接飞行动作只可返回 `RELAY_DISCONNECTED` 或 `SDK_NOT_READY`（非法输入除外）。
+`evaluateUpload` 仅可返回 `RELAY_DISCONNECTED` 或 `SDK_NOT_READY`（非法输入除外）。`evaluate` 仅可在此基础上返回 `MISSION_NOT_UPLOADED`。二者不产生任何设备能力、连接或动态飞行事实阻塞项。直接飞行动作返回 `RELAY_DISCONNECTED` 或 `SDK_NOT_READY`；仅 `confirm-landing` 还可返回 `LANDING_CONFIRMATION_NOT_REQUIRED`（非法输入除外）。
 
 `ProductKey.KeyConnection` 的原始值保留在 Relay 诊断遥测中，但不属于任一预检输入，也不得作为飞行器、飞控、航线、直接飞行或设置操作的门禁。
 

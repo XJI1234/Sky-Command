@@ -28,3 +28,6 @@ RelayFrameCodec.decode(bytes: Uint8Array): DecodeResult;
 对象拒绝重复键、尾随 token、非有限数、不安全字段名和不支持值。`encode` 拒绝无效/超限帧；`decode` 拒绝空/超限、畸形 UTF-8/JSON、非对象根、已知帧字段错误、Base64 错误及所有资源超限；面对恶意 getter 也不得抛异常。所有帧、嵌套 JSON、字节、结果、错误均复制或冻结，输入不变。
 
 测试仅穿过该接口，覆盖所有帧往返、全部边界、畸形输入、严格 UTF-8、资源限制、Base64 规范、复制/不可变、未知消息、恶意 getter和错误保密；所有覆盖率和变异门禁必须为 100%。
+## 照片进度扩展（协议版本仍为 1）
+
+`photo-progress` 是独立观察帧：`id` 对应 camera.photo.fetch 命令，`sequence` 为递增正安全整数；`phase` 为 listing/downloading/sending；`photoIndex`、`completedCount` 为非负安全整数；`fileName` 与 `totalBytes` 必须显式存在但可为 null。listing 固定 index=0、fileName=null、transferredBytes=0、totalBytes=null；其余阶段 index=completedCount+1 且使用合法照片基名。transferredBytes 为 0..100 MiB 的安全整数；已知 totalBytes 为 1..100 MiB 且不小于 transferredBytes。帧不包含批次总张数、路径或手机时间，不代替媒体和命令终态。未知旧客户端可忽略此扩展。

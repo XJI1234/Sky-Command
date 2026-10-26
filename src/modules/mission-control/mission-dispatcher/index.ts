@@ -1,4 +1,4 @@
-import { MissionPhaseDomain, type MissionPhase, type MissionPhaseMachine } from "../mission-phase-domain/index.js";
+import { MissionPhaseDomain, type MissionPhase, type MissionPhaseEvent, type MissionPhaseMachine } from "../mission-phase-domain/index.js";
 import { PreflightCheck, type PreflightBlocker } from "../preflight-check/index.js";
 
 export interface RouteMissionPayload {
@@ -67,7 +67,7 @@ export interface MissionDispatcherInstance {
 }
 
 interface MissionIdentity { readonly missionRevision: number; readonly deviceGeneration: number; }
-interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; missionIdentity: MissionIdentity | null; missionPhaseSequence: number | null; startPointReached: boolean; routeExecutionStarted: boolean; busy: boolean; inFlightCount: number; epoch: number; lastResult: LastDispatchResult | null; }
+interface Lane { readonly deviceId: string; readonly machine: MissionPhaseMachine; routeId: string | null; fileName: string | null; missionIdentity: MissionIdentity | null; missionPhaseSequence: number | null; startPointReached: boolean; routeExecutionStarted: boolean; busy: boolean; inFlightCount: number; epoch: number; commandOrder: number; deferredSettlements: Array<{ order: number; event: MissionPhaseEvent }>; lastResult: LastDispatchResult | null; }
 const beginFlight = (lane: Lane): void => {
   lane.inFlightCount += 1;
   lane.busy = true;
@@ -75,6 +75,25 @@ const beginFlight = (lane: Lane): void => {
 const endFlight = (lane: Lane): void => {
   lane.inFlightCount = Math.max(0, lane.inFlightCount - 1);
   lane.busy = lane.inFlightCount > 0;
+};
+const invalidateFlights = (lane: Lane): void => {
+  lane.epoch += 1;
+  lane.inFlightCount = 0;
+  lane.busy = false;
+  lane.deferredSettlements.length = 0;
+};
+const restoreObservedExecution = (lane: Lane): void => {
+  if (lane.routeExecutionStarted && lane.machine.state().phase === "starting") lane.machine.transition({ type: "start-succeeded" });
+};
+const restoreDeferredSettlements = (lane: Lane): void => {
+  // Unwind the most recent preempted control first, then its predecessor.
+  const settlements = lane.deferredSettlements.splice(0).sort((a, b) => b.order - a.order);
+  for (const settlement of settlements) {
+    if (settlement.event.type === "start-rejected" && lane.routeExecutionStarted) continue;
+    if (!lane.machine.transition(settlement.event).ok) lane.deferredSettlements.push(settlement);
+  }
+  restoreObservedExecution(lane);
+  if (lane.machine.state().phase === "paused") invalidateFlights(lane);
 };
 
 const COMMANDS = Object.freeze({ confirm: true as const });
@@ -189,9 +208,10 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     const missionId = missionIdAttempt.value;
     if (!validId(missionId)) return rejected("stage", "MISSION_ID_UNAVAILABLE", existing ?? null);
 
-    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, missionIdentity: null, missionPhaseSequence: null, startPointReached: false, routeExecutionStarted: false, busy: false, inFlightCount: 0, epoch: 0, lastResult: null } as Lane;
+    const lane = existing ?? { deviceId, machine: MissionPhaseDomain.create(), routeId: null, fileName: null, missionIdentity: null, missionPhaseSequence: null, startPointReached: false, routeExecutionStarted: false, busy: false, inFlightCount: 0, epoch: 0, commandOrder: 0, deferredSettlements: [], lastResult: null } as Lane;
     const requested = lane.machine.transition({ type: "stage-requested", missionId });
     if (!requested.ok) return rejected("stage", "ILLEGAL_PHASE", lane);
+    invalidateFlights(lane);
     lane.routeId = routeId;
     lane.fileName = routePayload.fileName;
     lane.missionIdentity = null;
@@ -205,7 +225,10 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
 
     const payload: RelayMissionPayload = freeze({ missionId, fileName: routePayload.fileName, size: routePayload.sizeBytes, sha256: routePayload.sha256, bytes: routePayload.bytes.slice() });
     const sent = await attemptAsync(() => dependencies.relay.sendMission(deviceId, payload));
-    if (lane.epoch !== flightEpoch) return freeze({ ok: false as const, operation: "stage", code: "OPERATION_IN_PROGRESS" as const, state: snapshot(lane) });
+    if (lane.epoch !== flightEpoch) {
+      if (lanes.get(deviceId) === lane && lane.machine.state().phase === "disconnected" && lane.machine.state().missionId === missionId) return disconnectedResult(lane, "stage", "MISSION_TRANSFER_FAILED");
+      return freeze({ ok: false as const, operation: "stage", code: "OPERATION_IN_PROGRESS" as const, state: get(deviceId) });
+    }
     endFlight(lane);
     // A relay disappearance wins over any late transfer completion. The
     // caller must not mistake a stale acknowledgement for a current stage.
@@ -247,12 +270,17 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     }
     const requested = lane.machine.transition({ type: requestType });
     if (!requested.ok) return rejected(operation, "ILLEGAL_PHASE", lane);
+    const commandOrder = ++lane.commandOrder;
+    if (operation === "start") lane.deferredSettlements.length = 0;
     const flightEpoch = lane.epoch;
+    const flightMissionId = lane.machine.state().missionId;
     beginFlight(lane);
     publish();
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, { name: commandName, fields: COMMANDS }));
-    if (lane.epoch !== flightEpoch) return freeze({ ok: false as const, operation, code: "OPERATION_IN_PROGRESS" as const, state: snapshot(lane) });
-    endFlight(lane);
+    const stopAlreadySettled = operation === "stop" && sent.ok && succeeded(sent.value) && (lane.machine.state().phase === "completed" || lane.machine.state().phase === "idle" || lane.machine.state().phase === "failed");
+    if (stopAlreadySettled) return result(lane, operation, true, null);
+    if (lane.epoch !== flightEpoch && (lanes.get(deviceId) !== lane || lane.machine.state().phase !== "disconnected" || lane.machine.state().missionId !== flightMissionId)) return freeze({ ok: false as const, operation, code: "OPERATION_IN_PROGRESS" as const, state: get(deviceId) });
+    if (lane.epoch === flightEpoch) endFlight(lane);
     // `recordDisconnected` may have settled the lane while the transport was
     // still pending. Keep that terminal observation authoritative.
     if (lane.machine.state().phase === "disconnected") {
@@ -263,11 +291,26 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
               : "WAYLINE_UPLOAD_FAILED" as const;
       return disconnectedResult(lane, operation, unconfirmed);
     }
-    if (sent.ok && succeeded(sent.value)) {
+    const accepted = sent.ok && succeeded(sent.value);
+    const terminal = sent.ok ? readWaylineTerminalResult(sent.value) : null;
+    const current = lane.machine.state().phase;
+    if ((current === "stopping" && (operation === "start" || operation === "pause" || operation === "resume")) || (current === "pausing" && operation === "start")) {
+      const event: MissionPhaseEvent | null = operation === "start"
+        ? (terminal?.outcome === "ACTION_REJECTED" ? { type: "start-rejected" } : null)
+        : accepted ? { type: `${operation}-succeeded` as "pause-succeeded" | "resume-succeeded" }
+          : (terminal?.outcome === "ACTION_REJECTED" || terminal?.outcome === "INVOCATION_FAILED") ? { type: `${operation}-rejected` as "pause-rejected" | "resume-rejected" } : null;
+      if (event !== null) lane.deferredSettlements.push({ order: commandOrder, event });
+      const state = snapshot(lane);
+      if (accepted) return freeze({ ok: true as const, operation, state });
+      if (terminal?.outcome === "ACTION_REJECTED") return freeze({ ok: false as const, operation, code: "WAYLINE_ACTION_REJECTED" as const, state, platformError: terminal.platformError });
+      const code: DispatchErrorCode = operation === "start" ? "WAYLINE_START_UNCONFIRMED" : terminal?.outcome === "INVOCATION_FAILED" ? "WAYLINE_ACTION_INVOCATION_FAILED" : unconfirmedCommandFailure[operation];
+      return freeze({ ok: false as const, operation, code, state });
+    }
+    if (accepted) {
       completeCommand[operation](lane.machine);
+      if ((operation === "stop" && lane.machine.state().phase === "idle") || (operation === "pause" && lane.machine.state().phase === "paused")) invalidateFlights(lane);
       return result(lane, operation, true, null);
     }
-    const terminal = sent.ok ? readWaylineTerminalResult(sent.value) : null;
     if (operation === "upload" && terminal?.outcome === "ACTION_REJECTED") {
       lane.machine.transition({ type: "upload-rejected" });
       return result(lane, operation, false, "WAYLINE_ACTION_REJECTED", { platformError: terminal.platformError });
@@ -287,10 +330,12 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     if (operation === "pause" || operation === "resume" || operation === "stop") {
       if (terminal?.outcome === "ACTION_REJECTED") {
         lane.machine.transition({ type: `${operation}-rejected` as "pause-rejected" | "resume-rejected" | "stop-rejected" });
+        restoreDeferredSettlements(lane);
         return result(lane, operation, false, "WAYLINE_ACTION_REJECTED", { platformError: terminal.platformError });
       }
       if (terminal?.outcome === "INVOCATION_FAILED") {
         lane.machine.transition({ type: `${operation}-rejected` as "pause-rejected" | "resume-rejected" | "stop-rejected" });
+        restoreDeferredSettlements(lane);
         return result(lane, operation, false, "WAYLINE_ACTION_INVOCATION_FAILED");
       }
       return result(lane, operation, false, unconfirmedCommandFailure[operation]);
@@ -302,9 +347,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     if (!validId(deviceId)) return null;
     const lane = lanes.get(deviceId);
     if (lane === undefined) return idleSnapshot(deviceId);
-    lane.epoch += 1;
-    lane.inFlightCount = 0;
-    lane.busy = false;
+    invalidateFlights(lane);
     lane.machine.transition({ type: "reset" });
     lane.routeId = null;
     lane.fileName = null;
@@ -319,6 +362,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
   };
   const forget = (deviceId: string): boolean => {
     const lane = lanes.get(deviceId); if (!lane || !["idle", "completed", "failed", "disconnected"].includes(lane.machine.state().phase)) return false;
+    invalidateFlights(lane);
     lanes.delete(deviceId); publish(); return true;
   };
   const recordDisconnected = (deviceId: string): MissionDispatchSnapshot | null => {
@@ -326,8 +370,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     if (!lane) return null;
     const changed = lane.machine.transition({ type: "connection-lost" });
     if (!changed.ok) return null;
-    lane.inFlightCount = 0;
-    lane.busy = false;
+    invalidateFlights(lane);
     lane.missionPhaseSequence = null;
     lane.startPointReached = false;
     lane.routeExecutionStarted = false;
@@ -343,7 +386,7 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     if (!validId(deviceId) || !validFileName(fileName) || !validPositiveInteger(missionRevision) || !validGeneration(deviceGeneration) || !validPositiveInteger(sequence) || !validMissionPhase(phase)) return null;
     const lane = lanes.get(deviceId);
     const current = lane?.machine.state().phase;
-    if (!lane || lane.fileName !== fileName || !matchingIdentity(lane, missionRevision, deviceGeneration) || (current !== "starting" && current !== "running")) return null;
+    if (!lane || lane.fileName !== fileName || !matchingIdentity(lane, missionRevision, deviceGeneration) || !["starting", "running", "pausing", "paused", "resuming", "stopping"].includes(current!)) return null;
     if (lane.missionPhaseSequence !== null && sequence <= lane.missionPhaseSequence) return null;
     lane.missionIdentity ??= freeze({ missionRevision, deviceGeneration });
     lane.missionPhaseSequence = sequence;
@@ -354,10 +397,12 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
       publish();
       return state;
     }
-    if (current !== "starting") return snapshot(lane);
-    const changed = lane.machine.transition({ type: "start-succeeded" });
-    /* c8 ignore next -- this transition is guarded by the immediately preceding phase check. */
-    if (!changed.ok) return null;
+    if (lane.routeExecutionStarted && current !== "starting") return snapshot(lane);
+    if (current === "starting") {
+      const changed = lane.machine.transition({ type: "start-succeeded" });
+      /* c8 ignore next -- this transition is guarded by the immediately preceding phase check. */
+      if (!changed.ok) return null;
+    }
     lane.routeExecutionStarted = true;
     const state = snapshot(lane);
     publish();
@@ -380,12 +425,13 @@ function create(dependencies: MissionDispatcherDependencies, options: MissionDis
     if (!validId(deviceId) || !validFileName(fileName) || !validPositiveInteger(missionRevision) || !validGeneration(deviceGeneration) || (outcome !== "completed" && outcome !== "failed")) return null;
     const lane = lanes.get(deviceId);
     const identity = lane?.missionIdentity;
-    if (!lane || !identity || lane.busy || lane.fileName !== fileName || identity.missionRevision !== missionRevision || identity.deviceGeneration !== deviceGeneration) return null;
+    if (!lane || !identity || lane.fileName !== fileName || identity.missionRevision !== missionRevision || identity.deviceGeneration !== deviceGeneration) return null;
     const current = lane.machine.state().phase;
     const changed = outcome === "completed"
-      ? (["starting", "running", "disconnected"].includes(current) ? lane.machine.transition({ type: "mission-completed" }) : null)
+      ? (["starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"].includes(current) ? lane.machine.transition({ type: "mission-completed" }) : null)
       : (["staging", "uploading", "starting", "running", "pausing", "paused", "resuming", "stopping", "disconnected"].includes(current) ? lane.machine.transition({ type: "operation-failed", code: "MISSION_EXECUTION_FAILED" }) : null);
     if (changed === null || !changed.ok) return null;
+    invalidateFlights(lane);
     const state = snapshot(lane);
     publish();
     return state;

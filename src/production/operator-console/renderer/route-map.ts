@@ -25,6 +25,7 @@ let drawnPositions: import("cesium").Cartesian3[] = [];
 let notice = "导入 Wayline 导出的 KML 或 KMZ 文件以预览航迹。";
 
 export const routeMapNotice = (): string => notice;
+export const getRouteMapViewer = (): Viewer | undefined => viewer;
 
 export async function ensureRouteMap(host: HTMLElement): Promise<void> {
   if (viewer !== undefined && !viewer.isDestroyed()) {

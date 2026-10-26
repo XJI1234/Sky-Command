@@ -47,12 +47,14 @@ const missionLabel = (action: string): string => {
 };
 
 const streamLabel = (action: string): string => action === "stream-stop" ? "停止图传" : "启动图传";
-const photoLabel = (action: string): string => action === "photo-fetch" ? "回传照片" : "拍照";
+const photoLabel = (action: string): string => action === "photo-fetch-stop" ? "停止回传" : action === "photo-fetch" ? "回传照片" : "拍照";
+const pairingLabel = (action: string): string => action === "pairing-stop" ? "停止对频" : "开始对频";
 
 const localReason = (code: string | null): string => {
     if (code === "DEVICE_OFFLINE" || code === "RELAY_OFFLINE") return "手机中继离线";
     if (code === "SDK_NOT_READY") return "手机端 MSDK 尚未就绪";
-    if (code === "NOTHING_TO_FETCH") return "还没有可回传的照片";
+    if (code === "LANDING_CONFIRMATION_NOT_REQUIRED") return "飞控当前未请求确认降落，请查看当前飞行状态";
+    if (code === "NOTHING_TO_FETCH") return "飞机上没有电脑缺少的照片";
     if (code === "AIRLINK_OFFLINE") return "AirLink 未连接";
   if (code === "AIRLINK_CONNECTION_UNKNOWN") return "AirLink 状态未知";
   if (code === "CAMERA_OFFLINE") return "主相机未连接";
@@ -104,7 +106,7 @@ const unconfirmed = (label: string, explanation = `未收到 DJI MSDK ${label} �
   msdkCallback("relay", "unconfirmed", "未确认", "无最终回调", [`说明：${explanation}`]);
 
 const operationLabel = (action: string, flightAction: string): string =>
-  action.startsWith("flight-") ? flightAction : action.startsWith("mission-") ? missionLabel(action) : action.startsWith("photo-") ? photoLabel(action) : streamLabel(action);
+  action.startsWith("flight-") ? flightAction : action.startsWith("mission-") ? missionLabel(action) : action.startsWith("photo-") ? photoLabel(action) : action.startsWith("pairing-") ? pairingLabel(action) : streamLabel(action);
 
 export const operationFeedback = (action: string, value: unknown): OperationFeedback => {
   const inner = unwrap(value);
@@ -119,8 +121,19 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
     const nested = record(read(inner, "value"));
     const platformError = read(inner, "platformError") ?? read(nested, "platformError");
     const errorCode = text(read(platformError, "code")) ?? text(read(inner, "errorCode")) ?? text(read(nested, "errorCode"));
+    const description = text(read(platformError, "description")) ?? text(read(inner, "errorDescription")) ?? text(read(nested, "errorDescription"));
+    if (description?.includes("source=relay-preflight") && (errorCode === "STORAGE_NOT_READY" || errorCode === "STORAGE_STATUS_UNAVAILABLE")) {
+      const explanation = errorCode === "STORAGE_STATUS_UNAVAILABLE"
+        ? "手机暂时读不到飞机的存储状态，尚未按快门，请稍后重试。"
+        : "手机拍照前检查未通过，尚未按快门：飞机未确认当前存储能保存照片。请在 DJI Fly 检查存储位置和当前画质下的可拍张数。";
+      return { source: "relay", outcome: "not-called", message: `${explanation}\n检查结果：${errorCode}\n详细状态：${description}` };
+    }
     if (errorCode === "CAMERA_MODE_NOT_PHOTO") {
       return { source: "relay", outcome: "rejected", message: "相机没有进入拍照模式，画面会恢复。图传没有停止。" };
+    }
+    if (errorCode === "STORAGE_NOT_READY") {
+      const failure = djiFailure(inner);
+      return { ...failure, message: `飞机的照片存储尚未就绪，请检查存储位置、可用空间及存储卡状态。\n${failure.message}` };
     }
     return djiFailure(inner);
   }
@@ -148,13 +161,26 @@ export const operationFeedback = (action: string, value: unknown): OperationFeed
     return { source: "desktop", outcome: "completed", message: `已取消${flightLabel(confirmedAction)}，未调用 DJI MSDK` };
   }
   if (code === "CAPTURED") return msdkCallback("dji", "accepted", "成功", "onSuccess", ["说明：已拍下原图，电脑尚未收齐文件"]);
+  if (code === "NOTHING_TO_FETCH") return { source: "relay", outcome: "completed", message: "飞机上没有电脑缺少的照片" };
   const reason = text(read(inner, "reason")) ?? text(read(value, "reason"));
+  if (code === "PREFLIGHT_BLOCKED") {
+    const blockers = read(inner, "blockers");
+    const reasons = Array.isArray(blockers) ? blockers.map((item) => localReason(text(read(item, "code")))) : [];
+    return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${reasons.length > 0 ? reasons.join("；") : localReason(code)}` };
+  }
+  if ((code === "STOPPED" || code === "NOT_RUNNING") && (action === "photo-fetch" || action === "photo-fetch-stop")) {
+    return { source: "relay", outcome: "completed", message: code === "NOT_RUNNING" ? "当前没有正在回传的照片" : "回传已停止，已请求大疆停止下载并退出回放" };
+  }
   if (code !== null && code !== "SUCCEEDED") return { source: "desktop", outcome: "not-called", message: `未调用 DJI MSDK：${localReason(reason ?? code)}` };
 
   if (record(inner)?.confirmation !== undefined) return { source: "desktop", outcome: "pending", message: `等待人工确认：${flightLabel(confirmedAction)} 尚未调用 DJI MSDK` };
   if (action === "mission-stage") return { source: "relay", outcome: "completed", message: "手机中继回调：航线文件已传输并校验（此步骤未调用 DJI MSDK）" };
-  if (code === "SUCCEEDED" && action.startsWith("flight-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
-  if (code === "SUCCEEDED" && action.startsWith("mission-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
+  if (action.startsWith("pairing-") && read(inner, "ok") === true) return { source: "relay", outcome: "completed", message: `手机已完成${pairingLabel(action)}命令；请以对频状态为准` };
+  if (code === "SUCCEEDED" && action.startsWith("flight-")) {
+    const landing = confirmedAction === "land" || confirmedAction === "confirm-landing" || action === "flight-land" || action === "flight-confirm-landing";
+    return msdkCallback("dji", "accepted", "成功", "onSuccess", landing ? ["说明：降落接口调用已受理；是否正在下降、是否落地请以飞控状态为准"] : []);
+  }
+  if (action.startsWith("mission-") && (code === "SUCCEEDED" || (code === null && read(inner, "ok") === true))) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action.startsWith("stream-")) return msdkCallback("dji", "accepted", "成功", "onSuccess");
   if (code === "SUCCEEDED" && action === "photo-fetch") {
     const count = read(inner, "count");

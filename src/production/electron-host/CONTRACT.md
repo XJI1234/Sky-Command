@@ -1,5 +1,9 @@
 # Electron 宿主
 
+## 局域网自动发现公告
+
+DesktopApplication.start 成功后装配 relay-discovery，每秒从实际 WLAN IPv4 向定向广播和有限广播的 UDP 39082 发 v1 公告；网卡筛选独立于既有手动地址/图传选卡。身份写在 userData，禁止写入项目/ASAR。无 WLAN 或公告失败只诊断并等待，不阻断手动连接。关闭窗口、before-quit、外壳释放及启动异常时先幂等停止公告，再沿用既有业务退出顺序，不新增飞行指令。公告格式见 docs/auto-discovery/WIRE-PROTOCOL.md，资源所有权见 relay-discovery/CONTRACT.md。
+
 状态：窗口装配已接线；RTMP 19500 收流后由本机过滤 HTTP-FLV（18080）供飞行页 mpegts.js 播放。每次图传启动优先使用该手机 WebSocket 实际接入的桌面 IPv4；缺失时才取当前首选网卡，绝不复用启动时已失效的网卡地址。握手等待 15s，命令等待 120s，航线分块传输等待 600s，须长于手机端 DJI 上传/控制超时。手机 DJI 操作超时为 30s，超时会回 `command-result`，操作台应在约 30s 看到失败；120s 只覆盖手机无应答或排队中的遗留 DJI 调用。图传收流等待 20s，推流开始后即可标记播放就绪。
 
 启动方式与 `MSDK-upgraded` 对齐：
@@ -24,11 +28,25 @@ Relay 监听 `0.0.0.0:8080`。每次读取设备页时重新枚举可用网卡�
 
 关闭序列的每个阶段（外壳释放、应用对象图释放、日志 `flush`）默认最多等待 5 秒，可由受控宿主或测试显式缩短。阶段超时只结束本次等待，不取消底层清理；无论阶段成功、失败还是超时，后续阶段都必须继续尝试。所有阶段均已尝试后，宿主必须调用 `quit()`；若有多个失败或超时，只保留首个结果用于诊断，不能因后续清理异常而跳过退出。
 
+播放诊断 `video-playback-diagnostic` 在桌面端记为 `INFO downlink VIDEO_PLAYBACK_DIAGNOSTIC`，不得误记成操作被拦截。仅接受受控事件、原因枚举、页面/代次标识、工作区/槽位、布尔状态和有限数值；不直接落盘原始 JSON、URL、堆栈或未知字段，无效记录返回 `INVALID_INPUT`。
+
 ## 旧 RTMP 图传
 
-旧图传由 `node-media-server` 收手机 RTMP（`19500`，`gop_cache: true`），HTTP 口（`18080`）用官方 `NodeFlvSession` **直连发布会话播放器槽位**输出 HTTP-FLV：`http://127.0.0.1:18080/live/{deviceId}.flv`。禁止再对本机 `19500` 做 RTMP 回环拉流。写出路径只过滤无图像的 SEI-only AVC 包，不得因 TCP 背压丢弃普通视频帧；无法按 AVC NAL 切开的大包必须仍送给播放器。同一 `deviceId` 新附着须停止旧 `NodeFlvSession`。不得再切 HLS，也不得默认拉起 `ffplay`。FULL_HD 若为 HEVC（FLV codec 12），写出给页面之前须用本机 `ffmpeg`/`libx264` 转成 H.264 HTTP-FLV：Electron Chromium 的 MSE 会对 `hvc1` 报支持却不出画。操作台飞行页用 `mpegts.js` 播转码后的 HTTP-FLV（`isLive`、关闭 stash buffer，并在附着期间用播放时钟追直播前沿）到本页 `<video>`。不得再用只认 H.264 且不转码的 `flv.js`。及时性优先于把积压播完，但不得用高频 seek 打断解码：`timeupdate` 时仅当落后缓冲末端超过约 1.5s 才跳到末端附近，跳转中及随后约 2s 冷却期内不得再 seek。MSE 已播过的旧缓冲保留约 3s。卡死看门狗独立、放慢；首次出画宽限约 25s，避免 1080p GOP 未到就拆掉唯一 HTTP-FLV 会话。GOP 关键帧送出前不得因 TCP 背压跳帧。
+### 播放连接隔离与诊断（2026-10-18）
 
-HTTP-FLV 输出必须在**单个播放器连接**的 `ServerResponse.writableLength` 到达 `2 MiB` 时停止该 `NodeFlvSession` 并销毁该播放器 socket，释放已积压的媒体字节；这不是按帧降级或丢弃 P 帧。正常可排空的短暂 TCP 背压不改变视频内容。达到上限只终止那个 `deviceId` 的本地播放器会话，现有渲染器恢复机制负责重挂 HTTP-FLV；它不得停止 RTMP 发布者、共享服务、其他设备或手机端 DJI 推流。
+每个 HTTP-FLV GET 拥有独立会话和连接编号；同一设备的新观看连接不得停止已有观看者。响应关闭只释放本次会话，关闭服务时释放全部会话。慢观看者只能终止自己的本地播放连接，不能停止 RTMP 发布、Relay、手机推流或另一观看者。
+
+开闭日志附带页面关联编号，只接受 `viewer` 查询参数中的 1–128 位字母、数字、下划线或连字符，其余记为 `unmarked`；不得记录原始查询或 URL。交给第三方 NMS 会话的请求地址必须重建为已验证的路径和该受限页面编号，丢弃其余查询参数，避免上游默认日志泄露原始输入。
+
+记录连接打开/关闭（含连接编号、存续时间、主动关闭原因、已写字节和队列长度）、首个视频标签和异常收帧间隔；不记录 URL、密钥或原始异常。诊断回调失败不得打断媒体。本次保留既有 AVC 过滤、码率和背压策略，只增加连接隔离与队列观测；不因诊断改变视频内容。RTMP 视频包到达间隔达到 500ms 时记录，重复间隔告警至多每 10 秒一次，不把它等同于端到端延迟。
+
+RTMP 客户端在发送 connect 命令前关闭 TCP 连接时，宿主必须为 NMS 2.6.6 的清理提供空连接元数据，继续释放原会话和 socket；不得因此抛出未捕获异常或退出桌面程序。
+
+旧图传由 `node-media-server` 收手机 RTMP（`19500`，`gop_cache: true`），HTTP 口（`18080`）用官方 `NodeFlvSession` **直连发布会话播放器槽位**输出 HTTP-FLV：`http://127.0.0.1:18080/live/{deviceId}.flv`。禁止再对本机 `19500` 做 RTMP 回环拉流。写出路径只过滤无图像的 SEI-only AVC 包，不得因 TCP 背压丢弃普通视频帧；无法按 AVC NAL 切开的大包必须仍送给播放器。同一 `deviceId` 的观看会话按响应独立管理，新附着不得停止旧 `NodeFlvSession`。不得再切 HLS，也不得默认拉起 `ffplay`。FULL_HD 若为 HEVC（FLV codec 12），写出给页面之前须用本机 `ffmpeg`/`libx264` 转成 H.264 HTTP-FLV：Electron Chromium 的 MSE 会对 `hvc1` 报支持却不出画。操作台飞行页用 `mpegts.js` 播转码后的 HTTP-FLV（`isLive`、关闭 stash buffer，并在附着期间用播放时钟追直播前沿）到本页 `<video>`。不得再用只认 H.264 且不转码的 `flv.js`。及时性优先于把积压播完，但不得用高频 seek 打断解码：飞行与监控页在媒体进度事件及每 250ms 检查时，仅当落后缓冲末端超过 1s 才跳到末端前 0.3s；跳转中及随后 500ms 冷却期内不得再 seek。恢复前台先追最新缓冲再继续播放。MSE 已播过的旧缓冲保留约 3s。卡死看门狗独立、放慢；首次出画宽限约 25s，避免 1080p GOP 未到就拆掉唯一 HTTP-FLV 会话。GOP 关键帧送出前不得因 TCP 背压跳帧。
+
+播放器的 1.5 秒端到端验收以 `operator-console/CONTRACT.md` 为准。关闭 stash 只移除额外整块等待，不丢弃不完整媒体包；首次出画仍等待实际可解码数据。
+
+现有背压实现的队列阈值为 16 MiB，达到后跳过至下一关键帧，不主动关闭会话；本次播放器修复保留该策略。它仍可能保留旧积压，不能视为已经满足实时延迟预算，需用队列日志独立评估。它不得停止 RTMP 发布者、共享服务、其他设备或手机端 DJI 推流。
 
 HTTP-FLV 的 GET 只在 Node Media Server 当前已登记同一 `/live/{deviceId}` RTMP 发布者时创建 `NodeFlvSession`；没有发布者时必须立即返回 `404`，不得创建上游的全局 `idlePlayers` 等待会话。媒体管线仅在已收到 RTMP 发布事实后向渲染器发放播放地址，因此这条适配器级保护不改变正常的请求顺序；它只限制无源、过期或错误请求不能滞留本地会话。
 

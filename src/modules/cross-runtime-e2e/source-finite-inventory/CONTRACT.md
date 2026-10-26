@@ -14,6 +14,10 @@
 
 源码集合与 `baseline.json` 任一项不一致时测试必须失败。基线只能在人工确认新增或删除的有限集合已经具有相应验证证据后更新，不能在测试中自动改写。
 
+已批准的照片回传状态扩展对应 319 项基线：新增桌面 PhotoProgressStage、手机 PhotoDownloadProgress 与 PhotoProgressPhase，并在双方 RelayFrame 中加入 PhotoProgressFrame，其余集合不变。各阶段、双方编解码、字节/序号边界、保存确认、请求/会话隔离及窗口展示均已有针对性验证；基线文件仍只记录盘点数量与摘要，不改变行为测试。
+
+2026-10-16 本地启动分支合并核对后更新为 328 项。相对 319 项基线仅新增自动发现与连接/服务生命周期的 9 个集合，并在 SessionEndKind 中增加 CONNECTION_PAUSED、ENDPOINT_CHANGED；没有删除集合。逐项验证映射见 `docs/auto-discovery/INTEGRATION-20261016.md`，不放宽扫描范围或行为断言。
+
 ## 4. 边界
 
 本模块证明“有限集合没有静默变化”，不单独证明每个转换均正确。转换正确性由独立模型、公开接口分支覆盖和跨运行时场景共同证明。

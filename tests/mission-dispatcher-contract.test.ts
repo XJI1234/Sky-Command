@@ -396,6 +396,32 @@ describe("mission dispatcher contract", () => {
     await expect(resume).resolves.toMatchObject({ ok: true, state: { phase: "running" } });
   });
 
+  it("keeps a stop that already finished the mission as success instead of a conflicting command", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    const dispatcher = MissionDispatcher.create({
+      routeSource: { getMissionPayload: () => ({ ok: true as const, value: routePayload() }) },
+      relay: {
+        sendMission: async (_deviceId, payload) => ({ deviceId: "phone-1", missionId: payload.missionId, status: "succeeded" as const, detail: "accepted" }),
+        sendCommand: async () => new Promise((resolve) => { resolvers.push(resolve); }),
+        latestTelemetry: () => ({ deviceId: "phone-1", payload: { sdkRegistered: true, remoteControllerConnected: true, flightControllerConnected: true, connected: true, isFlying: false, motorsOn: false, batteryPercent: 80, pairingState: "PAIRED" }, capabilities: { waypointMission: true, waypointMissionSupport: "supported" } })
+      }
+    }, { createMissionId: () => "mission-1" });
+    await stage(dispatcher);
+    const upload = dispatcher.upload("phone-1"); resolvers.shift()!({ status: "succeeded" }); await upload;
+    const start = dispatcher.start("phone-1"); resolvers.shift()!({ status: "succeeded" }); await start;
+    dispatcher.recordExecutionStarted("phone-1", routePayload().fileName, 1, 0);
+
+    const stop = dispatcher.stop("phone-1");
+    expect(dispatcher.get("phone-1").phase).toBe("stopping");
+    dispatcher.recordExecutionTerminal("phone-1", routePayload().fileName, "completed", 1, 0);
+    expect(dispatcher.get("phone-1").phase).toBe("completed");
+    resolvers.shift()!({ status: "succeeded" });
+
+    await expect(stop).resolves.toMatchObject({ ok: true, operation: "stop", state: { phase: "completed" } });
+    await expect(dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: false, code: "ILLEGAL_PHASE", state: { phase: "completed" } });
+    await expect(dispatcher.pause("phone-1")).resolves.toMatchObject({ ok: false, code: "ILLEGAL_PHASE", state: { phase: "completed" } });
+  });
+
   it("keeps an unconfirmed pause non-repeatable while still allowing one stop", async () => {
     const fixture = makeFixture();
     await stage(fixture.dispatcher);
@@ -609,6 +635,48 @@ describe("mission dispatcher contract", () => {
     expect(two).toMatchObject({ ok: true, state: { missionId: "mission-phone-2", routeId: "route-2" } });
     expect(sentDevices.sort()).toEqual(["phone-1", "phone-2"]);
     expect(dispatcher.list().map((lane) => lane.deviceId)).toEqual(["phone-1", "phone-2"]);
+  });
+
+  it.each(["stage", "upload", "start"] as const)("keeps three other missions independent while A waits for %s", async (waitingAt) => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const dispatcher = MissionDispatcher.create({
+      routeSource: { getMissionPayload: (routeId) => ({ ok: true, value: { ...routePayload(), routeId } }) },
+      relay: {
+        sendMission: async (deviceId, payload) => {
+          if (deviceId === "A" && waitingAt === "stage") await pending;
+          return { deviceId, missionId: payload.missionId, status: "succeeded", detail: "accepted" };
+        },
+        sendCommand: async (deviceId, request) => {
+          if (deviceId === "A" && request.name === `wayline.${waitingAt}`) await pending;
+          return { deviceId, commandId: `${deviceId}-${request.name}`, status: "succeeded", detail: "accepted" };
+        },
+        latestTelemetry: (deviceId) => ({ deviceId, payload: { sdkRegistered: true }, capabilities: {} }),
+      },
+    }, { createMissionId: (deviceId) => `mission-${deviceId}` });
+    if (waitingAt !== "stage") await dispatcher.stage("A", "route-A");
+    if (waitingAt === "start") await dispatcher.upload("A");
+    const waiting = waitingAt === "stage" ? dispatcher.stage("A", "route-A") : dispatcher[waitingAt]("A");
+    const waitingPhase = dispatcher.get("A").phase;
+
+    for (const deviceId of ["B", "C", "D"]) {
+      expect((await dispatcher.stage(deviceId, `route-${deviceId}`)).ok).toBe(true);
+      expect((await dispatcher.upload(deviceId)).ok).toBe(true);
+      expect((await dispatcher.start(deviceId)).ok).toBe(true);
+      expect(dispatcher.get(deviceId).phase).toBe("starting");
+      expect(dispatcher.recordExecutionStarted(deviceId, "survey.kmz", 1, 0)).toMatchObject({ phase: "running", routeId: `route-${deviceId}` });
+      expect(dispatcher.get("A").phase).toBe(waitingPhase);
+    }
+    await dispatcher.pause("B");
+    expect(dispatcher.get("B").phase).toBe("paused");
+    expect(dispatcher.get("C").phase).toBe("running");
+    dispatcher.recordDisconnected("D");
+    expect(dispatcher.get("D").phase).toBe("disconnected");
+    expect(dispatcher.get("A").phase).toBe(waitingPhase);
+    expect(dispatcher.get("C").routeExecutionStarted).toBe(true);
+    release();
+    expect((await waiting).ok).toBe(true);
+    expect(dispatcher.get("A").phase).toBe(waitingAt === "stage" ? "staged" : waitingAt === "upload" ? "uploaded" : "starting");
   });
 
   it("contains hostile dependency results and retains a failed but inspectable lane", async () => {
@@ -857,7 +925,7 @@ describe("mission dispatcher contract", () => {
     resolveStop({ deviceId: "phone-1", commandId: "command-stop", status: "succeeded", detail: "ok" });
     await expect(pendingStop).resolves.toMatchObject({ ok: true, operation: "stop", state: { phase: "idle" } });
     resolveStart({ deviceId: "phone-1", commandId: "command-start", status: "succeeded", detail: "ok" });
-    await expect(pendingStart).resolves.toMatchObject({ ok: true, operation: "start", state: { phase: "idle" } });
+    await expect(pendingStart).resolves.toMatchObject({ ok: false, operation: "start", state: { phase: "idle" } });
   });
 
   it("stops from starting to match the aircraft, and refuses stop before start", async () => {

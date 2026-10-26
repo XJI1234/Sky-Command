@@ -2,6 +2,45 @@ import { describe, expect, it } from "vitest";
 import { operationFeedback } from "../src/production/operator-console/renderer/operation-feedback.js";
 
 describe("操作回调展示", () => {
+  it("手机拍照前存储检查失败不冒充 DJI 快门回调", () => {
+    const feedback = operationFeedback("photo-capture", {
+      ok: false, code: "PHOTO_ACTION_REJECTED",
+      platformError: { code: "STORAGE_NOT_READY", description: "source=relay-preflight; storage=INTERNAL[INTERNAL:INSERTED:left=23:photos=0]" },
+    });
+    expect(feedback.source).toBe("relay");
+    expect(feedback.outcome).toBe("not-called");
+    expect(feedback.message).toContain("尚未按快门");
+    expect(feedback.message).toContain("photos=0");
+    expect(feedback.message).not.toContain("MSDK 回调");
+    expect(feedback.message).not.toContain("已满");
+  });
+
+  it("读取存储状态超时与实际 DJI 拒绝仍有不同来源", () => {
+    const feedback = operationFeedback("photo-capture", {
+      ok: false, code: "PHOTO_ACTION_REJECTED",
+      platformError: { code: "STORAGE_STATUS_UNAVAILABLE", description: "source=relay-preflight; storage=unavailable" },
+    });
+    expect(feedback.source).toBe("relay");
+    expect(feedback.message).toContain("暂时读不到");
+    const actual = operationFeedback("photo-capture", {
+      ok: false, code: "PHOTO_ACTION_REJECTED",
+      platformError: { code: "CANNOT_START_TASK_ON_WEAK_GPS", description: "inner=CAMERA.StartShootPhoto:-472; storage=INTERNAL" },
+    });
+    expect(actual.source).toBe("dji");
+    expect(actual.message).toContain("MSDK 回调：失败");
+  });
+  it("存储未就绪时给出检查建议并保留原始错误，不推断存储已满", () => {
+    const description = "storage=INTERNAL[SDCARD:NOT_INSERTED:left=0,INTERNAL:INSERTED:left=23]";
+    const feedback = operationFeedback("photo-capture", {
+      ok: false, code: "PHOTO_ACTION_REJECTED",
+      platformError: { code: "STORAGE_NOT_READY", description },
+    });
+    expect(feedback.outcome).toBe("rejected");
+    expect(feedback.message).toContain("照片存储尚未就绪");
+    expect(feedback.message).toContain("错误码：STORAGE_NOT_READY");
+    expect(feedback.message).toContain(description);
+    expect(feedback.message).not.toContain("已满");
+  });
   it("将 DJI onFailure 原样显示为逐行回执", () => {
     const feedback = operationFeedback("mission-upload", {
       ok: true,
@@ -26,6 +65,30 @@ describe("操作回调展示", () => {
     ].join("\n"));
   });
 
+  it("航线暂停成功时显示 DJI onSuccess", () => {
+    expect(operationFeedback("mission-pause", {
+      ok: true,
+      value: { ok: true, value: { ok: true, operation: "pause", state: { phase: "paused" } } },
+    })).toEqual({
+      source: "dji",
+      outcome: "accepted",
+      message: ["MSDK 回调：成功", "原始类型：onSuccess"].join("\n"),
+    });
+  });
+
+  it("图传成功时显示 DJI onSuccess，而不是手机中继的笼统完成", () => {
+    const feedback = operationFeedback("stream-start", {
+      ok: true,
+      value: { ok: true, operation: "start", code: "SUCCEEDED", state: { phase: "streaming" } },
+    });
+
+    expect(feedback).toEqual({
+      source: "dji",
+      outcome: "accepted",
+      message: ["MSDK 回调：成功", "原始类型：onSuccess"].join("\n"),
+    });
+  });
+
   it("保留 DJI 图传动作拒绝的原始错误码和说明", () => {
     const feedback = operationFeedback("stream-start", {
       ok: false,
@@ -44,10 +107,10 @@ describe("操作回调展示", () => {
     ].join("\n"));
   });
 
-  it("将 DJI onSuccess 原样显示为逐行回执", () => {
-    const feedback = operationFeedback("flight-land", {
+  it.each(["land", "confirm-landing"])("%s 的 onSuccess 说明调用已受理，实际下降仍由遥测确认", (action) => {
+    const feedback = operationFeedback("flight-confirm", {
       ok: true,
-      value: { ok: true, action: "land", code: "SUCCEEDED" },
+      value: { ok: true, action, code: "SUCCEEDED" },
     });
 
     expect(feedback.source).toBe("dji");
@@ -55,7 +118,18 @@ describe("操作回调展示", () => {
     expect(feedback.message).toBe([
       "MSDK 回调：成功",
       "原始类型：onSuccess",
+      "说明：降落接口调用已受理；是否正在下降、是否落地请以飞控状态为准",
     ].join("\n"));
+  });
+
+  it("确认条件消失时说明没有调用 DJI，而不是显示调用成功", () => {
+    expect(operationFeedback("flight-confirm", {
+      ok: false, code: "PREFLIGHT_BLOCKED",
+      blockers: [{ code: "LANDING_CONFIRMATION_NOT_REQUIRED", message: "The aircraft has not requested landing confirmation." }],
+    })).toEqual({
+      source: "desktop", outcome: "not-called",
+      message: "未调用 DJI MSDK：飞控当前未请求确认降落，请查看当前飞行状态",
+    });
   });
 
   it("本地门禁拒绝时明确说明没有调用 DJI MSDK", () => {
@@ -134,6 +208,11 @@ describe("操作回调展示", () => {
       outcome: "accepted",
     });
     expect(operationFeedback("photo-capture", { ok: true, code: "CAPTURED" }).message).toContain("已拍下原图");
+    expect(operationFeedback("photo-fetch", { ok: false, code: "NOTHING_TO_FETCH" })).toEqual({
+      source: "relay",
+      outcome: "completed",
+      message: "飞机上没有电脑缺少的照片",
+    });
     expect(operationFeedback("photo-fetch", { ok: true, code: "SUCCEEDED" }).message).toContain("原图已保存");
     expect(operationFeedback("photo-fetch", { ok: true, value: { code: "SUCCEEDED", count: 3, fileName: "DJI_1.jpg" } }).message).toContain("已回传 3 张原图");
     expect(operationFeedback("photo-capture", { ok: false, code: "PHOTO_ACTION_REJECTED", errorCode: "CAMERA_BUSY", errorDescription: "inner=Camera/StartShootPhoto:-1" }).message).toContain("错误码：CAMERA_BUSY");

@@ -1,4 +1,6 @@
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { RelayDeviceSettings } from "../../adapters/relay-device-settings/index.js";
 import { DeviceConsole } from "../../modules/device-console/index.js";
@@ -132,19 +134,47 @@ const isOptions = (value: unknown): value is DesktopApplicationOptions => {
 const result = (ok: boolean, value: DesktopApplicationSnapshot, code?: DesktopApplicationCode): DesktopApplicationResult => ok
   ? freeze({ ok: true as const, value })
   : freeze({ ok: false as const, code: code!, value });
+const photoFileName = /\.(?:jpg|jpeg|dng)$/iu;
+const maxStoredPhotoBytes = 100 * 1024 * 1024;
+const hashFile = (path: string): Promise<string> => new Promise((resolve, reject) => {
+  const hash = createHash("sha256");
+  const stream = createReadStream(path);
+  stream.on("data", (chunk) => hash.update(chunk));
+  stream.on("error", reject);
+  stream.on("end", () => resolve(hash.digest("hex")));
+});
+const listStoredPhotos = async (directory: string, deviceId: string): Promise<readonly { readonly fileName: string; readonly size: number; readonly sha256: string }[]> => {
+  if (typeof deviceId !== "string" || deviceId.trim().length === 0 || deviceId.includes("..") || /[\\/]/u.test(deviceId)) return [];
+  let names: string[];
+  try { names = await readdir(join(directory, deviceId)); } catch (error) {
+    if (record(error)?.code === "ENOENT") return [];
+    throw error;
+  }
+  const stored: { fileName: string; size: number; sha256: string }[] = [];
+  for (const fileName of names) {
+    if (!photoFileName.test(fileName) || fileName.includes("..") || /[\\/]/u.test(fileName)) continue;
+    try {
+      const path = join(directory, deviceId, fileName);
+      const info = await stat(path);
+      if (!info.isFile() || info.size < 1 || info.size > maxStoredPhotoBytes) continue;
+      stored.push({ fileName, size: info.size, sha256: await hashFile(path) });
+    } catch { /* an unreadable file stays out of the manifest and can be fetched again */ }
+  }
+  return stored;
+};
 const photoDirectoryFs = (directory: string) => freeze({
-  writeAtomic: (deviceId: string, fileName: string, bytes: Uint8Array): boolean => {
+  writeAtomic: async (deviceId: string, fileName: string, bytes: Uint8Array): Promise<boolean> => {
     if (deviceId.includes("..") || fileName.includes("..") || /[\\/]/u.test(fileName)) return false;
     const folder = join(directory, deviceId);
     const destination = join(folder, fileName);
     const temporary = `${destination}.tmp`;
     try {
-      mkdirSync(folder, { recursive: true });
-      writeFileSync(temporary, bytes);
-      renameSync(temporary, destination);
+      await mkdir(folder, { recursive: true });
+      await writeFile(temporary, bytes);
+      await rename(temporary, destination);
       return true;
     } catch {
-      try { unlinkSync(temporary); } catch { /* leftover temp files must not fail the transfer */ }
+      try { await unlink(temporary); } catch { /* leftover temp files must not fail the transfer */ }
       return false;
     }
   }
@@ -162,17 +192,22 @@ function create(raw: unknown): DesktopApplicationCreateResult {
     const relay = NodeRuntime.createRelay({
       ...options.relay,
       address: freeze({ host: options.relay.address.host, port: network.value.relayPort }),
-      onPhoto: (deviceId, file) => {
+      onPhoto: async (deviceId, file, receipt) => {
         const control = photoHolder.control;
         if (control === null) return false;
+        const confirmStored = control.storedConfirmation(deviceId);
         let accepted: string;
-        try { accepted = control.inbox.accept(deviceId, file); } catch { return false; }
+        try { accepted = await control.inbox.accept(deviceId, file); } catch { return false; }
         if (accepted !== "accepted" && accepted !== "duplicate") return false;
-        try { control.recordStored(deviceId, file.fileName, file.sha256); } catch { /* the inbox already owns the file */ }
+        if (accepted === "duplicate" && !control.inbox.list(deviceId).some((stored) => stored.fileName === file.fileName && stored.sha256 === file.sha256)) return false;
+        if (receipt.isCurrent()) {
+          try { confirmStored(file.fileName, file.sha256); } catch { /* the inbox already owns the file */ }
+        }
         return true;
       },
     });
     const operations = RelayOperationsAdapter.create({ relay });
+    const pairingControl = DeviceConsole.PairingController.create({ relay: operations.pairingGateway() });
     const settingsGateway = operations.settingsGateway();
     const deviceSettings = DeviceConsole.DeviceSettingsPanel.create({
       port: RelayDeviceSettings.create({
@@ -209,7 +244,10 @@ function create(raw: unknown): DesktopApplicationCreateResult {
     const photos = CameraPhotoControl.create({
       relay: operations.photoGateway(),
       now: options.now,
-      ...(options.photos === undefined ? {} : { fs: photoDirectoryFs(options.photos.directory) }),
+      ...(options.photos === undefined ? {} : {
+        fs: photoDirectoryFs(options.photos.directory),
+        storedPhotos: (deviceId: string) => listStoredPhotos(options.photos!.directory, deviceId),
+      }),
     });
     photoHolder.control = photos;
     const runtime = DesktopRuntime.create({
@@ -227,6 +265,7 @@ function create(raw: unknown): DesktopApplicationCreateResult {
     });
     const workflow = OperationWorkflow.create({
       relayOperations: operations,
+      pairingControl,
       routeLibrary: routeCreated.value,
       missionControl,
       liveStreamControl,
@@ -234,8 +273,10 @@ function create(raw: unknown): DesktopApplicationCreateResult {
       flightControl,
       deviceSettings,
       photoControl: freeze({
+        get: (deviceId: string) => photos.get(deviceId),
         capture: (deviceId: string) => photos.capture(deviceId),
         fetch: (deviceId: string) => photos.fetch(deviceId),
+        stopFetch: (deviceId: string) => photos.stopFetch(deviceId),
         recordDisconnected: (deviceId: string) => photos.recordDisconnected(deviceId),
         subscribe: (listener: (snapshot: unknown) => void) => photos.subscribe((snapshot) => listener(snapshot)),
       }),

@@ -51,6 +51,12 @@ instance.subscribe(listener) -> unsubscribe
 
 ## 边界、兼容和验证
 
+`onPhoto(deviceId, file)` 可返回 `boolean | Promise<boolean>`。媒体接收模块只在实际保存确认后发送 `media-result`；Promise 等待不得阻塞遥测、命令或连接关闭。断线、媒体替换后的迟到保存结果不得确认旧传输。
+
+`sendCommand` 的 fetch 请求可带本地 `onPhotoProgress` 回调，该函数不编码进命令帧。仅当前连接+命令 ID 的递增序号、与本端已保存数量一致的手机帧可转发；当前文件阶段和字节不得倒退。手机 sending 只表示开始发送，桌面接收字节以 media-intake 为准。本地接收/校验/保存优先于迟到手机下载通知，saved 才增加数量。媒体失败、命令终态及断线均清理接收归属；旧请求、旧连接和终态后的进度不转发。旧手机没有此帧时，桌面仍报告真实 receiving/verifying/saving/saved。
+
+`onPhoto` 实际第三参数为本地接收凭据 `{ isCurrent(): boolean }`；异步持久化后调用方须重检凭据，并调用保存开始时捕获的相机 storedConfirmation，再把保存事实计入上层本次批次。凭据绑定原连接、媒体和 fetch 等待器，不向 wire/UI 暴露会话 ID。没有归属 fetch 的媒体绝不产生本次批次凭据；成功命令先于保存确认时，已有媒体凭据保留到保存完成，新 fetch 开始时仍清理旧归属。命令成功后的手机进度不再转发。
+
 `stop` 幂等，先关闭服务连接以走正常取消/移除路径，再发布最终停止快照；绑定失败后可重新启动且不虚构设备或待处理项。根模块只可导入七个子接口与语言标准库，不得导入 WebSocket、Electron、Node 网络/文件系统、Android、DJI、航线库或 UI；它不解析、序列化、记录或存储原始帧。
 
 协议与 `MSDK-relay/relay-gateway/protocol-core` 线兼容，版本为 `"1"`。不可信网络字节不得穿过公共接口抛异常；帧解析前先限长，严格 UTF-8，拒绝重复键、尾随 JSON、控制字符、路径穿越、不安全 Base64、过度嵌套和资源耗尽；错误不回显载荷或密钥，所有外部对象/字节均复制或冻结。

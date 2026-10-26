@@ -43,6 +43,7 @@ function create(dependencies: OperationWorkflowDependencies) {
   let previousOnline = new Set(onlineIds());
   let previousSessions = sessionMap();
   const connectionEpochs = new Map<string, number>();
+  const flightGenerations = new Map<string, number>();
   const reconnectGrace = new Map<string, () => void>();
   const cancelReconnectGrace = (deviceId: string): void => {
     const cancel = reconnectGrace.get(deviceId);
@@ -91,7 +92,8 @@ function create(dependencies: OperationWorkflowDependencies) {
   };
   const pendingFlightAction = (deviceId: string): unknown => { try { return dependencies.flightControl.get(deviceId); } catch { return null; } };
   const routes = (): readonly unknown[] => { try { const values = dependencies.routeLibrary.list(); return Array.isArray(values) ? values : []; } catch { return []; } };
-  const snapshot = () => WorkflowSnapshot.create({
+  let frozenSnapshot: ReturnType<typeof WorkflowSnapshot.create> | null = null;
+  const snapshot = () => frozenSnapshot ?? WorkflowSnapshot.create({
     devices: deviceRecords().map(({ deviceId }) => {
       const rawTelemetry = telemetryRaw(deviceId);
       return freeze({
@@ -106,6 +108,7 @@ function create(dependencies: OperationWorkflowDependencies) {
         mission: task(deviceId),
         stream: stream(deviceId),
         settings: settings(deviceId),
+        photo: dependencies.photoControl?.get?.(deviceId) ?? null,
         pendingFlightAction: pendingFlightAction(deviceId),
         landingIntent: landingIntents.get(deviceId),
       });
@@ -162,6 +165,7 @@ function create(dependencies: OperationWorkflowDependencies) {
         const nextSession = sessions.get(deviceId);
         const replaced = !gone && previousSession !== undefined && nextSession !== undefined && previousSession !== nextSession;
         if (!gone && !replaced) continue;
+        flightGenerations.set(deviceId, (flightGenerations.get(deviceId) ?? 0) + 1);
         // 闪断或换会话：作废未点的危险确认和图传，但不拆掉已在执行的航线回执。
         clearFlightConfirm(deviceId);
         landingIntents.delete(deviceId);
@@ -241,6 +245,31 @@ function create(dependencies: OperationWorkflowDependencies) {
     publish();
     return result;
   };
+  const pairing = async (deviceId: string, action: "start" | "stop"): Promise<WorkflowResult> => {
+    if (disposed) return failure("DISPOSED");
+    if (!validId(deviceId)) return failure("INVALID_INPUT");
+    if (!online(deviceId)) return failure("DEVICE_OFFLINE");
+    if (dependencies.pairingControl === undefined) return failure("DEPENDENCY_FAILURE");
+    if (action === "start") {
+      const payload = read(controlTelemetryRaw(deviceId), "payload");
+      const decision = CapabilityGate.evaluate({
+        operation: "pairing",
+        relayConnected: true,
+        sdkAvailability: read(payload, "sdkAvailability"),
+        remoteController: read(payload, "remoteController"),
+        flightController: read(payload, "flightController"),
+      });
+      if (!decision.ok || !decision.value.enabled) return failure("CAPABILITY_BLOCKED", decision.ok ? { reason: decision.value.reason } : undefined);
+    }
+    const sessionId = sessionMap().get(deviceId);
+    const outcome = await dependencies.pairingControl[action](deviceId);
+    if (!online(deviceId) || sessionMap().get(deviceId) !== sessionId) return failure("DEVICE_OFFLINE");
+    if (outcome.ok) return success(outcome);
+    if (outcome.reason === "busy") return failure("OPERATION_IN_PROGRESS");
+    if (outcome.reason === "timeout") return failure("RESULT_UNCONFIRMED");
+    if (outcome.reason === "rejected") return failure("RELAY_REJECTED");
+    return failure("DEPENDENCY_FAILURE");
+  };
   const stopFailedOnlineStreams = async (): Promise<void> => {
     const listed = read(media(), "streams");
     const streams: unknown[] = Array.isArray(listed) ? listed : [];
@@ -249,7 +278,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!validId(deviceId) || read(entry, "phase") !== "failed" || !online(deviceId)) continue;
       const phase = read(stream(deviceId), "phase");
       if (phase !== "starting" && phase !== "streaming") continue;
-      try { await actions.stopStream(deviceId); } catch { /* isolate a single failed-lane stop */ }
+      void actions.stopStream(deviceId).catch(() => undefined);
     }
   };
   return freeze({
@@ -325,6 +354,8 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!validId(deviceId) || !online(deviceId)) return failure("DEVICE_OFFLINE");
       return await refreshControl(deviceId) === null ? failure("STATUS_REFRESH_FAILED") : success();
     }),
+    startPairing: (deviceId: string) => published(() => pairing(deviceId, "start")),
+    stopPairing: (deviceId: string) => published(() => pairing(deviceId, "stop")),
     measurePhoneLink: async (deviceId: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
       if (!validId(deviceId) || !online(deviceId)) return failure("DEVICE_OFFLINE");
@@ -351,36 +382,22 @@ function create(dependencies: OperationWorkflowDependencies) {
       if (!online(deviceId)) return failure("DEVICE_OFFLINE");
       const control = dependencies.photoControl;
       if (control === undefined) return failure("DEPENDENCY_FAILURE");
-      const seen = new Set<string>();
-      let count = 0;
-      let consecutiveFailures = 0;
-      let lastName: string | undefined;
-      for (;;) {
-        let result: unknown;
-        try { result = await control.fetch(deviceId); } catch { return failure("DEPENDENCY_FAILURE"); }
+      try {
+        const result = await control.fetch(deviceId);
         const code = read(result, "code");
-        if (code === "NOTHING_TO_FETCH") {
-          return count === 0 ? failure("NOTHING_TO_FETCH", result) : success({ code: "SUCCEEDED", count, fileName: lastName ?? null });
-        }
-        if (read(result, "ok") !== true) {
-          consecutiveFailures += 1;
-          if (count === 0 || consecutiveFailures >= 4) {
-            return count === 0 ? failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result) : success({ code: "SUCCEEDED", count, fileName: lastName ?? null });
-          }
-          publish();
-          continue;
-        }
-        consecutiveFailures = 0;
-        const name = read(result, "fileName");
-        if (typeof name !== "string" || seen.has(name)) {
-          return success(count === 0 ? result : { code: "SUCCEEDED", count, fileName: lastName ?? null });
-        }
-        seen.add(name);
-        lastName = name;
-        count += 1;
-        if (count >= 200) return success({ code: "SUCCEEDED", count, fileName: lastName });
-        publish();
-      }
+        return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
+      } catch { return failure("DEPENDENCY_FAILURE"); }
+    }),
+    stopPhotoFetch: (deviceId: string) => disposed ? Promise.resolve(failure("DISPOSED")) : published(async () => {
+      if (!validId(deviceId)) return failure("INVALID_INPUT");
+      if (!online(deviceId)) return failure("DEVICE_OFFLINE");
+      const control = dependencies.photoControl;
+      if (control?.stopFetch === undefined) return failure("DEPENDENCY_FAILURE");
+      try {
+        const result = await control.stopFetch(deviceId);
+        const code = read(result, "code");
+        return read(result, "ok") === true ? success(result) : failure(typeof code === "string" ? code : "DEPENDENCY_FAILURE", result);
+      } catch { return failure("DEPENDENCY_FAILURE"); }
     }),
     requestFlightAction: async (deviceId: string, action: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
@@ -396,10 +413,16 @@ function create(dependencies: OperationWorkflowDependencies) {
     },
     confirmFlightAction: async (deviceId: string, confirmationId: string): Promise<WorkflowResult> => {
       if (disposed) return failure("DISPOSED");
+      const sessionAtStart = sessionMap().get(deviceId);
+      const generationAtStart = flightGenerations.get(deviceId) ?? 0;
       const result = await actions.confirmFlight(deviceId, confirmationId);
-      if (result.ok) {
-        pending.delete(deviceId);
-        pendingFlightActions.delete(deviceId);
+      if (disposed) return result;
+      const live = sessionMap().get(deviceId) === sessionAtStart && (flightGenerations.get(deviceId) ?? 0) === generationAtStart;
+      if (live && result.ok) {
+        if (pending.get(deviceId) === confirmationId) {
+          pending.delete(deviceId);
+          pendingFlightActions.delete(deviceId);
+        }
         const inner = read(result, "value");
         if (read(inner, "ok") === true && read(inner, "code") === "SUCCEEDED") {
           const action = read(inner, "action");
@@ -416,7 +439,7 @@ function create(dependencies: OperationWorkflowDependencies) {
       pending.delete(deviceId); publish(); return result;
     },
     forgetCompletedTask: (deviceId: string): WorkflowResult => { if (disposed) return failure("DISPOSED"); if (!validId(deviceId)) return failure("INVALID_INPUT"); if (!stableTask(deviceId)) return failure("TASK_ACTIVE"); try { const forgotten = dependencies.missionControl.forget(deviceId); if (forgotten !== true) return failure("TASK_NOT_FORGETTABLE"); publish(); return success(); } catch { return failure("DEPENDENCY_FAILURE"); } },
-    dispose: () => { if (disposed) return; disposed = true; for (const deviceId of [...reconnectGrace.keys()]) cancelReconnectGrace(deviceId); subscriptions.dispose(); listeners.clear(); pending.clear(); pendingFlightActions.clear(); landingIntents.clear(); unavailableVideoSources.clear(); connectionEpochs.clear(); selectedRouteId = null; selectedVideoDeviceId = null; }
+    dispose: () => { if (disposed) return; disposed = true; for (const deviceId of [...reconnectGrace.keys()]) cancelReconnectGrace(deviceId); subscriptions.dispose(); listeners.clear(); pending.clear(); pendingFlightActions.clear(); landingIntents.clear(); unavailableVideoSources.clear(); connectionEpochs.clear(); flightGenerations.clear(); selectedRouteId = null; selectedVideoDeviceId = null; frozenSnapshot = snapshot(); }
   });
 }
 

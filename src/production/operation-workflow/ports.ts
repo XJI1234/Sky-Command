@@ -1,4 +1,4 @@
-import type { DeviceSettingsPanelInstance } from "../../modules/device-console/index.js";
+import type { DeviceSettingsPanelInstance, PairingControllerInstance } from "../../modules/device-console/index.js";
 import type { FlightControlInstance } from "../../modules/flight-control/index.js";
 import type { LiveStreamControlInstance } from "../../modules/live-stream-control/index.js";
 import type { MediaPipelineInstance } from "../../modules/media-pipeline/index.js";
@@ -29,8 +29,10 @@ export type DeviceSettingsPort = Pick<DeviceSettingsPanelInstance, "snapshot" | 
 
 /** Owns still-photo capture and original-photo fetch for the selected online phone. */
 export interface PhotoControlPort {
+  readonly get?: (deviceId: string) => unknown;
   readonly capture: (deviceId: string) => Promise<unknown>;
   readonly fetch: (deviceId: string) => Promise<unknown>;
+  readonly stopFetch?: (deviceId: string) => Promise<unknown>;
   readonly recordDisconnected: (deviceId: string) => unknown;
   readonly subscribe: (listener: (snapshot: unknown) => void) => () => void;
 }
@@ -43,6 +45,7 @@ export interface HardwareReadinessPort {
 
 export interface OperationWorkflowDependencies {
   readonly relayOperations: RelayOperationsPort;
+  readonly pairingControl?: PairingControllerInstance;
   readonly routeLibrary: RouteLibraryPort;
   readonly missionControl: MissionControlPort;
   readonly liveStreamControl: LiveStreamControlPort;

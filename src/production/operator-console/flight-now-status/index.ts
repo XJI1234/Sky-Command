@@ -52,6 +52,30 @@ export function streamErrorStatus(input: Readonly<{
   return [input.code, input.description].filter((part): part is string => part !== null).join(" ");
 }
 
+  export function waypointProgress(index: unknown, total: unknown) {
+    const count = typeof total === "number" && Number.isSafeInteger(total) && total > 0 && total <= 1e5 ? total : null;
+    const current = typeof index === "number" && Number.isSafeInteger(index) && index >= 0 ? index : null;
+    if (current !== null && count !== null && current < count) {
+      const position = current + 1;
+      return freeze({ label: `${position} / ${count}`, caption: `\u822A\u70B9 ${position} / ${count}`, value: position, max: count });
+    }
+    if (current !== null) return freeze({ label: `\u822A\u70B9 ${current}`, caption: `\u822A\u70B9 ${current}`, value: null, max: null });
+    if (count !== null) return freeze({ label: `\u5171 ${count} \u4E2A`, caption: `\u5171 ${count} \u4E2A\u822A\u70B9`, value: null, max: null });
+    return null;
+  }
+  export function missionRunPhase(dji: string | null, phone: string | null) {
+    if (phone === "FAILED") return "\u5DF2\u4E2D\u65AD";
+    if (dji === "FINISHED" || phone === "FINISHED") return "\u5DF2\u5B8C\u6210";
+    if (dji === "RETURN_TO_START_POINT") return "\u8FD4\u56DE\u8D77\u70B9";
+    if (dji === "ENTER_WAYLINE") return "\u8FDB\u5165\u9996\u822A\u70B9";
+    if (dji === "EXECUTING") return "\u6267\u884C\u4E2D";
+    if (dji === "INTERRUPTED" || dji === "PAUSED" || phone === "PAUSED") return "\u5DF2\u6682\u505C";
+    if (phone === "EXECUTING") return "\u6267\u884C\u4E2D";
+    if (dji === "STOPPING" || phone === "STOPPING") return "\u6B63\u5728\u505C\u6B62";
+    if (dji === "PREPARING" || dji === "RECOVERING" || phone === "STARTING") return "\u542F\u52A8\u4E2D";
+    return null;
+  }
+
 export function missionExecutionNowStatus(input: Readonly<{
   readonly selected: boolean;
   readonly execution: string | null;
@@ -146,11 +170,33 @@ export function hudText(value: unknown): string {
 }
 
 const TAKEOFF_MODES = new Set(["AUTO_TAKEOFF"]);
-const LAND_MODES = new Set(["AUTO_LANDING", "FORCE_LANDING"]);
+const LAND_MODES = new Set(["AUTO_LANDING", "FORCE_LANDING", "CONFIRM_LANDING"]);
 const HOME_MODES = new Set(["GO_HOME", "AUTO_RETURN"]);
 const PHONE_MISSION = new Set(["STARTING", "EXECUTING", "PAUSED"]);
-const DJI_MISSION = new Set(["PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "RETURN_TO_START_POINT"]);
-const DJI_MISSION_IDLE = new Set(["IDLE", "READY", "UPLOADING", "FINISHED", "INTERRUPTED", "DISCONNECTED", "NOT_SUPPORTED", "UNKNOWN"]);
+const DJI_MISSION = new Set(["PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "INTERRUPTED", "RETURN_TO_START_POINT"]);
+const DJI_MISSION_IDLE = new Set(["IDLE", "READY", "UPLOADING", "FINISHED", "DISCONNECTED", "NOT_SUPPORTED", "UNKNOWN"]);
+
+export function landingProtectionNotice(input: Readonly<{
+  readonly flightController: string | null;
+  readonly flying: string | null;
+  readonly motorsOn: boolean | null;
+  readonly landingConfirmationNeeded: boolean | null;
+  readonly landingProtectionState: string | null;
+  readonly telemetryReceivedAtMs: number | null;
+  readonly noticeAtMs: number | null;
+  readonly nowMs: number;
+}>): string | null {
+  if (input.flightController !== "connected"
+    || (input.flying === "grounded" && input.motorsOn === false)
+    || input.landingConfirmationNeeded === true
+    || input.landingProtectionState === "SAFE_TO_LAND") return null;
+  const current = input.landingProtectionState === "NOT_SAFE_TO_LAND";
+  const atMs = current ? input.telemetryReceivedAtMs : input.noticeAtMs;
+  if (atMs === null || !Number.isFinite(atMs) || input.nowMs < atMs || input.nowMs - atMs > 20_000) return null;
+  return current
+    ? "飞机判定当前不适合降落，请检查下方地面并留意飞行状态。"
+    : "刚才飞机曾判定不适合降落，请留意当前飞行状态。";
+}
 
 export function monitorAircraftStatus(input: Readonly<{
   readonly flying: string | null;
@@ -162,6 +208,7 @@ export function monitorAircraftStatus(input: Readonly<{
   readonly missionExecution: string | null;
   readonly djiMissionState: string | null;
   readonly waypointIndex: number | null;
+  readonly waypointTotal?: number | null;
   readonly flightController: string | null;
 }>): Readonly<{ readonly label: string; readonly detail: string }> {
   if (input.flightController === "disconnected") return { label: "飞控未连接", detail: "" };
@@ -170,9 +217,12 @@ export function monitorAircraftStatus(input: Readonly<{
   const djiActive = input.djiMissionState !== null && DJI_MISSION.has(input.djiMissionState);
   const djiIdle = input.djiMissionState !== null && DJI_MISSION_IDLE.has(input.djiMissionState);
   const phoneActive = input.missionExecution !== null && PHONE_MISSION.has(input.missionExecution);
-  const missionActive = djiActive || (phoneActive && !djiIdle);
+  const phoneTerminal = input.missionExecution === "FINISHED" || input.missionExecution === "FAILED";
+  const djiExited = input.djiMissionState === "FINISHED" || input.djiMissionState === "READY" || input.djiMissionState === "IDLE";
+  const activeWhenDjiExits = input.missionExecution === "PAUSED" || input.missionExecution === "EXECUTING" || input.missionExecution === "STOPPING";
+  const missionActive = !phoneTerminal && !(djiExited && activeWhenDjiExits) && (djiActive || (phoneActive && !djiIdle));
   const aircraftExecuting = input.djiMissionState === "EXECUTING" || input.djiMissionState === "ENTER_WAYLINE" || input.djiMissionState === "RETURN_TO_START_POINT";
-  const paused = input.djiMissionState === "PAUSED" || (input.missionExecution === "PAUSED" && !aircraftExecuting);
+  const paused = input.djiMissionState === "PAUSED" || input.djiMissionState === "INTERRUPTED" || (input.missionExecution === "PAUSED" && !aircraftExecuting);
   const starting = !paused && (
     input.djiMissionState === "PREPARING"
     || input.djiMissionState === "RECOVERING"
@@ -180,15 +230,14 @@ export function monitorAircraftStatus(input: Readonly<{
     || (input.missionExecution === "STARTING" && !aircraftExecuting && input.djiMissionState !== "PAUSED")
   );
   const protection = input.landingProtectionState === "NOT_SAFE_TO_LAND" ? "当前不适合降落" : "";
-  const waypoint = typeof input.waypointIndex === "number" && Number.isSafeInteger(input.waypointIndex) && input.waypointIndex >= 0
-    ? `航点 ${input.waypointIndex}`
-    : "";
+  const progressed = waypointProgress(input.waypointIndex, input.waypointTotal);
+  const waypoint = progressed === null ? "" : progressed.caption;
   const returningHome = (mode !== null && HOME_MODES.has(mode)) || (flying === "flying" && input.lowBatteryRthState === "COUNTING_DOWN");
 
   if (flying === "grounded" && input.motorsOn === false) {
     return { label: "地面", detail: "" };
   }
-  if (input.landingConfirmationNeeded === true || mode === "CONFIRM_LANDING") {
+  if (input.landingConfirmationNeeded === true) {
     return { label: "继续降落", detail: protection };
   }
   if (mode !== null && LAND_MODES.has(mode)) {
@@ -214,7 +263,7 @@ export function monitorAircraftStatus(input: Readonly<{
   return { label: "未确认", detail: "" };
 }
 
-const WAYLINE_STOP_DJI = new Set(["PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "RETURN_TO_START_POINT"]);
+const WAYLINE_STOP_DJI = new Set(["PREPARING", "RECOVERING", "ENTER_WAYLINE", "EXECUTING", "PAUSED", "INTERRUPTED", "RETURN_TO_START_POINT"]);
 const WAYLINE_STOP_PHONE = new Set(["STARTING", "EXECUTING", "PAUSED", "STOPPING"]);
 
 export type MonitorHoverCommand =
@@ -226,8 +275,10 @@ export function monitorHoverCommand(input: Parameters<typeof monitorAircraftStat
   if (input.flightController === "disconnected") return freeze({ kind: "none", state: "failed", detail: "飞控未连接" });
   const mode = input.flightMode;
   const flying = input.flying === "flying" || input.flying === "grounded" ? input.flying : null;
-  const wayline = (input.djiMissionState !== null && WAYLINE_STOP_DJI.has(input.djiMissionState))
-    || (input.missionExecution !== null && WAYLINE_STOP_PHONE.has(input.missionExecution));
+  const phoneTerminal = input.missionExecution === "FINISHED" || input.missionExecution === "FAILED";
+  const djiExited = input.djiMissionState === "FINISHED" || input.djiMissionState === "READY" || input.djiMissionState === "IDLE";
+  const wayline = !phoneTerminal && !djiExited && ((input.djiMissionState !== null && WAYLINE_STOP_DJI.has(input.djiMissionState))
+    || (input.missionExecution !== null && WAYLINE_STOP_PHONE.has(input.missionExecution)));
   const returningHome = (mode !== null && HOME_MODES.has(mode)) || (flying === "flying" && input.lowBatteryRthState === "COUNTING_DOWN");
   if (flying === "grounded" && input.motorsOn === false) return freeze({ kind: "none", state: "done", detail: "飞机在地面" });
   if (input.landingConfirmationNeeded === true || mode === "CONFIRM_LANDING") return freeze({ kind: "flight", action: "stop-auto-landing", detail: "正在停止自动降落，飞机悬停" });
@@ -252,8 +303,12 @@ export function monitorRouteControl(input: Readonly<{
   const phase = input.missionPhase;
   const dji = input.djiMissionState;
   const phone = input.missionExecution;
+  if (phase === "failed" || phase === "completed") return "choose";
+  if ((phone === "FAILED" || phone === "FINISHED") && phase !== "starting") return "choose";
+  const djiExited = dji === "FINISHED" || dji === "READY" || dji === "IDLE";
+  if (djiExited && phase !== "starting") return "choose";
   const djiExecuting = dji !== null && ROUTE_EXECUTING_DJI.has(dji);
-  const aircraftPaused = dji === "PAUSED" || (phone === "PAUSED" && !djiExecuting);
+  const aircraftPaused = dji === "PAUSED" || dji === "INTERRUPTED" || (phone === "PAUSED" && !djiExecuting);
   const aircraftExecuting = djiExecuting || phone === "EXECUTING";
   if (phase === "stopping" || phone === "STOPPING") return "stopping";
   if (phase === "resuming") return aircraftExecuting ? "pause" : "resume";
@@ -280,7 +335,7 @@ export function monitorDirectFlight(input: Readonly<{
   const mode = input.flightMode;
   const flying = input.flying === "flying" || input.flying === "grounded" ? input.flying : null;
   const onGround = flying === "grounded" && input.motorsOn === false;
-  const confirmLanding = !onGround && (input.landingConfirmationNeeded === true || mode === "CONFIRM_LANDING");
+  const confirmLanding = !onGround && input.landingConfirmationNeeded === true;
   const returningHome = !onGround && !confirmLanding && ((mode !== null && HOME_MODES.has(mode)) || (flying === "flying" && input.lowBatteryRthState === "COUNTING_DOWN"));
   return freeze({
     home: returningHome ? freeze({ label: "停止返航", mode: "stop-go-home" }) : freeze({ label: "返航", mode: "return-home" }),
@@ -331,6 +386,8 @@ export function monitorStreamToggle(input: Readonly<{
 }
 
 export const FlightNowStatus = freeze({
+  waypointProgress,
+  missionRunPhase,
   EMPTY_STATUS,
   commandReachStatus,
   streamPushStatus,

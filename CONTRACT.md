@@ -346,6 +346,7 @@ live-stream-control
 | 主进程能力受限暴露 | `app-shell` | `ipc-bridge` |
 | 本地设置持久化 | `desktop-settings` | `settings-store` |
 | 局域网地址与手动覆盖 | `desktop-settings` | `network-settings` |
+| 就绪后的 WLAN 自动发现公告与退出清理 | `app-shell` 宿主 / Node SDK 宿主 | `production/relay-discovery`（[契约](src/production/relay-discovery/CONTRACT.md)）；仅公告端点，不接管手机会话或业务命令 |
 | 地图凭据与底图配置 | `desktop-settings` | `map-settings` |
 | 接受手机连接与会话管理 | `relay-link` | `relay-server`、`device-registry` |
 | 协议帧编解码与校验 | `relay-link` | `protocol-core` |
@@ -480,3 +481,9 @@ live-stream-control
 - 手机端新增生产公开命令时，必须同时在本表和手机端 §8.2 能力字段对应表中增加对应行，否则电脑端不得实现；
 - 下发方必须先取得 `capability-gate` 的判定结果，再决定是否下发；
 - 本表不规定命令的触发界面。界面属于对应模块的工作区层。
+
+## 飞机定位只读扩展（2026-10-26）
+
+连接快照增加 navigation：headingDegrees 为 [0,360)，positionSampleId 为安全采样标识，positionAgeMillis 为非负安全整数，gpsIsValid 为可空布尔，locationAltitudeMeters / takeoffAltitudeMeters 只保留有限原始值；heightReference 固定 unknown，不推导椭球高。飞控明确断开时 navigation 为 null，既有 pose 形状不变。字段缺失或非法时为 null，协议保持 v1。
+
+航线地图在独立 CustomDataSource 展示各设备最后有效位置，当前任务设备高亮。点击仅查看，不能更改分配、发送命令或移动相机。采样时间由电脑接收时间减手机单调时钟年龄锚定，同一采样不因重复遥测而变新；超过 5 秒变灰，断连立即保留灰色最后位置。缺少位置不建点，航向缺失使用无方向图标；高度基准不明时明确平面定位，不把相对起飞点高度放入地图高度。图层随地图切换保留，卸载释放；静止不强制持续绘制。

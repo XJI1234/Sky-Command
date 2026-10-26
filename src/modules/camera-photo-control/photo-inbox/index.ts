@@ -14,14 +14,16 @@ export interface PhotoMediaFile {
 
 export type PhotoInboxAccept = "accepted" | "duplicate" | "rejected";
 export interface PhotoInboxFs {
-  writeAtomic(deviceId: string, fileName: string, bytes: Uint8Array): boolean;
+  writeAtomic(deviceId: string, fileName: string, bytes: Uint8Array): boolean | Promise<boolean>;
 }
 export interface PhotoInboxOptions {
   readonly now: () => number;
   readonly fs?: PhotoInboxFs;
 }
 export interface PhotoInboxInstance {
-  accept(deviceId: string, file: PhotoMediaFile): PhotoInboxAccept;
+  accept(deviceId: string, file: PhotoMediaFile): PhotoInboxAccept | Promise<PhotoInboxAccept>;
+  /** Register a photo already stored on disk. Does not write or replace bytes. */
+  remember(deviceId: string, photo: Pick<StoredPhoto, "fileName" | "size" | "sha256">): PhotoInboxAccept;
   list(deviceId: string): readonly StoredPhoto[];
   forget(deviceId: string): boolean;
   subscribe(listener: (deviceId: string, photos: readonly StoredPhoto[]) => void): () => void;
@@ -44,26 +46,56 @@ const validPhotoFile = (file: PhotoMediaFile): boolean => {
 
 function create(options: PhotoInboxOptions): PhotoInboxInstance {
   const photos = new Map<string, StoredPhoto[]>();
+  const saving = new Map<string, Array<{ fileName: string; sha256: string; result: Promise<PhotoInboxAccept> }>>();
   const listeners = new Set<(deviceId: string, photos: readonly StoredPhoto[]) => void>();
   const publish = (deviceId: string): void => {
     const current = freeze([...(photos.get(deviceId) ?? [])]);
     for (const listener of [...listeners]) { try { listener(deviceId, current); } catch { /* isolate */ } }
   };
+  const remember = (deviceId: string, photo: Pick<StoredPhoto, "fileName" | "size" | "sha256">): PhotoInboxAccept => {
+    if (!validId(deviceId) || !validPhotoName(photo?.fileName) || !sha256Pattern.test(photo?.sha256 ?? "")) return "rejected";
+    if (!Number.isSafeInteger(photo.size) || photo.size < 1 || photo.size > maxPhotoBytes) return "rejected";
+    const existing = photos.get(deviceId) ?? [];
+    if (existing.some((item) => item.fileName === photo.fileName || item.sha256 === photo.sha256)) return "duplicate";
+    const receivedAtMs = options.now();
+    if (!Number.isSafeInteger(receivedAtMs) || receivedAtMs < 0) return "rejected";
+    photos.set(deviceId, [...existing, freeze({ fileName: photo.fileName, size: photo.size, sha256: photo.sha256, receivedAtMs })]);
+    publish(deviceId);
+    return "accepted";
+  };
   return freeze({
+    remember,
     accept: (deviceId, file) => {
       if (!validId(deviceId) || !validPhotoFile(file)) return "rejected";
       const existing = photos.get(deviceId) ?? [];
       if (existing.some((item) => item.fileName === file.fileName || item.sha256 === file.sha256)) return "duplicate";
-      if (options.fs !== undefined) {
-        let persisted = false;
-        try { persisted = options.fs.writeAtomic(deviceId, file.fileName, file.bytes.slice()) === true; } catch { persisted = false; }
-        if (!persisted) return "rejected";
+      const pending = saving.get(deviceId)?.find((item) => item.fileName === file.fileName || item.sha256 === file.sha256);
+      if (pending !== undefined) {
+        if (pending.sha256 !== file.sha256) return "rejected";
+        return pending.result.then((stored) => stored === "accepted" ? "duplicate" : stored);
       }
       const receivedAtMs = options.now();
       if (!Number.isSafeInteger(receivedAtMs) || receivedAtMs < 0) return "rejected";
-      photos.set(deviceId, [...existing, freeze({ fileName: file.fileName, size: file.size, sha256: file.sha256, receivedAtMs })]);
-      publish(deviceId);
-      return "accepted";
+      const commit = (persisted: boolean): PhotoInboxAccept => {
+        if (!persisted) return "rejected";
+        const latest = photos.get(deviceId) ?? [];
+        if (latest.some((item) => item.fileName === file.fileName || item.sha256 === file.sha256)) return "duplicate";
+        photos.set(deviceId, [...latest, freeze({ fileName: file.fileName, size: file.size, sha256: file.sha256, receivedAtMs })]);
+        publish(deviceId);
+        return "accepted";
+      };
+      if (options.fs === undefined) return commit(true);
+      try {
+        const persisted = options.fs.writeAtomic(deviceId, file.fileName, file.bytes.slice());
+        if (typeof persisted === "boolean") return commit(persisted);
+        const entry = { fileName: file.fileName, sha256: file.sha256, result: persisted.then(commit, () => "rejected" as const) };
+        saving.set(deviceId, [...(saving.get(deviceId) ?? []), entry]);
+        entry.result = entry.result.finally(() => {
+          const remaining = (saving.get(deviceId) ?? []).filter((item) => item !== entry);
+          if (remaining.length === 0) saving.delete(deviceId); else saving.set(deviceId, remaining);
+        });
+        return entry.result;
+      } catch { return "rejected"; }
     },
     list: (deviceId) => validId(deviceId) ? freeze([...(photos.get(deviceId) ?? [])]) : freeze([]),
     forget: (deviceId) => {

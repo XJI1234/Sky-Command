@@ -60,7 +60,7 @@ machine.reset() -> MissionPhaseState
 | `resume-rejected` | `resuming` | `paused` |
 | `stop-requested` / `stop-succeeded` | `starting`、`running`、`pausing`、`paused`、`resuming`、`stopping`、`disconnected` / `stopping` | `stopping` / `idle` |
 | `stop-rejected` | `stopping` | 首次请求恢复请求前的 `starting`、`running`、`pausing`、`paused`、`resuming` 或 `disconnected`；从 `stopping` 重试时保持 `stopping`。 |
-| `mission-completed` | `starting`、`running`、`disconnected` | `completed` |
+| `mission-completed` | `starting`、`running`、`pausing`、`paused`、`resuming`、`stopping`、`disconnected` | `completed` |
 | `operation-failed { code }` | `staging`、`uploading`、`starting`、`running`、`pausing`、`paused`、`resuming`、`stopping`、`disconnected` | `failed` |
 | `connection-lost` | 任一活动阶段 | `disconnected` |
 | `reset` | 任意阶段 | `idle` |

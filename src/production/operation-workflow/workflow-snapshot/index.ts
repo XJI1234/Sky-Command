@@ -110,6 +110,16 @@ const connection = (payload: unknown, telemetryReceivedAtMs: unknown) => {
   return freeze({
     relay: "online" as const,
     telemetryReceivedAtMs: boundedInteger(telemetryReceivedAtMs, 0, Number.MAX_SAFE_INTEGER),
+    navigation: flightFactsAvailable ? freeze({
+      headingDegrees: boundedNumber(read(payload, "headingDegrees"), 0, 359.99999999999994),
+      positionSampleId: safeText(read(payload, "positionSampleId")),
+      positionAgeMillis: boundedInteger(read(payload, "positionAgeMillis"), 0, Number.MAX_SAFE_INTEGER),
+      gpsIsValid: typeof read(payload, "gpsIsValid") === "boolean" ? read(payload, "gpsIsValid") as boolean : null,
+      locationAltitudeMeters: poseNumber(read(payload, "locationAltitudeMeters")),
+      takeoffAltitudeMeters: poseNumber(read(payload, "takeoffAltitudeMeters")),
+      // MSDK's public descriptions do not establish a Cesium ellipsoid-height datum.
+      heightReference: "unknown" as const,
+    }) : null,
     sdk: state(read(payload, "sdkRegistered"), "ready", "not-ready"),
     msdk: msdkState(read(payload, "sdkAvailability")),
     remoteController: linkState(read(payload, "remoteController")),
@@ -175,7 +185,7 @@ const liveVideoCapability = (capabilities: unknown): "supported" | "unsupported"
   return "unknown";
 };
 
-function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly connectionEpoch: number; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
+function create(input: Readonly<{ readonly devices: readonly { readonly deviceId: string; readonly connectionEpoch: number; readonly telemetry: unknown; readonly controlTelemetry?: unknown; readonly assignment: unknown; readonly mission: unknown; readonly stream: unknown; readonly settings: unknown; readonly photo?: unknown; readonly pendingFlightAction: unknown; readonly landingIntent?: unknown }[]; readonly routes: readonly unknown[]; readonly selectedRouteId: string | null; readonly selectedVideoDeviceId: string | null; readonly revision: number; readonly media: unknown; readonly disposed: boolean }>) {
   const streams = read(input.media, "streams");
   const mediaStreams = Array.isArray(streams) ? streams : [];
   const player = mediaPlayer(input.media);
@@ -199,6 +209,7 @@ function create(input: Readonly<{ readonly devices: readonly { readonly deviceId
       stream: device.stream,
       video: freeze({ phase: videoPhase, selected: input.selectedVideoDeviceId === device.deviceId, playerPhase: player.deviceId === device.deviceId ? player.phase : "idle" }),
       settings: device.settings,
+      photo: device.photo ?? null,
       pendingFlightAction: device.pendingFlightAction,
       landing: freeze({ phase: landingPhase(device.landingIntent, connectionValue) }),
     });

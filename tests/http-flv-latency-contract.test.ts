@@ -32,7 +32,7 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(launch()).not.toContain("discoverFfmpegCandidates");
   });
 
-  it("及时性优先：timeupdate 发现明显积压才跳一次，跳转中和冷却期内不得再 seek", () => {
+  it("小幅落后倍速追平，积压超过本地时延预算才跳转且保护解码冷却期", () => {
     const source = renderer();
     const chase = source.slice(source.indexOf("const chaseLiveEdge"), source.indexOf("const scheduleFlvReattach"));
     const start = source.slice(source.indexOf("const startPlaybackWatch"), source.indexOf("const stopPlaybackWatch"));
@@ -47,26 +47,28 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     const maxBackward = Number(/LIVE_BACKWARD_MAX_S = ([0-9.]+)/.exec(source)?.[1]);
     const minBackward = Number(/LIVE_BACKWARD_KEEP_S = ([0-9.]+)/.exec(source)?.[1]);
 
-    expect(maxLag).toBeGreaterThanOrEqual(1);
-    expect(maxLag).toBeLessThanOrEqual(2);
-    expect(keep).toBeGreaterThanOrEqual(0);
-    expect(keep).toBeLessThanOrEqual(0.15);
-    expect(watchMs).toBeGreaterThanOrEqual(1_000);
-    expect(watchMs).toBeLessThanOrEqual(2_000);
-    expect(cooldown).toBeGreaterThanOrEqual(1_000);
+    expect(maxLag).toBeGreaterThanOrEqual(0.8);
+    expect(maxLag).toBeLessThanOrEqual(1);
+    expect(keep).toBeGreaterThanOrEqual(0.3);
+    expect(keep).toBeLessThanOrEqual(0.4);
+    expect(watchMs).toBeGreaterThanOrEqual(100);
+    expect(watchMs).toBeLessThanOrEqual(250);
+    expect(cooldown).toBeGreaterThanOrEqual(500);
+    expect(cooldown).toBeLessThanOrEqual(750);
     expect(maxBackward).toBeGreaterThanOrEqual(3);
     expect(minBackward).toBeGreaterThanOrEqual(1);
     expect(chase).toContain("LIVE_EDGE_MAX_LAG_S");
     expect(chase).toContain("video.seeking");
     expect(chase).toContain("LIVE_EDGE_SEEK_COOLDOWN_MS");
     expect(start).toContain("PLAYBACK_WATCH_MS");
-    expect(start).not.toContain("chaseLiveEdge");
+    expect(start).toContain("chaseLiveEdge");
     expect(stall).not.toContain("chaseLiveEdge");
     expect(bind).toContain("timeupdate");
     expect(bind).toContain("chaseLiveEdge");
     expect(unbind).toContain("timeupdate");
-    expect(attach).toContain("autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S");
-    expect(attach).toContain("autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S");
+    expect(attach).toContain("LIVE_PLAYER_CONFIG");
+    expect(source).toContain("autoCleanupMaxBackwardDuration: LIVE_BACKWARD_MAX_S");
+    expect(source).toContain("autoCleanupMinBackwardDuration: LIVE_BACKWARD_KEEP_S");
   });
 
   it("附着期间周期性追直播前沿，卸载时停掉看门狗", () => {
@@ -93,6 +95,10 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).toContain("hasAudio: false");
     expect(source).toContain("hasVideo: true");
     expect(source).toContain("enableStashBuffer: false");
+    expect(source).not.toContain("stashInitialSize:");
+    expect(source).toContain("liveSync: true");
+    expect(source).toContain("liveSyncPlaybackRate: 1.15");
+    expect(source).toContain("liveSyncTargetLatency: LIVE_EDGE_KEEP_S");
     expect(source).toContain("chaseLiveEdge");
     expect(source).toContain("playbackUrl(");
     expect(source).toContain("attachVideo(url)");
@@ -134,14 +140,16 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).toContain("deliveredSync");
     expect(source).toContain("isAvcSyncTag");
     expect(source).toContain("http-flv-client-backpressure");
-    expect(source).not.toContain("res.destroy()");
+    // The policy concerns media backpressure, not cleanup after a failed session.stop().
+    const filter = source.slice(source.indexOf("function filterSeiOnlyWrites"), source.indexOf("function createRtmpPort"));
+    expect(filter).not.toContain("res.destroy()");
     expect(source).not.toContain("terminateSlowPlayer");
   });
 
   it("HTTP-FLV 写出时把无音轨流的 FLV 头标成有视频，避免 flv.js 探测成空轨", () => {
     const source = mediaPorts();
     expect(source).toContain("markFlvHeaderHasVideo");
-    expect(source).toContain("chunk[4] |= 0x01");
+    expect(source).toContain("chunk[4] = chunk[4]! | 0x01");
   });
 
   it("只为已有 RTMP 发布者创建 HTTP-FLV 播放会话，避免无源请求滞留为 NMS idlePlayers", () => {
@@ -163,7 +171,7 @@ describe("旧图传本机 HTTP-FLV 播放契约", () => {
     expect(source).toContain("hev1");
     expect(source).toContain("http-flv-publisher-error");
     expect(source).toContain("rtmp-video-error");
-    expect(source).toMatch(/payload\[0\]\s*&\s*0x0f/);
+    expect(source).toMatch(/payload\[0\]!?\s*&\s*0x0f/);
     expect(source).not.toContain("if (!decided)");
     expect(filter).not.toMatch(/let transcode = startHevcTranscode/);
     expect(filter).toContain('route = "avc"');

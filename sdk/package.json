@@ -1,0 +1,214 @@
+{
+  "name": "@xjicloud/sky-command-sdk",
+  "version": "0.2.19",
+  "description": "Sky Command Android relay SDK for Vue, React and Node.js",
+  "type": "module",
+  "license": "UNLICENSED",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/types/sdk/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/types/sdk/src/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/index.d.ts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./vue": {
+      "import": {
+        "types": "./dist/types/sdk/src/vue.d.ts",
+        "default": "./dist/vue.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/vue.d.ts",
+        "default": "./dist/vue.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/types/sdk/src/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/react.d.ts",
+        "default": "./dist/react.cjs"
+      }
+    },
+    "./desktop": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/desktop.d.ts",
+        "default": "./dist/desktop.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/desktop.d.ts",
+        "default": "./dist/desktop.cjs"
+      }
+    },
+    "./node": {
+      "import": {
+        "types": "./dist/types/sdk/src/node.d.ts",
+        "default": "./dist/node.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/node.d.ts",
+        "default": "./dist/node.cjs"
+      }
+    },
+    "./protocol": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/protocol.d.ts",
+        "default": "./dist/protocol.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/protocol.d.ts",
+        "default": "./dist/protocol.cjs"
+      }
+    },
+    "./relay": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/relay.d.ts",
+        "default": "./dist/relay.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/relay.d.ts",
+        "default": "./dist/relay.cjs"
+      }
+    },
+    "./device": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/device.d.ts",
+        "default": "./dist/device.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/device.d.ts",
+        "default": "./dist/device.cjs"
+      }
+    },
+    "./flight": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/flight.d.ts",
+        "default": "./dist/flight.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/flight.d.ts",
+        "default": "./dist/flight.cjs"
+      }
+    },
+    "./mission": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/mission.d.ts",
+        "default": "./dist/mission.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/mission.d.ts",
+        "default": "./dist/mission.cjs"
+      }
+    },
+    "./stream": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/stream.d.ts",
+        "default": "./dist/stream.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/stream.d.ts",
+        "default": "./dist/stream.cjs"
+      }
+    },
+    "./routes": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/routes.d.ts",
+        "default": "./dist/routes.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/routes.d.ts",
+        "default": "./dist/routes.cjs"
+      }
+    },
+    "./photos": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/photos.d.ts",
+        "default": "./dist/photos.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/photos.d.ts",
+        "default": "./dist/photos.cjs"
+      }
+    },
+    "./media": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/media.d.ts",
+        "default": "./dist/media.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/media.d.ts",
+        "default": "./dist/media.cjs"
+      }
+    },
+    "./operations": {
+      "import": {
+        "types": "./dist/types/sdk/src/entries/operations.d.ts",
+        "default": "./dist/operations.js"
+      },
+      "require": {
+        "types": "./dist/types-cjs/sdk/src/entries/operations.d.ts",
+        "default": "./dist/operations.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "examples",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node ../scripts/record-verification.mjs --label sdk-build -- node scripts/recorded-build.mjs",
+    "typecheck": "node ../scripts/record-verification.mjs --label sdk-typecheck -- node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "node ../scripts/record-verification.mjs --label sdk-test -- node node_modules/vitest/vitest.mjs run",
+    "test:upstream": "node ../scripts/record-verification.mjs --label sdk-upstream -- node scripts/upstream.mjs",
+    "verify:package": "node ../scripts/record-verification.mjs --label sdk-package -- node scripts/verify-package.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "@zip.js/zip.js": "^2.8.36",
+    "node-media-server": "^2.6.6",
+    "saxes": "^6.0.0",
+    "ws": "^8.18.3"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "vue": "^3.3.0"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-test-renderer": "^19.0.0",
+    "@types/ws": "^8.5.14",
+    "esbuild": "^0.25.12",
+    "playwright": "^1.63.0",
+    "react": "^19.0.0",
+    "react-test-renderer": "^19.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.10",
+    "vue": "^3.5.32"
+  }
+}

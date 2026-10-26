@@ -3,7 +3,7 @@ export type StreamDispatchCode = "INVALID_INPUT" | "MEDIA_PIPELINE_UNAVAILABLE" 
 export interface StreamDispatchSnapshot { readonly deviceId: string; readonly phase: "idle" | "starting" | "streaming" | "stopping" | "failed" | "disconnected"; readonly lastOperation: StreamOperation | null; readonly failureCode: StreamDispatchCode | null; readonly reason: string | null; }
 export interface StreamPlatformError { readonly code: string; readonly description: string; }
 export type StreamDispatchCheck = Readonly<{ readonly ok: true }> | Readonly<{ readonly ok: false; readonly code: Exclude<StreamDispatchCode, "OPERATION_IN_PROGRESS" | "RELAY_REJECTED" | "STREAM_ACTION_REJECTED" | "STREAM_ACTION_INVOCATION_FAILED" | "STREAM_ACTION_UNCONFIRMED" | "DISCONNECTED" | "ILLEGAL_STATE">; readonly reason?: string }>;
-export type StreamDispatchResult = Readonly<{ readonly ok: true; readonly operation: StreamOperation; readonly state: StreamDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: StreamOperation; readonly code: StreamDispatchCode; readonly state: StreamDispatchSnapshot | null; readonly reason?: string; readonly platformError?: StreamPlatformError }>;
+export type StreamDispatchResult = Readonly<{ readonly ok: true; readonly operation: StreamOperation; readonly code: "SUCCEEDED"; readonly state: StreamDispatchSnapshot }> | Readonly<{ readonly ok: false; readonly operation: StreamOperation; readonly code: StreamDispatchCode; readonly state: StreamDispatchSnapshot | null; readonly reason?: string; readonly platformError?: StreamPlatformError }>;
 export interface StreamDispatcherDependencies {
   readonly media: { readonly snapshot: () => unknown };
   readonly relay: { readonly latestTelemetry: (deviceId: string) => unknown; readonly ingressAddress?: (deviceId: string) => unknown; readonly sendCommand: (deviceId: string, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>) => Promise<unknown>; };
@@ -12,7 +12,8 @@ export interface StreamDispatcherDependencies {
 }
 export interface StreamDispatcherInstance { readonly check: (deviceId: string) => StreamDispatchCheck; readonly start: (deviceId: string) => Promise<StreamDispatchResult>; readonly stop: (deviceId: string) => Promise<StreamDispatchResult>; readonly get: (deviceId: string) => StreamDispatchSnapshot; readonly list: () => readonly StreamDispatchSnapshot[]; readonly recordDisconnected: (deviceId: string) => StreamDispatchSnapshot | null; readonly recordSourceUnavailable: (deviceId: string) => StreamDispatchSnapshot | null; readonly forget: (deviceId: string) => boolean; readonly subscribe: (listener: (snapshots: readonly StreamDispatchSnapshot[]) => void) => () => void; }
 
-type Lane = { phase: StreamDispatchSnapshot["phase"]; busy: boolean; lastOperation: StreamOperation | null; failureCode: StreamDispatchCode | null; reason: string | null; restartResolvers: Array<(result: StreamDispatchResult) => void>; };
+type LaneEpoch = { interruption: Readonly<{ code: "DISCONNECTED" | "SOURCE_UNAVAILABLE"; state: StreamDispatchSnapshot }> | null; };
+type Lane = { epoch: LaneEpoch; phase: StreamDispatchSnapshot["phase"]; busy: boolean; lastOperation: StreamOperation | null; failureCode: StreamDispatchCode | null; reason: string | null; restartResolvers: Array<(result: StreamDispatchResult) => void>; };
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；所有公开结果均有契约测试。
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 // Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；输入边界由公开契约覆盖。
@@ -66,17 +67,13 @@ const readStreamTerminalResult = (value: unknown): StreamTerminalResult | null =
     return code === null || description === null ? null : freeze({ outcome, platformError: freeze({ code, description }) });
   } catch { return null; }
 };
-// Stryker disable next-line ArrowFunction: 静态辅助函数替换不能在转换后的 ESM 缓存中重新加载；断线迟到结果由公开契约覆盖。
-const isDisconnected = (lane: Lane): boolean => lane.phase === "disconnected";
-const isSourceUnavailable = (lane: Lane): boolean => lane.phase === "failed" && lane.failureCode === "SOURCE_UNAVAILABLE";
-
 function create(dependencies: StreamDispatcherDependencies): StreamDispatcherInstance {
   const lanes = new Map<string, Lane>();
   const listeners = new Set<(snapshots: readonly StreamDispatchSnapshot[]) => void>();
   const snapshot = (deviceId: string, lane: Lane): StreamDispatchSnapshot => freeze({ deviceId, phase: lane.phase, lastOperation: lane.lastOperation, failureCode: lane.failureCode, reason: lane.reason });
   const list = (): readonly StreamDispatchSnapshot[] => freeze([...lanes.entries()].map(([deviceId, lane]) => snapshot(deviceId, lane)).sort((left, right) => left.deviceId.localeCompare(right.deviceId)));
   const publish = (): void => { const value = list(); for (const listener of [...listeners]) { try { listener(value); } catch { /* subscriber isolation */ } } };
-  const laneFor = (deviceId: string): Lane => { const existing = lanes.get(deviceId); if (existing) return existing; const next: Lane = { phase: "idle", busy: false, lastOperation: null, failureCode: null, reason: null, restartResolvers: [] }; lanes.set(deviceId, next); return next; };
+  const laneFor = (deviceId: string): Lane => { const existing = lanes.get(deviceId); if (existing) return existing; const next: Lane = { epoch: { interruption: null }, phase: "idle", busy: false, lastOperation: null, failureCode: null, reason: null, restartResolvers: [] }; lanes.set(deviceId, next); return next; };
   const check = (deviceId: string): StreamDispatchCheck => {
     if (!validId(deviceId)) return freeze({ ok: false as const, code: "INVALID_INPUT" as const });
     const telemetryAttempt = attempt(() => dependencies.relay.latestTelemetry(deviceId));
@@ -107,13 +104,13 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
   const result = (deviceId: string, lane: Lane, operation: StreamOperation, ok: boolean, code: StreamDispatchCode | null, reason: string | null = null, extra: Partial<Pick<Extract<StreamDispatchResult, { readonly ok: false }>, "platformError">> = {}): StreamDispatchResult => {
     lane.busy = false; lane.lastOperation = operation; lane.failureCode = code; lane.reason = reason; lane.phase = ok ? operation === "start" ? "streaming" : "idle" : "failed";
     const state = snapshot(deviceId, lane); publish();
-    return ok ? freeze({ ok: true as const, operation, state }) : freeze({ ok: false as const, operation, code: code!, state, ...(reason === null ? {} : { reason }), ...extra });
+    return ok ? freeze({ ok: true as const, operation, code: "SUCCEEDED" as const, state }) : freeze({ ok: false as const, operation, code: code!, state, ...(reason === null ? {} : { reason }), ...extra });
   };
   const send = async (deviceId: string, lane: Lane, operation: StreamOperation, request: Readonly<{ readonly name: "live-stream.start" | "live-stream.stop"; readonly fields: Readonly<Record<string, string>> }>): Promise<StreamDispatchResult> => {
+    const epoch = lane.epoch;
     lane.busy = true; lane.phase = operation === "start" ? "starting" : "stopping"; publish();
     const sent = await attemptAsync(() => dependencies.relay.sendCommand(deviceId, request));
-    if (isDisconnected(lane)) return freeze({ ok: false as const, operation, code: "DISCONNECTED" as const, state: snapshot(deviceId, lane) });
-    if (isSourceUnavailable(lane)) return freeze({ ok: false as const, operation, code: "SOURCE_UNAVAILABLE" as const, state: snapshot(deviceId, lane) });
+    if (epoch.interruption) return freeze({ ok: false as const, operation, ...epoch.interruption });
     if (!sent.ok) return result(deviceId, lane, operation, false, "DEPENDENCY_FAILURE");
     const payload = attempt(() => {
       if (!record(sent.value)) return null;
@@ -181,13 +178,14 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
       if (!validId(deviceId)) return freeze({ ok: false as const, operation: "stop" as const, code: "INVALID_INPUT" as const, state: null });
       if (lane.busy) return freeze({ ok: false as const, operation: "stop" as const, code: "OPERATION_IN_PROGRESS" as const, state: snapshot(deviceId, lane) });
       // 停止不得复用启动能力门闩：遥控器/SDK 遥测抖动时仍须能发 live-stream.stop。
+      const epoch = lane.epoch;
       const stopResult = await send(deviceId, lane, "stop", freeze({ name: "live-stream.stop" as const, fields: freeze({}) }));
-      settleQueuedRestart(deviceId, lane, stopResult);
+      if (lane.epoch === epoch) settleQueuedRestart(deviceId, lane, stopResult);
       return stopResult;
     },
     get: (deviceId) => validId(deviceId) && lanes.has(deviceId) ? snapshot(deviceId, lanes.get(deviceId)!) : empty(typeof deviceId === "string" ? deviceId : ""),
     list,
-    recordDisconnected: (deviceId) => { const lane = lanes.get(deviceId); if (!lane) return null; lane.phase = "disconnected"; lane.busy = false; lane.failureCode = "DISCONNECTED"; lane.reason = null; const state = snapshot(deviceId, lane); const resolvers = lane.restartResolvers.splice(0); publish(); settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "DISCONNECTED")); return state; },
+    recordDisconnected: (deviceId) => { const lane = lanes.get(deviceId); if (!lane) return null; lane.phase = "disconnected"; lane.busy = false; lane.failureCode = "DISCONNECTED"; lane.reason = null; const state = snapshot(deviceId, lane); lane.epoch.interruption = freeze({ code: "DISCONNECTED" as const, state }); lane.epoch = { interruption: null }; const resolvers = lane.restartResolvers.splice(0); publish(); settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "DISCONNECTED")); return state; },
     recordSourceUnavailable: (deviceId) => {
       const lane = lanes.get(deviceId);
       if (!lane || !["starting", "streaming", "stopping"].includes(lane.phase)) return null;
@@ -196,6 +194,8 @@ function create(dependencies: StreamDispatcherDependencies): StreamDispatcherIns
       lane.failureCode = "SOURCE_UNAVAILABLE";
       lane.reason = null;
       const state = snapshot(deviceId, lane);
+      lane.epoch.interruption = freeze({ code: "SOURCE_UNAVAILABLE" as const, state });
+      lane.epoch = { interruption: null };
       const resolvers = lane.restartResolvers.splice(0);
       publish();
       settleRestartResolvers(resolvers, restartFailure(deviceId, lane, "SOURCE_UNAVAILABLE"));

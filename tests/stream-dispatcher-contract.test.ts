@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { StreamDispatcher } from "../src/modules/live-stream-control/stream-dispatcher/index.js";
 import { CapabilityGate } from "../src/modules/device-console/capability-gate/index.js";
@@ -35,7 +36,7 @@ function fixture(overrides: Partial<{
 describe("StreamDispatcher", () => {
   it("starts a device only through the exact RTMP command and records streaming", async () => {
     const value = fixture();
-    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start", state: { phase: "streaming" } });
+    await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: true, operation: "start", code: "SUCCEEDED", state: { phase: "streaming" } });
     expect(value.sent).toEqual([{ deviceId: "phone-1", request: { name: "live-stream.start", fields: { rtmpUrl: "rtmp://192.168.1.20:1935/live/phone-1" } } }]);
     expect(value.dispatcher.get("phone-1")).toMatchObject({ phase: "streaming" });
   });
@@ -73,7 +74,7 @@ describe("StreamDispatcher", () => {
 
   it("stops without asking the media service for an endpoint", async () => {
     const value = fixture({ media: () => { throw new Error("not used"); } });
-    await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: true, operation: "stop", state: { phase: "idle" } });
+    await expect(value.dispatcher.stop("phone-1")).resolves.toMatchObject({ ok: true, operation: "stop", code: "SUCCEEDED", state: { phase: "idle" } });
     expect(value.sent).toEqual([{ deviceId: "phone-1", request: { name: "live-stream.stop", fields: {} } }]);
   });
 
@@ -89,7 +90,7 @@ describe("StreamDispatcher", () => {
     expect(blocked.sent).toEqual([]);
   });
 
-  it("手机端图传源未明确连接时不发送启动命令", async () => {
+  it("AirLink 未连接时在桌面拒绝启动，不把没有画面的成功交给 DJI", async () => {
     const value = fixture({
       telemetry: () => ({
         payload: { sdkAvailability: "READY", airLink: "DISCONNECTED", camera: "CONNECTED" },
@@ -100,6 +101,8 @@ describe("StreamDispatcher", () => {
 
     await expect(value.dispatcher.start("phone-1")).resolves.toMatchObject({ ok: false, code: "CAPABILITY_BLOCKED", reason: "AIRLINK_OFFLINE" });
     expect(value.sent).toEqual([]);
+    const contract = readFileSync(new URL("../src/modules/live-stream-control/stream-dispatcher/CONTRACT.md", import.meta.url), "utf8");
+    expect(contract).toContain("原始 `AirLinkKey.KeyConnection` 为 `CONNECTED`");
   });
 
   it("使用原始图传源 Key 而不读取兼容能力投影", async () => {

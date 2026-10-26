@@ -27,6 +27,7 @@ export interface OperatorConfirmation {
 }
 
 export interface OperatorRouteFact {
+  readonly waypointCount?: number;
   readonly routeId: string;
   readonly displayName: string;
   readonly format: string | null;
@@ -179,7 +180,10 @@ const routeFact = (value: unknown): OperatorRouteFact | null => {
     : executable
       ? null
       : "尚未取得该航线的可执行性事实";
+  const count = read(row, "waypointCount");
+  const waypointCount = typeof count === "number" && Number.isSafeInteger(count) && count > 0 && count <= 100_000 ? count : null;
   return freeze({
+    ...(waypointCount === null ? {} : { waypointCount }),
     routeId,
     displayName: text(read(row, "displayName")) ?? routeId,
     format,
@@ -337,6 +341,50 @@ const msdkInvocationIssue = (device: Record<string, unknown>): string | null => 
   if (msdk !== undefined) return msdk === "ready" ? null : "手机尚未就绪";
   return read(connection, "sdk") === "ready" ? null : "手机尚未就绪";
 };
+const REMOTE_ONCE_REASON = "请先连接一次遥控器。连过一次后拔下仍可操作";
+const FLIGHT_CONTROLLER_REASON = "请先连接飞控";
+const REMOTE_ONCE_STORAGE = "sky-operator-remote-once";
+type SessionStore = { getItem(key: string): string | null; setItem(key: string, value: string): void };
+const sessionStore = (): SessionStore | undefined => {
+  const candidate = (globalThis as { sessionStorage?: SessionStore }).sessionStorage;
+  return candidate ?? undefined;
+};
+const readStoredRemoteControllers = (): readonly string[] => {
+  try {
+    const stored = JSON.parse(sessionStore()?.getItem(REMOTE_ONCE_STORAGE) ?? "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored.filter((deviceId): deviceId is string => typeof deviceId === "string" && deviceId.length > 0);
+  } catch {
+    // 浏览器禁止会话存储时，仍保留本次页面里的连接记录。
+    return [];
+  }
+};
+const remoteControllerSeen = new Set<string>(readStoredRemoteControllers());
+const rememberRemoteController = (deviceId: string): void => {
+  if (remoteControllerSeen.has(deviceId)) return;
+  remoteControllerSeen.add(deviceId);
+  try {
+    sessionStore()?.setItem(REMOTE_ONCE_STORAGE, JSON.stringify([...remoteControllerSeen]));
+  } catch {
+    // 写不进会话存储时，本次页面仍按已连接处理。
+  }
+};
+const noteRemoteControllers = (devices: readonly Record<string, unknown>[]): void => {
+  for (const device of devices) {
+    const deviceId = text(read(device, "deviceId"));
+    const connection = invocationConnection(device);
+    if (deviceId !== null && (read(connection, "remoteController") === "connected" || read(connection, "remoteControllerHasConnectedOnce") === true)) {
+      rememberRemoteController(deviceId);
+    }
+  }
+};
+const remoteControllerEverConnected = (device: Record<string, unknown>): boolean => {
+  const deviceId = text(read(device, "deviceId"));
+  const connection = invocationConnection(device);
+  if (read(connection, "remoteControllerHasConnectedOnce") === true || read(connection, "remoteController") === "connected") return true;
+  return deviceId !== null && remoteControllerSeen.has(deviceId);
+};
+const flightControllerConnected = (device: Record<string, unknown>): boolean => read(invocationConnection(device), "flightController") === "connected";
 const deviceById = (view: OperatorView, deviceId: string | null): Record<string, unknown> | undefined =>
   view.devices.flatMap((item) => { const row = record(item); return row !== null && read(row, "deviceId") === deviceId ? [row] : []; })[0];
 const flightDevice = (view: OperatorView, action: string): OperatorActionResult | Record<string, unknown> => {
@@ -547,6 +595,7 @@ function project(input: unknown): OperatorView {
   const snapshot = source === null ? null : read(source, "snapshot");
   const selection = record(source === null ? null : read(source, "selection"));
   const devices = devicesOf(snapshot);
+  noteRemoteControllers(devices);
   const missionDeviceId = resolveSelection(devices, text(read(selection, "missionDeviceId")));
   const streamDeviceId = resolveSelection(devices, text(read(selection, "streamDeviceId")));
   const playingVideoDeviceId = stillOnline(devices, text(read(read(snapshot, "workflow"), "selectedVideoDeviceId")));
@@ -597,8 +646,22 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   const name = text(action);
   const current = record(view) as OperatorView | null;
   if (name === null || current === null) return reject("操作无效");
+  if (Array.isArray(current.devices)) noteRemoteControllers(current.devices.flatMap((item) => {
+    const row = record(item);
+    return row === null ? [] : [row];
+  }));
   if (name === "pairing-start" || name === "pairing-stop") {
-    return reject("请到手机上开始或停止对频。");
+    if (current.workspace !== "devices") return reject("请到设备页操作对频");
+    const device = deviceById(current, current.missionDeviceId);
+    if (device === undefined) return reject("请先选择已连接的手机");
+    const connection = read(device, "connection");
+    if (read(connection, "msdk") !== "ready") return reject("手机端 DJI 尚未就绪");
+    const pairingState = read(connection, "pairingState");
+    if (name === "pairing-stop") return pairingState === "PAIRING" || pairingState === "PAIRED" || pairingState === "STOPPING" ? accept() : reject("当前没有可停止的对频");
+    if (read(connection, "remoteController") !== "connected") return reject("遥控器尚未连接");
+    if (read(connection, "flightController") === "connected") return reject("飞控已连接，无需对频");
+    if (pairingState === "PAIRING") return reject("对频操作正在进行");
+    return accept();
   }
   if (name === "import-route" || name === "select-route" || name === "remove-route") {
     return current.workspace === "routes" ? accept() : reject("请到航线页导入或管理航线");
@@ -613,6 +676,12 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
     if (name === "stream-stop" && streamSourceUnavailableOf(device)) return reject("图传源已断开，手机已自动停止图传");
     return accept();
   }
+  if (name === "photo-fetch-stop") {
+    const connection = invocationConnection(device);
+    const msdk = read(connection, "msdk");
+    const sdkReady = msdk === undefined ? read(connection, "sdk") === "ready" : msdk === "ready";
+    return sdkReady ? accept() : reject("手机尚未就绪，无法停止回传");
+  }
   if (name === "photo-capture" || name === "photo-fetch") {
     const issue = photoIssueOf(device);
     return issue === null ? accept() : reject(issue);
@@ -621,6 +690,9 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   if (name === "flight-takeoff" || name === "flight-land" || name === "flight-confirm-landing" || name === "flight-return-home" || name === "flight-stop-takeoff" || name === "flight-stop-auto-landing" || name === "flight-stop-go-home") {
     const linkIssue = msdkInvocationIssue(device);
     if (linkIssue !== null) return reject(linkIssue);
+    if (name === "flight-confirm-landing" && read(read(device, "connection"), "landingConfirmationNeeded") !== true) {
+      return reject("飞控当前未请求确认降落，请查看当前飞行状态");
+    }
     return accept();
   }
   if (name === "mission-stage") {
@@ -632,7 +704,9 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
     const phase = text(read(current.mission, "phase"));
     if (phase !== "staged") return reject("请先将航线传输到手机");
     const msdkIssue = msdkInvocationIssue(device);
-    return msdkIssue === null ? accept() : reject(msdkIssue);
+    if (msdkIssue !== null) return reject(msdkIssue);
+    if (!remoteControllerEverConnected(device)) return reject(REMOTE_ONCE_REASON);
+    return flightControllerConnected(device) ? accept() : reject(FLIGHT_CONTROLLER_REASON);
   }
   if (name === "mission-pause") {
     if (text(read(current.mission, "phase")) !== "running" && text(read(current.mission, "phase")) !== "starting") return reject("当前阶段不能暂停");
@@ -657,4 +731,4 @@ function evaluate(action: unknown, view: unknown): OperatorActionResult {
   return msdkIssue === null ? accept() : reject(msdkIssue);
 }
 
-export const OperatorConsole = freeze({ project, evaluate });
+export const OperatorConsole = freeze({ project, evaluate, remoteControllerEverConnected, flightControllerConnected, REMOTE_ONCE_REASON, FLIGHT_CONTROLLER_REASON });
