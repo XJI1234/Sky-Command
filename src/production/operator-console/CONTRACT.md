@@ -146,3 +146,5 @@ HUD（三个页签都在）固定六项：飞/停、电机、电量、高度、G
 连接快照增加 navigation：headingDegrees 为 [0,360)，positionSampleId 为安全采样标识，positionAgeMillis 为非负安全整数，gpsIsValid 为可空布尔，locationAltitudeMeters / takeoffAltitudeMeters 只保留有限原始值；heightReference 固定 unknown，不推导椭球高。飞控明确断开时 navigation 为 null，既有 pose 形状不变。字段缺失或非法时为 null，协议保持 v1。
 
 航线地图在独立 CustomDataSource 展示各设备最后有效位置，当前任务设备高亮。点击仅查看，不能更改分配、发送命令或移动相机。采样时间由电脑接收时间减手机单调时钟年龄锚定，同一采样不因重复遥测而变新；超过 5 秒变灰，断连立即保留灰色最后位置。缺少位置不建点，航向缺失使用无方向图标；高度基准不明时明确平面定位，不把相对起飞点高度放入地图高度。图层随地图切换保留，卸载释放；静止不强制持续绘制。
+
+网站既有航点进度展示从产物同步回源码：保留路线总数，零基索引显示一基进度；未知总数/超范围不推算比例。四机按设备独立读取，飞行页与侧栏保持已有进度行为，不更改任何命令或终态规则。

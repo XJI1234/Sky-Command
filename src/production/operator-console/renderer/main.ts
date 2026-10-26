@@ -16,6 +16,8 @@ import {
 } from "../action-arm/index.js";
 import {
   EMPTY_STATUS,
+  waypointProgress,
+  missionRunPhase,
   commandReachStatus,
   directAlertStatus,
   directProcessStatus,
@@ -381,31 +383,86 @@ function renderStreamFlightStatus(streamDevice: Record<string, unknown> | undefi
   }));
 }
 
-function renderMissionFlightStatus(missionDevice: Record<string, unknown> | undefined): void {
-  const missionConnection = connectionOf(missionDevice);
-  renderFlightStatus("mission-reach", commandReachStatus({
-    selected: missionDevice !== undefined,
-    relayOnline: relayStatus(missionDevice) === "在线",
-    msdkReady: msdkStatus(missionDevice) === "已就绪",
-  }));
-  renderFlightStatus("mission-execution-now", missionExecutionNowStatus({
-    selected: missionDevice !== undefined,
-    execution: knownStatus(missionDjiExecutionStatus(missionDevice)),
-    waypoint: knownStatus(missionWaypointIndexStatus(missionDevice)),
-    fileName: knownStatus(missionExecutingFileStatus(missionDevice)),
-  }));
-  const uploadRaw = read(missionConnection, "missionUploadProgress");
-  renderFlightStatus("mission-upload-or-action", missionUploadOrActionStatus({
-    selected: missionDevice !== undefined,
-    uploadPercent: typeof uploadRaw === "number" && Number.isSafeInteger(uploadRaw) ? uploadRaw : null,
-    action: knownStatus(missionWaypointActionStatus(missionDevice)),
-  }));
-  renderFlightStatus("mission-wayline-interrupt", interruptStatus({
-    selected: missionDevice !== undefined,
-    code: text(read(missionConnection, "waylineInterruptErrorCode")),
-    description: text(read(missionConnection, "waylineInterruptErrorDescription")),
-  }));
-}
+  function waypointTotalFor(device: Record<string, unknown> | undefined, routes: ReturnType<typeof OperatorConsole.project>["routes"]): number | null {
+    if (device === undefined) return null;
+    const routeId = text(read(read(device, "mission"), "routeId"));
+    const listed = Array.isArray(routes) ? routes : [];
+    const byId = routeId === null ? undefined : listed.find((route) => route.routeId === routeId);
+    if (typeof byId?.waypointCount === "number") return byId.waypointCount;
+    const fileName = text(read(connectionOf(device), "waylineExecutingMissionFileName"));
+    const byName = fileName === null ? undefined : listed.find((route) => route.displayName === fileName);
+    if (typeof byName?.waypointCount === "number") return byName.waypointCount;
+    const points = routeId !== null && lastRoutePreview !== null && lastRoutePreview.routeId === routeId ? lastRoutePreview.preview?.polyline : null;
+    return Array.isArray(points) && points.length > 0 ? points.length : null;
+  }
+  function renderMissionRun(missionDevice: Record<string, unknown> | undefined, routes: ReturnType<typeof OperatorConsole.project>["routes"]): void {
+    const host = document.querySelector("[data-mission-run]");
+    if (!(host instanceof HTMLElement)) return;
+    const connection = connectionOf(missionDevice);
+    const dji = text(read(connection, "missionDjiExecutionState"));
+    const phone = text(read(connection, "missionExecution"));
+    const phase = missionDevice === undefined ? null : missionRunPhase(dji, phone);
+    const index = read(connection, "currentWaypointIndex");
+    const progress = phase === null && !(typeof index === "number" && index >= 0) ? null : waypointProgress(index, waypointTotalFor(missionDevice, routes));
+    const visible = phase !== null || progress !== null && progress.max !== null;
+    host.hidden = !visible;
+    const label = host.querySelector("[data-mission-run-label]");
+    const count = host.querySelector("[data-mission-run-count]");
+    const meter = host.querySelector("[data-mission-run-meter]");
+    const detail = host.querySelector("[data-mission-run-detail]");
+    if (!visible) return;
+    if (label instanceof HTMLElement) label.textContent = phase ?? "\u6267\u884C\u8FDB\u5EA6";
+    if (count instanceof HTMLElement) count.textContent = progress?.label ?? "\u2014";
+    if (meter instanceof HTMLProgressElement) {
+      const measured = progress !== null && progress.max !== null && progress.value !== null;
+      meter.hidden = !measured;
+      if (measured) {
+        meter.max = progress!.max!;
+        meter.value = progress!.value!;
+      }
+    }
+    const fileName = knownStatus(missionExecutingFileStatus(missionDevice));
+    const action = knownStatus(missionWaypointActionStatus(missionDevice));
+    const note = [fileName, action].filter((part) => part !== null).join(" \xB7 ");
+    if (detail instanceof HTMLElement) {
+      detail.hidden = note.length === 0;
+      detail.textContent = note;
+      detail.title = note;
+    }
+  }
+  function renderMissionFlightStatus(missionDevice: Record<string, unknown> | undefined, routes: ReturnType<typeof OperatorConsole.project>["routes"]): void {
+    const missionConnection = connectionOf(missionDevice);
+    renderFlightStatus("mission-reach", commandReachStatus({
+      selected: missionDevice !== undefined,
+      relayOnline: relayStatus(missionDevice) === "\u5728\u7EBF",
+      msdkReady: msdkStatus(missionDevice) === "\u5DF2\u5C31\u7EEA"
+    }));
+    const executionDetail = missionExecutionNowStatus({
+      selected: missionDevice !== undefined,
+      execution: knownStatus(missionDjiExecutionStatus(missionDevice)),
+      waypoint: knownStatus(missionWaypointIndexStatus(missionDevice)),
+      fileName: knownStatus(missionExecutingFileStatus(missionDevice))
+    });
+    const phase = missionDevice === undefined ? null : missionRunPhase(text(read(missionConnection, "missionDjiExecutionState")), text(read(missionConnection, "missionExecution")));
+    const progress = waypointProgress(read(missionConnection, "currentWaypointIndex"), waypointTotalFor(missionDevice, routes));
+    const fraction = progress !== null && progress.max !== null ? progress.label : progress?.caption ?? null;
+    const summary = phase === null ? "" : [phase, fraction].filter((part) => part !== null && part.length > 0).join(" \xB7 ");
+    const executionNode = document.querySelector('[data-flight-status="mission-execution-now"]');
+    renderFlightStatus("mission-execution-now", summary.length > 0 ? summary : executionDetail);
+    if (executionNode instanceof HTMLElement) executionNode.title = summary.length > 0 && executionDetail !== summary ? executionDetail : "";
+    renderMissionRun(missionDevice, routes);
+    const uploadRaw = read(missionConnection, "missionUploadProgress");
+    renderFlightStatus("mission-upload-or-action", missionUploadOrActionStatus({
+      selected: missionDevice !== undefined,
+      uploadPercent: typeof uploadRaw === "number" && Number.isSafeInteger(uploadRaw) ? uploadRaw : null,
+      action: knownStatus(missionWaypointActionStatus(missionDevice))
+    }));
+    renderFlightStatus("mission-wayline-interrupt", interruptStatus({
+      selected: missionDevice !== undefined,
+      code: text(read(missionConnection, "waylineInterruptErrorCode")),
+      description: text(read(missionConnection, "waylineInterruptErrorDescription"))
+    }));
+  }
 
 function renderDirectFlightStatus(missionDevice: Record<string, unknown> | undefined): void {
   const directConnection = connectionOf(missionDevice);
@@ -452,7 +509,7 @@ function renderFlightPanelStatus(view: ReturnType<typeof OperatorConsole.project
   const streamDevice = selectedFlightDevice(view, view.streamDeviceId);
   const missionDevice = selectedFlightDevice(view, view.missionDeviceId);
   renderStreamFlightStatus(streamDevice);
-  renderMissionFlightStatus(missionDevice);
+  renderMissionFlightStatus(missionDevice, view.routes);
   renderDirectFlightStatus(missionDevice);
 }
 
@@ -2394,6 +2451,9 @@ function renderMonitorRail(view: ReturnType<typeof OperatorConsole.project>): vo
     }
   }
   if (deviceId === null || plan === undefined) return;
+  const railDevice = view.devices.find((item) => text(read(item, "deviceId")) === deviceId);
+  const railProgress = railDevice === undefined ? null : waypointProgress(read(connectionOf(railDevice), "currentWaypointIndex"), waypointTotalFor(railDevice, view.routes));
+  const railFraction = railProgress !== null && railProgress.max !== null ? railProgress.caption : null;
   const route = plan.routeId === null ? undefined : view.routes.find((item) => item.routeId === plan.routeId);
   const head = document.createElement("div");
   head.className = "monitor-rail-head";
@@ -2439,9 +2499,15 @@ function renderMonitorRail(view: ReturnType<typeof OperatorConsole.project>): vo
       const label = document.createElement("span");
       label.textContent = name;
       const value = document.createElement("small");
-      value.textContent = monitorRouteStepText[state];
+      value.textContent = name === "执行航线" && railFraction !== null && (state === "running" || state === "done") ? `${monitorRouteStepText[state]} · ${railFraction}` : monitorRouteStepText[state];
       row.append(label, value);
       body.append(row);
+      if (name === "执行航线" && railProgress !== null && railProgress.max !== null && railProgress.value !== null && (state === "running" || state === "done")) {
+        const meter = document.createElement("progress");
+        meter.className = "monitor-rail-meter";
+        meter.max = railProgress.max; meter.value = railProgress.value;
+        meter.setAttribute("aria-label", railProgress.caption); body.append(meter);
+      }
     }
     if (plan.failure !== null) {
       const note = document.createElement("p");
@@ -2499,7 +2565,7 @@ function renderMonitor(view: ReturnType<typeof OperatorConsole.project>): void {
     const motorsRaw = read(connection, "motorsOn");
     const motorsOn = motorsRaw === true ? true : motorsRaw === false ? false : null;
     const pose = read(connection, "pose");
-    const status = monitorAircraftStatus(monitorFactsOf(device));
+    const status = monitorAircraftStatus({ ...monitorFactsOf(device), waypointTotal: waypointTotalFor(device, view.routes) });
     if (stateNode instanceof HTMLElement) stateNode.textContent = status.label;
     if (detailNode instanceof HTMLElement) detailNode.textContent = status.detail;
     setHud("flying", hudFlying(flying));

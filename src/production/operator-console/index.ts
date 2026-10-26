@@ -27,6 +27,7 @@ export interface OperatorConfirmation {
 }
 
 export interface OperatorRouteFact {
+  readonly waypointCount?: number;
   readonly routeId: string;
   readonly displayName: string;
   readonly format: string | null;
@@ -179,7 +180,10 @@ const routeFact = (value: unknown): OperatorRouteFact | null => {
     : executable
       ? null
       : "尚未取得该航线的可执行性事实";
+  const count = read(row, "waypointCount");
+  const waypointCount = typeof count === "number" && Number.isSafeInteger(count) && count > 0 && count <= 100_000 ? count : null;
   return freeze({
+    ...(waypointCount === null ? {} : { waypointCount }),
     routeId,
     displayName: text(read(row, "displayName")) ?? routeId,
     format,

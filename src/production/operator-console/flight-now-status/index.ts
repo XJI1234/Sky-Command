@@ -52,6 +52,30 @@ export function streamErrorStatus(input: Readonly<{
   return [input.code, input.description].filter((part): part is string => part !== null).join(" ");
 }
 
+  export function waypointProgress(index: unknown, total: unknown) {
+    const count = typeof total === "number" && Number.isSafeInteger(total) && total > 0 && total <= 1e5 ? total : null;
+    const current = typeof index === "number" && Number.isSafeInteger(index) && index >= 0 ? index : null;
+    if (current !== null && count !== null && current < count) {
+      const position = current + 1;
+      return freeze({ label: `${position} / ${count}`, caption: `\u822A\u70B9 ${position} / ${count}`, value: position, max: count });
+    }
+    if (current !== null) return freeze({ label: `\u822A\u70B9 ${current}`, caption: `\u822A\u70B9 ${current}`, value: null, max: null });
+    if (count !== null) return freeze({ label: `\u5171 ${count} \u4E2A`, caption: `\u5171 ${count} \u4E2A\u822A\u70B9`, value: null, max: null });
+    return null;
+  }
+  export function missionRunPhase(dji: string | null, phone: string | null) {
+    if (phone === "FAILED") return "\u5DF2\u4E2D\u65AD";
+    if (dji === "FINISHED" || phone === "FINISHED") return "\u5DF2\u5B8C\u6210";
+    if (dji === "RETURN_TO_START_POINT") return "\u8FD4\u56DE\u8D77\u70B9";
+    if (dji === "ENTER_WAYLINE") return "\u8FDB\u5165\u9996\u822A\u70B9";
+    if (dji === "EXECUTING") return "\u6267\u884C\u4E2D";
+    if (dji === "INTERRUPTED" || dji === "PAUSED" || phone === "PAUSED") return "\u5DF2\u6682\u505C";
+    if (phone === "EXECUTING") return "\u6267\u884C\u4E2D";
+    if (dji === "STOPPING" || phone === "STOPPING") return "\u6B63\u5728\u505C\u6B62";
+    if (dji === "PREPARING" || dji === "RECOVERING" || phone === "STARTING") return "\u542F\u52A8\u4E2D";
+    return null;
+  }
+
 export function missionExecutionNowStatus(input: Readonly<{
   readonly selected: boolean;
   readonly execution: string | null;
@@ -184,6 +208,7 @@ export function monitorAircraftStatus(input: Readonly<{
   readonly missionExecution: string | null;
   readonly djiMissionState: string | null;
   readonly waypointIndex: number | null;
+  readonly waypointTotal?: number | null;
   readonly flightController: string | null;
 }>): Readonly<{ readonly label: string; readonly detail: string }> {
   if (input.flightController === "disconnected") return { label: "飞控未连接", detail: "" };
@@ -205,9 +230,8 @@ export function monitorAircraftStatus(input: Readonly<{
     || (input.missionExecution === "STARTING" && !aircraftExecuting && input.djiMissionState !== "PAUSED")
   );
   const protection = input.landingProtectionState === "NOT_SAFE_TO_LAND" ? "当前不适合降落" : "";
-  const waypoint = typeof input.waypointIndex === "number" && Number.isSafeInteger(input.waypointIndex) && input.waypointIndex >= 0
-    ? `航点 ${input.waypointIndex}`
-    : "";
+  const progressed = waypointProgress(input.waypointIndex, input.waypointTotal);
+  const waypoint = progressed === null ? "" : progressed.caption;
   const returningHome = (mode !== null && HOME_MODES.has(mode)) || (flying === "flying" && input.lowBatteryRthState === "COUNTING_DOWN");
 
   if (flying === "grounded" && input.motorsOn === false) {
@@ -362,6 +386,8 @@ export function monitorStreamToggle(input: Readonly<{
 }
 
 export const FlightNowStatus = freeze({
+  waypointProgress,
+  missionRunPhase,
   EMPTY_STATUS,
   commandReachStatus,
   streamPushStatus,
