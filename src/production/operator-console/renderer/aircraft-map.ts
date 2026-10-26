@@ -6,6 +6,15 @@ const aircraftImage = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http
 const unknownImage = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="12" fill="white" stroke="#13212b" stroke-width="3"/><circle cx="20" cy="20" r="3" fill="#13212b"/></svg>')}`;
 const statusText = (status: AircraftPosition["status"]): string => ({ live: "实时位置", stale: "位置已过期", disconnected: "已断连 · 最后位置", unknown: "位置时效未知 · 请更新 Relay" })[status];
 
+function projectedRotation(Cesium: CesiumApi, viewer: Viewer, position: import("cesium").Cartesian3, heading: number): number | undefined {
+  const angle = Cesium.Math.toRadians(heading);
+  const local = new Cesium.Cartesian3(Math.sin(angle) * 100, Math.cos(angle) * 100, 0);
+  const ahead = Cesium.Matrix4.multiplyByPoint(Cesium.Transforms.eastNorthUpToFixedFrame(position), local, new Cesium.Cartesian3());
+  const a = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, position);
+  const b = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, ahead);
+  return a === undefined || b === undefined ? undefined : screenHeadingRotation(b.x - a.x, b.y - a.y);
+}
+
 export function createAircraftMapOverlay() {
   let currentViewer: Viewer | undefined;
   let source: import("cesium").CustomDataSource | undefined;
@@ -51,12 +60,8 @@ export function createAircraftMapOverlay() {
     // Constant properties preserve request-render idle behavior. Reproject only on actual frames.
     removePreRender = viewer.scene.preRender.addEventListener(() => {
       for (const { position, heading, property } of rotations.values()) {
-        const angle = Cesium.Math.toRadians(heading);
-        const local = new Cesium.Cartesian3(Math.sin(angle) * 100, Math.cos(angle) * 100, 0);
-        const ahead = Cesium.Matrix4.multiplyByPoint(Cesium.Transforms.eastNorthUpToFixedFrame(position), local, new Cesium.Cartesian3());
-        const a = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, position);
-        const b = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, ahead);
-        if (a !== undefined && b !== undefined) property.setValue(screenHeadingRotation(b.x - a.x, b.y - a.y));
+        const rotation = projectedRotation(Cesium, viewer, position, heading);
+        if (rotation !== undefined) property.setValue(rotation);
       }
     });
     panel = document.createElement("section");
@@ -75,8 +80,20 @@ export function createAircraftMapOverlay() {
     handler.setInputAction((event: { position: import("cesium").Cartesian2 }) => {
       const picked = viewer.scene.pick(event.position) as { id?: { id?: string } } | undefined;
       const id = picked?.id?.id;
-      if (typeof id !== "string" || !id.startsWith("aircraft:")) return;
-      inspectedId = latest.find((item) => `aircraft:${item.deviceId}` === id)?.deviceId ?? null;
+      let item = typeof id === "string" ? latest.find((entry) => `aircraft:${entry.deviceId}` === id) : undefined;
+      // Ground-clamped markers can miss depth picking among city models or between redraws.
+      // A bounded screen hit area matches the visible icon and remains strictly read-only.
+      if (item === undefined) {
+        let nearest = 20;
+        for (const candidate of latest) {
+          const point = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, Cesium.Cartesian3.fromDegrees(candidate.longitude, candidate.latitude, 0));
+          if (point === undefined) continue;
+          const distance = Math.hypot(point.x - event.position.x, point.y - event.position.y);
+          if (distance <= nearest) { item = candidate; nearest = distance; }
+        }
+      }
+      if (item === undefined) return;
+      inspectedId = item.deviceId;
       showDetails();
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
   };
@@ -100,7 +117,7 @@ export function createAircraftMapOverlay() {
         const position = Cesium.Cartesian3.fromDegrees(item.longitude, item.latitude, 0);
         const heading = item.headingDegrees;
         const color = Cesium.Color.fromCssColorString(item.status !== "live" ? "#a9b2bc" : item.selected ? "#ffda6a" : "#53d8ef");
-        const rotation = new Cesium.ConstantProperty(0);
+        const rotation = new Cesium.ConstantProperty(heading === null ? 0 : projectedRotation(Cesium, viewer, position, heading) ?? 0);
         rotations.delete(item.deviceId);
         if (heading !== null) rotations.set(item.deviceId, { position, heading, property: rotation });
         source!.entities.add({
